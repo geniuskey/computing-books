@@ -1,0 +1,1727 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>대규모 언어 모델 · AIBook</title>
+<meta name="description" content="다음 토큰 예측과 퍼플렉시티, n-gram에서 신경망 언어 모델로, 사전학습 계산량 6ND와 Chinchilla 스케일링 법칙, SFT·RLHF·DPO와 RLVR 추론 모델, 인컨텍스트 학습과 환각, 마스크 디퓨전 언어 모델까지. 브라우저에서 작은 언어 모델을 직접 학습시킨다.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .lm-view canvas { touch-action: none; cursor: pointer; }
+  .lm-view canvas + canvas { border-top: 1px solid var(--border); }
+  .lm-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .lm-row .ab-input { flex: 1 1 160px; min-width: 0; }
+  .lm-gen { font-family: var(--mono); font-size: 14px; line-height: 1.6; padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); min-height: 46px; white-space: pre-wrap; word-break: break-all; }
+  .lm-gen .ctx { color: var(--text-dim); }
+  .lm-gen .new { color: var(--accent); }
+  .lm-panel { padding: 12px 18px 14px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+  .lm-panel h4 { margin: 0; font-size: 13px; color: var(--text-dim); font-weight: 600; letter-spacing: .02em; }
+  .lm-samples { display: grid; gap: 6px; max-height: 270px; overflow-y: auto; }
+  .lm-samples div { font-family: var(--mono); font-size: 13px; line-height: 1.5; padding: 6px 10px; border-radius: 6px; background: var(--surface); word-break: break-all; }
+  .lm-samples b { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .lm-samples i { color: var(--text-faint); font-style: normal; margin-left: 6px; }
+  .lm-warn { color: var(--bad); font-weight: 600; }
+  .lm-ok { color: var(--ok); font-weight: 600; }
+  .lm-pre { font-family: var(--mono); font-size: 13px; line-height: 1.6; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; overflow-x: auto; white-space: pre; margin: 14px 0; }
+  .lm-pre .sp { color: var(--accent-2); }
+  .lm-pre .ro { color: var(--accent); }
+  .lm-split { display: grid; gap: 0; }
+  @media (min-width: 820px) { .lm-split.two { grid-template-columns: 1fr 1fr; } .lm-split.two > div + div { border-left: 1px solid var(--border); } }
+  .lm-split > div { min-width: 0; }
+  .lm-corpus { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; max-height: 180px; overflow-y: auto; background: var(--surface); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; }
+  details.lm-det summary { cursor: pointer; color: var(--text-dim); font-size: 14px; }
+  .lm-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .lm-btns .btn { flex: 0 0 auto; }
+  figure.diagram svg.lm-narrow { max-width: 640px; margin: 0 auto; display: block; }
+  .lm-df-wrap { padding: 12px 10px; border-top: 0; }
+  .lm-df { border-collapse: separate; border-spacing: 3px; font-family: var(--mono); font-size: 13px; margin: 0 auto; }
+  .lm-df th { color: var(--text-dim); font-weight: 500; font-size: 11.5px; padding: 2px 4px; }
+  .lm-df td { padding: 5px 7px; border-radius: 6px; background: var(--surface); white-space: nowrap; cursor: pointer; text-align: center; border: 1px solid var(--border); }
+  .lm-df td.m { color: var(--text-faint); }
+  .lm-df td.b { color: var(--text-dim); background: transparent; border-color: transparent; cursor: default; font-size: 11.5px; }
+  .lm-df td.new { background: color-mix(in srgb, var(--accent-2) 24%, var(--surface)); border-color: var(--accent-2); }
+  .lm-df td.rm { box-shadow: inset 0 0 0 2px var(--bad); }
+  .lm-df td.fin { color: var(--text); font-weight: 600; }
+  .lm-df td.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .lm-df tr.ar th { color: var(--accent); }
+  .lm-df tr.ar td.arc { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); border-color: var(--accent); cursor: default; }
+  .lm-df-cand { font-size: 14px; line-height: 2; }
+  .lm-df-cand .tok { margin: 2px 3px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="llm">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 07</div>
+    <h1>대규모 언어 모델</h1>
+    <p class="lead">ChatGPT, Claude, Llama 같은 대규모 언어 모델(LLM)은 놀랍도록 단순한 목표 하나로 학습된다. "지금까지의 글을 보고 다음 토큰을 맞혀라." 이 장에서는 그 목표를 확률로 정확히 적고, 글자 수를 세는 n-gram 모델에서 출발해 브라우저 안에서 작은 신경망 언어 모델을 직접 학습시켜 본다. 그다음 수천억 파라미터·수조 토큰 규모로 키울 때 필요한 계산량, 모델 크기와 데이터의 최적 배분을 알려 주는 스케일링 법칙, 그리고 '글을 이어 쓰는 기계'를 '말을 알아듣는 조수'로 바꾸는 SFT·RLHF·DPO까지 따라간다.</p>
+    <ul class="objectives">
+      <li>언어 모델을 조건부 확률 \(P(x_t \mid x_{\lt t})\)의 곱으로 정의하고, 교차 엔트로피와 퍼플렉시티를 계산할 수 있다.</li>
+      <li>n-gram 모델의 카운트 추정, 희소성 문제, 스무딩과 백오프를 설명할 수 있다.</li>
+      <li>임베딩 → 은닉층 → 소프트맥스로 이루어진 신경망 언어 모델을 역전파와 Adam으로 학습시키는 과정을 이해하고, 과적합을 손실 곡선에서 읽는다.</li>
+      <li>학습 계산량 \(C \approx 6ND\)로 GPU-시간과 학습 일수를 추정할 수 있다.</li>
+      <li>Chinchilla 스케일링 법칙에서 계산 최적 배분과 '과학습(overtraining)' 경향의 이유를 설명할 수 있다.</li>
+      <li>사전학습 → SFT → 선호 학습(RLHF/PPO, DPO) 파이프라인과 DPO 손실의 의미를 안다.</li>
+      <li>인컨텍스트 학습, chain-of-thought, 추론 모델, 환각과 보정이 무엇인지 설명할 수 있다.</li>
+      <li>RLVR(검증 가능한 보상 강화학습)이 파이프라인의 어디에 들어가는지, 테스트타임 계산과 증류가 무엇인지 안다.</li>
+      <li>마스크 디퓨전 언어 모델이 자기회귀 모델과 어떻게 다르게 생성하는지, 그 장단점을 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="lm-def">
+    <h2>언어 모델이란: 다음 토큰의 확률 분포</h2>
+    <p><span class="term">언어 모델</span><span class="en">(language model)</span>은 토큰 열에 확률을 매기는 모델이다. <a href="embedding.html">4장</a>에서 본 것처럼 텍스트는 먼저 토큰 \(x_1, x_2, \dots, x_T\)로 쪼개진다. 문장 전체의 확률 \(P(x_1,\dots,x_T)\)를 직접 모델링하기는 어렵지만, 확률의 <span class="term">연쇄법칙</span><span class="en">(chain rule)</span>을 쓰면 이것을 "앞의 토큰들이 주어졌을 때 다음 토큰의 확률"들의 곱으로 정확히 분해할 수 있다.</p>
+    <div class="formula">$$P(x_1, x_2, \dots, x_T) = \prod_{t=1}^{T} P(x_t \mid x_1, \dots, x_{t-1}) = \prod_{t=1}^{T} P(x_t \mid x_{\lt t})$$
+      <div class="where">근사가 아니라 항등식이다. 따라서 "다음 토큰 분포"만 잘 맞히는 모델이 있으면 어떤 문장의 확률도 계산할 수 있고, 거기서 샘플을 뽑아 새 문장을 생성할 수도 있다.</div>
+    </div>
+    <p>그래서 오늘날의 LLM은 모두 한 가지 일만 한다. 문맥 \(x_{\lt t}\)를 받아 어휘 전체(Llama 3 기준 128,256개 토큰)에 대한 확률 분포 \(P_\theta(\cdot \mid x_{\lt t})\)를 출력한다. 생성할 때는 이 분포에서 토큰 하나를 고르고, 그것을 문맥 끝에 붙여 다시 모델에 넣는다. 이런 방식을 <span class="term">자기회귀</span><span class="en">(autoregressive)</span> 생성이라고 한다. 디코딩 전략(온도·top-k·top-p)과 KV 캐시는 <a href="generation.html">8장</a>에서 자세히 다룬다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 290" role="img" aria-label="자기회귀 생성 루프">
+        <defs>
+          <marker id="lm-ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+          <marker id="lm-ar1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <text x="20" y="30" class="t-dim">문맥 x&lt;t</text>
+        <g class="t-mono">
+          <rect x="20" y="44" width="62" height="34" rx="7" class="f-surface"/><text x="51" y="66" text-anchor="middle" class="t">오늘</text>
+          <rect x="88" y="44" width="40" height="34" rx="7" class="f-surface"/><text x="108" y="66" text-anchor="middle" class="t">은</text>
+          <rect x="134" y="44" width="62" height="34" rx="7" class="f-surface"/><text x="165" y="66" text-anchor="middle" class="t">날씨</text>
+          <rect x="202" y="44" width="40" height="34" rx="7" class="f-surface"/><text x="222" y="66" text-anchor="middle" class="t">가</text>
+          <rect x="248" y="44" width="40" height="34" rx="7" class="f-acc2-soft" style="stroke:var(--accent-2);stroke-dasharray:4 3"/><text x="268" y="66" text-anchor="middle" class="t" style="fill:var(--accent-2)">?</text>
+        </g>
+        <path d="M150 84 V118" class="s-line" marker-end="url(#lm-ar1)"/>
+        <rect x="40" y="122" width="220" height="70" rx="12" class="f-acc-soft" style="stroke:var(--accent);stroke-width:1.5"/>
+        <text x="150" y="152" text-anchor="middle" class="t-acc">언어 모델 θ</text>
+        <text x="150" y="174" text-anchor="middle" class="t-dim">(n-gram · MLP · Transformer)</text>
+        <path d="M262 157 H330" class="s-line" marker-end="url(#lm-ar1)"/>
+        <text x="296" y="148" text-anchor="middle" class="t-dim">로짓 → 소프트맥스</text>
+        <!-- distribution bars -->
+        <text x="340" y="30" class="t-dim">P(x_t | x&lt;t) — 어휘 전체에 대한 분포</text>
+        <path d="M340 210 H640" class="s-axis"/>
+        <rect x="350" y="70" width="34" height="140" class="f-acc"/><text x="367" y="228" text-anchor="middle" class="t">좋다</text><text x="367" y="62" text-anchor="middle" class="t-mono">0.46</text>
+        <rect x="400" y="132" width="34" height="78" class="f-acc-soft" style="stroke:var(--accent)"/><text x="417" y="228" text-anchor="middle" class="t">맑다</text><text x="417" y="124" text-anchor="middle" class="t-mono">0.26</text>
+        <rect x="450" y="164" width="34" height="46" class="f-acc-soft" style="stroke:var(--accent)"/><text x="467" y="228" text-anchor="middle" class="t">춥다</text><text x="467" y="156" text-anchor="middle" class="t-mono">0.15</text>
+        <rect x="500" y="186" width="34" height="24" class="f-acc-soft" style="stroke:var(--accent)"/><text x="517" y="228" text-anchor="middle" class="t">흐</text><text x="517" y="178" text-anchor="middle" class="t-mono">0.08</text>
+        <rect x="550" y="200" width="34" height="10" class="f-acc-soft" style="stroke:var(--accent)"/><text x="567" y="228" text-anchor="middle" class="t">…</text>
+        <text x="610" y="200" class="t-dim">합 = 1</text>
+        <!-- sample & append -->
+        <path d="M367 236 V262 H268 V84" style="stroke:var(--accent-2);stroke-width:2;fill:none" marker-end="url(#lm-ar1a)"/>
+        <text x="420" y="262" class="t" style="fill:var(--accent-2)">샘플링한 토큰을 문맥 끝에 붙이고 반복</text>
+        <text x="660" y="100" class="t-mono">학습:</text>
+        <text x="660" y="120" class="t-dim">정답 토큰의</text>
+        <text x="660" y="140" class="t-dim">−log P 를</text>
+        <text x="660" y="160" class="t-dim">최소화</text>
+      </svg>
+      <figcaption><b>그림 7-1.</b> 자기회귀 언어 모델. 모델은 문맥을 받아 다음 토큰의 확률 분포를 내고(막대는 설명용 예시 값), 생성할 때는 거기서 하나를 뽑아 문맥에 붙여 다시 넣는다. 학습할 때는 실제 다음 토큰의 확률을 높이도록 파라미터 θ를 조정한다.</figcaption>
+    </figure>
+
+    <h3>교차 엔트로피와 퍼플렉시티</h3>
+    <p>학습 목표는 실제 텍스트에 높은 확률을 주는 것이다. 곱은 다루기 불편하므로 로그를 취하고 부호를 뒤집어 평균을 낸다. 이것이 <a href="training.html">3장</a>에서 본 <span class="term">교차 엔트로피 손실</span><span class="en">(cross-entropy)</span>이며, 토큰마다 "정답 토큰에 준 확률의 −log"를 평균한 값이다.</p>
+    <div class="formula">$$\mathcal{L}(\theta) = -\frac{1}{T}\sum_{t=1}^{T} \log P_\theta(x_t \mid x_{\lt t}), \qquad \mathrm{PPL} = \exp(\mathcal{L}) = \Bigl(\prod_t P_\theta(x_t\mid x_{\lt t})\Bigr)^{-1/T}$$
+      <div class="where">\(\mathcal{L}\)은 자연로그 기준이면 nats, 밑 2이면 bits 단위다. <span class="term">퍼플렉시티</span><span class="en">(perplexity)</span> PPL은 확률의 기하평균의 역수로, "모델이 매 스텝 평균적으로 몇 개의 후보 사이에서 균등하게 헷갈리는가"로 읽는다. 어휘 \(V\)개에 균등 분포를 주면 PPL = \(V\)다.</div>
+    </div>
+    <p>손실 1 nat 차이는 PPL로 \(e \approx 2.7\)배 차이다. LLM 논문에서 손실이 2.0에서 1.9로 "겨우" 0.1 줄어든 것은 PPL이 약 10% 줄었다는 뜻이고, 모든 토큰에서 평균적으로 그만큼 덜 놀란다는 뜻이다. 아래 시뮬레이터에서 토큰별 확률을 직접 끌어 올리고 내리며 감을 잡아 보자.</p>
+
+    <div class="sim" id="sim-chain">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>확률의 연쇄법칙과 퍼플렉시티</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-chain-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>단위</span><div class="seg" id="lm-chain-unit"><button data-value="nat" class="on">nats (ln)</button><button data-value="bit">bits (log₂)</button></div></div>
+          <div class="ctrl"><span>예시 모델</span><div class="lm-btns">
+            <button class="btn" data-preset="good">잘 학습된 모델</button>
+            <button class="btn" data-preset="unsure">헷갈리는 모델</button>
+            <button class="btn" data-preset="oops">한 토큰에서 크게 틀림</button>
+            <button class="btn" data-preset="unif">균등 분포 (V=50,257)</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">문장 확률 ∏P</span><span class="v" id="lm-chain-joint">—</span></div>
+        <div class="stat"><span class="k">평균 손실 𝓛</span><span class="v" id="lm-chain-ce">—</span></div>
+        <div class="stat"><span class="k">퍼플렉시티</span><span class="v" id="lm-chain-ppl">—</span></div>
+        <div class="stat"><span class="k">가장 큰 기여 토큰</span><span class="v" id="lm-chain-worst">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 막대를 위아래로 끌어 각 토큰의 조건부 확률 \(P(x_t\mid x_{\lt t})\)를 바꾼다(세로축은 로그 눈금). ① '한 토큰에서 크게 틀림'은 '잘 학습된 모델'에서 '좋다' 하나만 0.55 → 0.001로 내린 것이다. 문장 확률은 550배 줄고, 7개 토큰의 평균인데도 PPL이 1.9에서 4.6으로 2배 넘게 뛴다. −log가 확신에 찬 오답을 크게 벌하기 때문이다. ② 모든 막대를 0.5로 맞추면 PPL = 2(동전 던지기 수준), 0.1로 맞추면 PPL = 10이 된다. ③ '균등 분포'는 GPT-2 어휘 50,257개에 균등한 확률을 준 경우로, 학습 전 모델의 출발점이다(손실 ≈ ln 50,257 ≈ 10.8 nats).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="lm-ngram">
+    <h2>n-gram 모델: 세어서 만드는 언어 모델</h2>
+    <p>가장 오래된 언어 모델은 신경망 없이 <strong>세기만</strong> 한다. 문맥 전체 \(x_{\lt t}\)를 다 보는 대신 바로 앞 \(n-1\)개 토큰만 본다고 가정하면(<span class="term">마르코프 가정</span><span class="en">(Markov assumption)</span>), 조건부 확률은 코퍼스의 출현 횟수 비율로 추정된다.</p>
+    <div class="formula">$$P(x_t \mid x_{t-n+1:t-1}) \approx \frac{c(x_{t-n+1:t-1},\, x_t) + k}{c(x_{t-n+1:t-1}) + kV}$$
+      <div class="where">\(c(\cdot)\)는 코퍼스에서 해당 문자열이 나온 횟수, \(V\)는 어휘 크기다. \(k=0\)이면 최대우도 추정(MLE), \(k=1\)이면 라플라스(add-one) 스무딩이다. \(n=1\)(유니그램)은 문맥을 전혀 보지 않고 글자 빈도만 쓴다.</div>
+    </div>
+    <p>n을 키우면 문맥을 더 많이 보니 예측이 날카로워진다. 하지만 문맥의 가짓수는 \(V^{n-1}\)으로 폭발하고, 코퍼스는 유한하다. 한국어 음절만 해도 자주 쓰는 것이 2,000개를 넘으니 3글자 문맥은 수십억 가지인데, 대부분은 코퍼스에 한 번도 나오지 않는다. 처음 보는 문맥에서 MLE는 0/0이 되고, 처음 보는 조합에는 확률 0을 준다. 확률 0이 하나라도 끼면 문장 확률 전체가 0, 퍼플렉시티는 무한대가 된다. 이것이 <span class="term">희소성 문제</span><span class="en">(sparsity)</span>다. 스무딩은 0을 피하게 해 주고, <span class="term">백오프</span><span class="en">(backoff)</span>는 본 적 없는 문맥이면 더 짧은 문맥으로 물러나 추정한다. 2010년대 초까지 음성 인식과 기계 번역은 수십억 단어로 센 5-gram 모델과 Kneser–Ney 스무딩을 썼다.</p>
+    <p>아래 시뮬레이터에는 교육용으로 직접 작성한 짧은 한국어 문장 수십 개가 들어 있다. 문자(음절과 공백) 단위로 n-gram을 세고, 다음 글자 분포를 보여 준다. 코퍼스는 자유롭게 고칠 수 있다.</p>
+
+    <div class="sim" id="sim-ngram">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>문자 단위 n-gram 언어 모델</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-ng-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>n (문맥 = n−1 글자)</span><div class="seg" id="lm-ng-n"><button data-value="1">1</button><button data-value="2">2</button><button data-value="3" class="on">3</button><button data-value="4">4</button></div></div>
+          <label class="ctrl"><span>스무딩 k <output id="lm-ng-k-out"></output></span><input type="range" id="lm-ng-k" min="0" max="1" step="0.01" value="0"></label>
+          <label class="check"><input type="checkbox" id="lm-ng-bo"> 백오프 (본 적 없는 문맥 → 짧은 문맥)</label>
+          <label class="ctrl"><span>생성 온도 T <output id="lm-ng-t-out"></output></span><input type="range" id="lm-ng-t" min="0.2" max="2" step="0.05" value="1"></label>
+        </div>
+      </div>
+      <div class="lm-panel">
+        <h4>문맥 (막대를 누르면 그 글자를 덧붙인다)</h4>
+        <div class="lm-row"><input class="ab-input" id="lm-ng-ctx" value="나는 학" aria-label="문맥"><button class="btn primary" id="lm-ng-gen">이어서 생성</button><button class="btn" id="lm-ng-clr">지우기</button></div>
+        <div class="lm-gen" id="lm-ng-out">—</div>
+        <h4>평가 문장 (퍼플렉시티 계산)</h4>
+        <input class="ab-input" id="lm-ng-test" value="나는 아침에 학교에 간다." aria-label="평가 문장">
+        <details class="lm-det"><summary>학습 코퍼스 편집 (한 줄 = 한 문장)</summary>
+          <textarea class="ab-input" id="lm-ng-corpus" rows="8" spellcheck="false" aria-label="코퍼스"></textarea>
+        </details>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">어휘 V (글자 종류)</span><span class="v" id="lm-ng-v">—</span></div>
+        <div class="stat"><span class="k">이 문맥의 출현 수 c(h)</span><span class="v" id="lm-ng-ch">—</span></div>
+        <div class="stat"><span class="k">본 문맥 종류</span><span class="v" id="lm-ng-nctx">—</span></div>
+        <div class="stat"><span class="k">평가 문장 PPL</span><span class="v" id="lm-ng-ppl">—</span></div>
+        <div class="stat"><span class="k">확률 0 글자 수</span><span class="v" id="lm-ng-zero">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① n=1에서 '이어서 생성'을 누르면 글자 빈도만 맞춘 무의미한 문자열이 나오고, n=3~4로 올리면 코퍼스의 어절이 그럴듯하게 이어진다(n=4에서는 코퍼스 문장을 거의 그대로 베낀다). ② k=0, n=4에서 평가 문장을 "나는 저녁에 도서관에 간다."처럼 코퍼스에 없는 조합으로 바꾸면 확률 0인 글자가 생겨 PPL이 ∞가 된다. k를 0.1로 올리거나 백오프를 켜면 유한해진다. ③ 문맥 칸에 "우주"처럼 코퍼스에 없는 말을 넣으면 c(h)=0, 즉 '본 적 없는 문맥'이다. 같은 문맥에서 n을 낮추면 다시 분포가 생긴다. 이 한계를 넘으려면 비슷한 글자·단어끼리 통계를 공유해야 한다. 그것이 다음 절의 임베딩이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="lm-neural">
+    <h2>신경망 언어 모델: 통계를 공유하는 임베딩</h2>
+    <p>n-gram 모델에서 "고양이가 잔다"와 "강아지가 잔다"는 아무 관계가 없는 별개의 카운트다. 하나를 많이 봐도 다른 쪽 확률은 오르지 않는다. Bengio 등(2003)의 <span class="term">신경 확률 언어 모델</span><span class="en">(Neural Probabilistic Language Model)</span>은 이 문제를 두 단계로 풀었다. 첫째, 각 토큰을 학습 가능한 밀집 벡터 \(\mathbf{e}\in\mathbb{R}^d\), 즉 <a href="embedding.html">4장</a>의 <span class="term">임베딩</span>으로 바꾼다. 둘째, 문맥 임베딩들을 이어 붙여 MLP(<a href="neuron.html">2장</a>)에 넣고 다음 토큰의 로짓을 출력한다. 비슷한 문맥에서 쓰이는 토큰은 학습 중에 비슷한 벡터를 갖게 되고, 그래서 한 문맥에서 배운 것이 비슷한 문맥으로 <strong>일반화</strong>된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 320" role="img" aria-label="MLP 언어 모델 구조">
+        <defs><marker id="lm-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker></defs>
+        <text x="20" y="28" class="t-dim">문맥 K=4 글자</text>
+        <g>
+          <rect x="20" y="250" width="44" height="34" rx="7" class="f-surface"/><text x="42" y="272" text-anchor="middle" class="t-mono">t</text>
+          <rect x="72" y="250" width="44" height="34" rx="7" class="f-surface"/><text x="94" y="272" text-anchor="middle" class="t-mono">h</text>
+          <rect x="124" y="250" width="44" height="34" rx="7" class="f-surface"/><text x="146" y="272" text-anchor="middle" class="t-mono">e</text>
+          <rect x="176" y="250" width="44" height="34" rx="7" class="f-surface"/><text x="198" y="272" text-anchor="middle" class="t-mono">␣</text>
+        </g>
+        <text x="120" y="306" text-anchor="middle" class="t-dim">정수 인덱스 x</text>
+        <!-- embedding lookup -->
+        <path d="M42 248 V214 M94 248 V214 M146 248 V214 M198 248 V214" class="s-line" marker-end="url(#lm-ar2)"/>
+        <text x="236" y="236" class="t-dim">표 C[V×d]에서 행 조회</text>
+        <g>
+          <rect x="24" y="130" width="36" height="80" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="76" y="130" width="36" height="80" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="128" y="130" width="36" height="80" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="180" y="130" width="36" height="80" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        </g>
+        <text x="120" y="118" text-anchor="middle" class="t-acc">이어 붙임 e ∈ ℝ^(K·d)</text>
+        <path d="M222 170 H282" class="s-line" marker-end="url(#lm-ar2)"/>
+        <text x="252" y="160" text-anchor="middle" class="t-mono">W₁,b₁</text>
+        <rect x="288" y="60" width="64" height="220" rx="8" class="f-elev" style="stroke:var(--accent-2);stroke-width:1.5"/>
+        <text x="320" y="50" text-anchor="middle" class="t" style="fill:var(--accent-2)">은닉 h (H=128)</text>
+        <text x="320" y="176" text-anchor="middle" class="t-mono">tanh</text>
+        <path d="M356 170 H416" class="s-line" marker-end="url(#lm-ar2)"/>
+        <text x="386" y="160" text-anchor="middle" class="t-mono">W₂,b₂</text>
+        <rect x="422" y="40" width="46" height="260" rx="8" class="f-surface"/>
+        <text x="445" y="30" text-anchor="middle" class="t">로짓 z (V)</text>
+        <path d="M472 170 H532" class="s-line" marker-end="url(#lm-ar2)"/>
+        <text x="502" y="160" text-anchor="middle" class="t-mono">softmax</text>
+        <!-- prob bars -->
+        <path d="M540 290 H760" class="s-axis"/>
+        <rect x="548" y="250" width="16" height="40" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="570" y="270" width="16" height="20" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="592" y="110" width="16" height="180" class="f-acc"/>
+        <rect x="614" y="262" width="16" height="28" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="636" y="280" width="16" height="10" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="658" y="230" width="16" height="60" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="680" y="284" width="16" height="6" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="600" y="102" text-anchor="middle" class="t-mono">r</text>
+        <text x="666" y="222" text-anchor="middle" class="t-mono">s</text>
+        <text x="650" y="60" text-anchor="middle" class="t-dim">P(다음 글자)</text>
+        <text x="650" y="80" text-anchor="middle" class="t-dim">손실 = −log P(정답)</text>
+      </svg>
+      <figcaption><b>그림 7-2.</b> 문자 단위 MLP 언어 모델(Bengio 2003의 구조를 글자에 적용). 문맥 K개 글자의 임베딩을 조회해 이어 붙이고, tanh 은닉층을 거쳐 어휘 크기 V의 로짓을 낸다. 임베딩 표 C, W₁, W₂가 모두 역전파로 함께 학습된다.</figcaption>
+    </figure>
+    <div class="formula">$$\mathbf{e} = [C_{x_{t-K}};\dots;C_{x_{t-1}}],\quad \mathbf{h} = \tanh(\mathbf{e}W_1 + \mathbf{b}_1),\quad P(\cdot\mid x_{\lt t}) = \mathrm{softmax}(\mathbf{h}W_2 + \mathbf{b}_2)$$
+      <div class="where">역전파의 출발점은 \(\partial\mathcal{L}/\partial\mathbf{z} = \mathbf{p} - \mathbf{y}_{\text{one-hot}}\)(소프트맥스+교차 엔트로피의 깔끔한 기울기)다. 그다음 \(\partial\mathcal{L}/\partial\mathbf{h} = (\mathbf{p}-\mathbf{y})W_2^\top\), tanh를 지나며 \((1-\mathbf{h}^2)\)이 곱해지고, \(W_1^\top\)을 거쳐 임베딩까지 내려가 문맥 글자의 행 \(C_{x}\)에만 더해진다(<a href="training.html">3장</a>의 연쇄법칙).</div>
+    </div>
+    <p>아래가 이 장의 대표 시뮬레이터다. 위 구조를 JavaScript로 그대로 구현했다. 순전파, 손실, 역전파(기울기를 수치 미분과 대조해 검증함), Adam 업데이트를 모두 Float32Array 위에서 직접 계산하며, 화면이 갱신될 때마다 미니배치 64개로 몇 스텝씩 학습한다. 학습 데이터는 교육용으로 직접 쓴 약 2,800자짜리 짧은 영어 이야기다(영어 소문자 26자·공백·마침표·쉼표, V = 28). 한국어 음절은 어휘가 수백~수천 개라 이 작은 모델과 데이터로는 학습이 느려서 영어를 골랐다.</p>
+
+    <div class="sim" id="sim-mlp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>브라우저에서 학습하는 문자 단위 MLP 언어 모델</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-mlp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>학습</span><div class="lm-btns"><button class="btn primary" id="lm-mlp-run">학습 시작</button><button class="btn" id="lm-mlp-reset">초기화</button></div></div>
+          <div class="ctrl"><span>문맥 길이 K</span><div class="seg" id="lm-mlp-k"><button data-value="3">3</button><button data-value="4" class="on">4</button><button data-value="5">5</button></div></div>
+          <div class="ctrl"><span>임베딩 차원 d</span><div class="seg" id="lm-mlp-d"><button data-value="2">2</button><button data-value="8">8</button><button data-value="16" class="on">16</button></div></div>
+          <div class="ctrl"><span>은닉 크기 H</span><div class="seg" id="lm-mlp-h"><button data-value="32">32</button><button data-value="128" class="on">128</button><button data-value="256">256</button></div></div>
+          <label class="ctrl"><span>학습률 η <output id="lm-mlp-lr-out"></output></span><input type="range" id="lm-mlp-lr" min="-4" max="-1" step="0.05" value="-2.5"></label>
+          <label class="ctrl"><span>Weight decay <output id="lm-mlp-wd-out"></output></span><input type="range" id="lm-mlp-wd" min="0" max="0.5" step="0.01" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스텝</span><span class="v" id="lm-mlp-step">0</span></div>
+        <div class="stat"><span class="k">학습 손실</span><span class="v" id="lm-mlp-tr">—</span></div>
+        <div class="stat"><span class="k">검증 손실</span><span class="v" id="lm-mlp-va">—</span></div>
+        <div class="stat"><span class="k">검증 PPL</span><span class="v" id="lm-mlp-ppl">—</span></div>
+        <div class="stat"><span class="k">파라미터 수</span><span class="v" id="lm-mlp-np">—</span></div>
+        <div class="stat"><span class="k">속도</span><span class="v" id="lm-mlp-sps">—</span></div>
+      </div>
+      <div class="lm-split two">
+        <div class="lm-panel">
+          <h4>학습 중 샘플 (온도 0.8, "the " 다음부터)</h4>
+          <div class="lm-samples" id="lm-mlp-samples"></div>
+        </div>
+        <div class="lm-panel">
+          <h4>글자 임베딩 지도 (PCA 2D, 학습하며 갱신)</h4>
+          <div class="sim-view" style="padding:0"><canvas id="lm-mlp-emb"></canvas></div>
+        </div>
+      </div>
+      <div class="lm-panel">
+        <h4>직접 생성해 보기</h4>
+        <div class="lm-row"><input class="ab-input" id="lm-mlp-prompt" value="the girl " aria-label="프롬프트"><button class="btn primary" id="lm-mlp-gen">생성</button></div>
+        <label class="ctrl"><span>온도 T <output id="lm-mlp-t-out"></output></span><input type="range" id="lm-mlp-t" min="0.1" max="2" step="0.05" value="0.8"></label>
+        <div class="lm-gen" id="lm-mlp-out">—</div>
+        <details class="lm-det"><summary>학습 텍스트 보기 (교육용으로 작성한 약 2,800자, 앞 90% 학습 / 뒤 10% 검증)</summary><div class="lm-corpus" id="lm-mlp-corpus"></div></details>
+      </div>
+      <div class="sim-note">해볼 것: ① '학습 시작'을 누르고 샘플을 지켜보자. 스텝 0의 무작위 글자 → 수백 스텝에서 "the", "and" 같은 짧은 단어 → 1,000스텝 무렵에는 문법이 그럴듯한 가짜 문장이 나온다. 손실 곡선의 점선 ln 28 ≈ 3.33은 균등 분포 수준이다. ② 수백 스텝이 지나면 학습 손실(진한 선)은 계속 내려가는데 검증 손실(분홍)은 바닥을 찍고 다시 오른다. 2,500자 남짓한 데이터를 약 1만 개 파라미터가 <strong>외워 버리는</strong> 과적합이다. 초기화 후 weight decay를 0.1~0.2로 주고 다시 학습하면 검증 손실의 반등이 줄어든다. ③ 학습률을 10⁻¹로 올리면 손실이 요동치고, 10⁻⁴이면 거의 안 내려간다. ④ d=2로 두면 임베딩 지도가 그대로 실제 임베딩이다. 학습이 진행되면 모음(a e i o u)이 한쪽에 모이는 경향을 볼 수 있다(초기화 시드·설정에 따라 다를 수 있다).</div>
+    </div>
+    <div class="callout deep"><strong>이 작은 모델과 GPT의 차이</strong>
+      <p>구조의 뼈대(임베딩 → 비선형 변환 → 어휘 소프트맥스, 교차 엔트로피, 역전파, Adam)는 GPT와 같다. 다른 점은 ① 문맥이 고정 길이 K(여기선 4글자)라는 것, ② 문맥 위치마다 다른 가중치 블록을 써서 위치 간 정보 공유가 없다는 것, ③ 규모(약 10<sup>4</sup> 파라미터 vs 10<sup>9</sup>~10<sup>12</sup>), 그리고 ④ 데이터(2.8천 글자 vs 10<sup>13</sup> 토큰)다. 이 시뮬레이터에서 본 과적합은 데이터가 모델보다 훨씬 작아서 생긴다. 실제 LLM 사전학습에서는 대개 데이터를 한 번(1 에폭) 정도만 보므로 학습 손실과 검증 손실이 거의 붙어서 함께 내려간다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="lm-why-tf">
+    <h2>왜 Transformer로 바뀌었나</h2>
+    <p>고정 길이 문맥의 한계를 넘기 위해 2010년대에는 <span class="term">순환 신경망</span><span class="en">(RNN, LSTM)</span>이 쓰였다. 은닉 상태 \(\mathbf{h}_t = f(\mathbf{h}_{t-1}, x_t)\)를 한 토큰씩 갱신하므로 이론상 문맥 길이에 제한이 없다. 하지만 두 가지 근본 문제가 있었다.</p>
+    <ul>
+      <li><strong>긴 거리 정보 손실</strong>: 1,000 토큰 앞의 정보는 1,000번의 비선형 변환을 거쳐야 현재에 도달한다. 그동안 고정 크기 벡터에 압축되고, 기울기는 그만큼 곱해지며 소실·폭주한다(<a href="training.html">3장</a>).</li>
+      <li><strong>병렬화 불가</strong>: \(\mathbf{h}_t\)는 \(\mathbf{h}_{t-1}\)이 끝나야 계산할 수 있다. 문장 길이 T만큼의 순차 단계가 필요하므로, 수천 개의 코어가 행렬곱을 동시에 하는 GPU의 힘을 쓰지 못한다.</li>
+    </ul>
+    <p>2017년의 Transformer(<a href="attention.html">5장</a>, <a href="transformer.html">6장</a>)는 순환을 없앴다. <span class="term">셀프 어텐션</span>은 모든 위치가 모든 이전 위치를 <strong>한 단계에</strong> 직접 참조하고(경로 길이 1), 학습할 때는 인과 마스크만 씌우면 한 시퀀스의 T개 위치 손실을 큰 행렬곱 몇 번으로 동시에 계산할 수 있다. 계산량은 \(T^2\)로 늘지만 GPU에서는 순차 단계 T번보다 훨씬 빠르다. "규모를 키우면 좋아진다"는 스케일링을 실제로 밀어붙일 수 있게 된 결정적 이유가 이 병렬성이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 270" role="img" aria-label="RNN과 Transformer의 의존 구조 비교">
+        <defs><marker id="lm-ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker></defs>
+        <text x="190" y="26" text-anchor="middle" class="t-acc">RNN: 순차 의존 (경로 길이 T)</text>
+        <g>
+          <rect x="30" y="90" width="50" height="40" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="110" y="90" width="50" height="40" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="190" y="90" width="50" height="40" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="270" y="90" width="50" height="40" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <text x="55" y="115" text-anchor="middle" class="t-mono">h₁</text><text x="135" y="115" text-anchor="middle" class="t-mono">h₂</text><text x="215" y="115" text-anchor="middle" class="t-mono">h₃</text><text x="295" y="115" text-anchor="middle" class="t-mono">h₄</text>
+          <path d="M80 110 H106 M160 110 H186 M240 110 H266" style="stroke:var(--accent-2);stroke-width:2;fill:none" marker-end="url(#lm-ar3)"/>
+          <path d="M55 170 V134 M135 170 V134 M215 170 V134 M295 170 V134" class="s-line"/>
+          <text x="55" y="190" text-anchor="middle" class="t-mono">x₁</text><text x="135" y="190" text-anchor="middle" class="t-mono">x₂</text><text x="215" y="190" text-anchor="middle" class="t-mono">x₃</text><text x="295" y="190" text-anchor="middle" class="t-mono">x₄</text>
+        </g>
+        <text x="175" y="228" text-anchor="middle" class="t-dim">h₄는 h₃가 끝나야 계산 → T단계 순차</text>
+        <text x="175" y="250" text-anchor="middle" class="t-dim">x₁의 정보는 3번 압축되어 도달</text>
+        <path d="M390 20 V255" class="s-line" style="stroke-dasharray:4 4"/>
+        <text x="590" y="26" text-anchor="middle" class="t-acc">Transformer: 모든 쌍을 한 번에 (경로 길이 1)</text>
+        <g>
+          <rect x="430" y="70" width="50" height="40" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="510" y="70" width="50" height="40" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="590" y="70" width="50" height="40" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="670" y="70" width="50" height="40" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <text x="455" y="95" text-anchor="middle" class="t-mono">y₁</text><text x="535" y="95" text-anchor="middle" class="t-mono">y₂</text><text x="615" y="95" text-anchor="middle" class="t-mono">y₃</text><text x="695" y="95" text-anchor="middle" class="t-mono">y₄</text>
+          <g class="s-acc" style="stroke-width:1.4">
+            <path d="M455 170 L455 112"/><path d="M455 170 L535 112"/><path d="M455 170 L615 112"/><path d="M455 170 L695 112"/>
+            <path d="M535 170 L535 112"/><path d="M535 170 L615 112"/><path d="M535 170 L695 112"/>
+            <path d="M615 170 L615 112"/><path d="M615 170 L695 112"/>
+            <path d="M695 170 L695 112"/>
+          </g>
+          <rect x="430" y="170" width="50" height="34" rx="8" class="f-surface"/><rect x="510" y="170" width="50" height="34" rx="8" class="f-surface"/><rect x="590" y="170" width="50" height="34" rx="8" class="f-surface"/><rect x="670" y="170" width="50" height="34" rx="8" class="f-surface"/>
+          <text x="455" y="192" text-anchor="middle" class="t-mono">x₁</text><text x="535" y="192" text-anchor="middle" class="t-mono">x₂</text><text x="615" y="192" text-anchor="middle" class="t-mono">x₃</text><text x="695" y="192" text-anchor="middle" class="t-mono">x₄</text>
+        </g>
+        <text x="575" y="228" text-anchor="middle" class="t-dim">인과 마스크: yₜ는 x₁…xₜ만 본다</text>
+        <text x="575" y="250" text-anchor="middle" class="t-dim">T개 위치를 행렬곱으로 동시에 학습</text>
+      </svg>
+      <figcaption><b>그림 7-3.</b> RNN(왼쪽)은 은닉 상태를 한 칸씩 넘겨 주므로 계산이 순차적이고 먼 정보가 여러 번 압축된다. Transformer(오른쪽)의 인과 셀프 어텐션은 각 출력이 이전 모든 입력을 직접 보며, 모든 위치를 한 번에 계산할 수 있다.</figcaption>
+    </figure>
+    <p>현재의 LLM은 거의 모두 <strong>디코더 전용 Transformer</strong><span class="en">(decoder-only)</span>다. GPT 계열, Llama, Qwen, DeepSeek, Mistral 모두 같은 틀에 RoPE, RMSNorm, SwiGLU FFN, GQA 같은 개선을 얹은 형태다(<a href="transformer.html">6장</a>). 학습 목표는 이 장의 처음과 똑같은 다음 토큰 교차 엔트로피다. 2024년 이후에는 Mamba 같은 상태공간 모델(SSM)이나 어텐션과 섞은 하이브리드도 연구되지만, 주류는 여전히 Transformer다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="lm-pretrain">
+    <h2>사전학습: 데이터와 계산량</h2>
+    <p><span class="term">사전학습</span><span class="en">(pretraining)</span>은 인터넷 문서, 책, 코드, 논문 등 거대한 텍스트에서 다음 토큰 예측을 학습하는 단계다. 데이터 규모는 해마다 커졌다. GPT-3(2020)는 약 3,000억(300B) 토큰, Chinchilla(2022)는 1.4조 토큰, Llama 2(2023)는 2조 토큰, Llama 3(2024)는 <strong>약 15조(15T) 토큰</strong>으로 학습했다. 원본 웹 크롤(Common Crawl 등)을 그대로 쓰지 않고, 중복 제거, 언어 식별, 품질 분류기 필터링, 개인정보·유해 콘텐츠 제거, 코드·수학 비중 조절 같은 정제를 거친다. 데이터 품질이 모델 품질을 크게 좌우한다는 것이 현장의 공통된 경험이다.</p>
+    <h3>계산량 C ≈ 6ND</h3>
+    <p>파라미터 \(N\)개짜리 Transformer가 토큰 하나를 처리하는 순전파에는 대략 \(2N\) FLOPs가 든다(가중치 하나당 곱셈 1 + 덧셈 1). 역전파는 활성값에 대한 기울기와 가중치에 대한 기울기를 모두 계산하므로 순전파의 약 2배인 \(4N\)이다. 따라서 토큰당 \(6N\), 전체 \(D\)개 토큰을 학습하면</p>
+    <div class="formula">$$C \approx 6ND \ \text{FLOPs}, \qquad \text{학습 시간} \approx \frac{C}{(\text{GPU 수}) \times (\text{GPU 최대 FLOPS}) \times \text{MFU}}$$
+      <div class="where">어텐션의 \(T^2\) 항은 문맥이 아주 길지 않으면 작아서 무시한다. MFU(Model FLOPs Utilization)는 실제로 모델 계산에 쓰인 FLOPS ÷ 하드웨어 최대치다. 통신·메모리 대기·파이프라인 공백 때문에 대규모 학습에서는 보통 35~50%다(Llama 3 405B 학습은 BF16에서 약 38~43%로 보고됨).</div>
+    </div>
+    <p>예를 들어 Llama 3 8B를 15T 토큰으로 학습하면 \(C \approx 6 \times 8\times10^9 \times 15\times10^{12} = 7.2\times10^{23}\) FLOPs다. Meta는 Llama 3.1 405B의 사전학습 계산량을 약 \(3.8\times10^{25}\) FLOPs, H100 최대 16,000여 개, 약 3,084만 GPU-시간으로 보고했다(2024). 아래 계산기로 직접 확인해 보자.</p>
+
+    <div class="sim" id="sim-compute">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>학습 계산량 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-cmp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>파라미터 N <output id="lm-cmp-n-out"></output></span><input type="range" id="lm-cmp-n" min="8" max="12.3" step="0.01" value="9.903"></label>
+          <label class="ctrl"><span>학습 토큰 D <output id="lm-cmp-d-out"></output></span><input type="range" id="lm-cmp-d" min="9" max="14" step="0.01" value="13.176"></label>
+          <div class="ctrl"><span>GPU (BF16 dense 최대)</span><div class="seg" id="lm-cmp-gpu"><button data-value="312">A100</button><button data-value="989" class="on">H100</button><button data-value="2250">B200</button></div></div>
+          <label class="ctrl"><span>GPU 수 <output id="lm-cmp-g-out"></output></span><input type="range" id="lm-cmp-g" min="0" max="5" step="0.01" value="3.38"></label>
+          <label class="ctrl"><span>MFU <output id="lm-cmp-mfu-out"></output></span><input type="range" id="lm-cmp-mfu" min="10" max="65" step="1" value="40"></label>
+          <div class="ctrl"><span>프리셋</span><div class="lm-btns">
+            <button class="btn" data-cmp="gpt3">GPT-3</button><button class="btn" data-cmp="chin">Chinchilla</button><button class="btn" data-cmp="l8">Llama 3 8B</button><button class="btn" data-cmp="l70">Llama 3 70B</button><button class="btn" data-cmp="l405">Llama 3.1 405B</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">계산량 C = 6ND</span><span class="v" id="lm-cmp-c">—</span></div>
+        <div class="stat"><span class="k">GPU-시간</span><span class="v" id="lm-cmp-gh">—</span></div>
+        <div class="stat"><span class="k">학습 기간</span><span class="v" id="lm-cmp-days">—</span></div>
+        <div class="stat"><span class="k">토큰/파라미터</span><span class="v" id="lm-cmp-tpp">—</span></div>
+        <div class="stat"><span class="k">1 GPU로 하면</span><span class="v" id="lm-cmp-one">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 'Llama 3.1 405B' 프리셋(H100 16,384개, MFU 40%)에서 C ≈ 3.8×10²⁵, 약 2,700만 GPU-시간, 약 2달 남짓이 나온다. Meta 보고치(약 3,084만 GPU-시간)와 같은 자릿수다. 차이는 실패·재시작, 장문맥 추가 학습 등이다. ② 그래프의 점을 좌우로 끌어 GPU 수를 바꿔 보자. 이상적으로는 GPU를 2배로 늘리면 기간이 절반이 되지만(직선), 실제로는 규모가 커질수록 통신 때문에 MFU가 떨어진다. ③ GPU를 A100으로 바꾸면 같은 학습에 약 3.2배 긴 시간이 든다. 'GPT-3' 프리셋은 2020년에 V100 클러스터로 수 주가 걸린 학습이 H100 1,024개로는 열흘이 채 안 걸린다는 것을 보여 준다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델 (연도)</th><th class="num">N</th><th class="num">D (토큰)</th><th class="num">D/N</th><th class="num">C ≈ 6ND</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>GPT-3 (2020)</td><td class="num">175B</td><td class="num">300B</td><td class="num">1.7</td><td class="num">3.1×10²³</td><td>V100 클러스터</td></tr>
+        <tr><td>Chinchilla (2022)</td><td class="num">70B</td><td class="num">1.4T</td><td class="num">20</td><td class="num">5.9×10²³</td><td>계산 최적 배분</td></tr>
+        <tr><td>Llama 2 70B (2023)</td><td class="num">70B</td><td class="num">2T</td><td class="num">29</td><td class="num">8.4×10²³</td><td>A100, 약 172만 GPU-시간</td></tr>
+        <tr><td>Llama 3 8B (2024)</td><td class="num">8B</td><td class="num">15T</td><td class="num">~1,900</td><td class="num">7.2×10²³</td><td>H100, 약 130만 GPU-시간</td></tr>
+        <tr><td>Llama 3 70B (2024)</td><td class="num">70B</td><td class="num">15T</td><td class="num">~210</td><td class="num">6.3×10²⁴</td><td>H100, 약 640만 GPU-시간</td></tr>
+        <tr><td>Llama 3.1 405B (2024)</td><td class="num">405B</td><td class="num">15.6T</td><td class="num">~39</td><td class="num">3.8×10²⁵</td><td>H100 최대 16K개</td></tr>
+      </tbody>
+    </table></div>
+    <p>GPU-시간은 Meta 모델 카드의 보고치다. 학습에 필요한 메모리(가중치·기울기·Adam 상태로 파라미터당 약 16바이트)와 분산 학습은 <a href="training.html">3장</a>과 <a href="design.html">12장</a>에서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="lm-scaling">
+    <h2>스케일링 법칙: 크기와 데이터의 최적 배분</h2>
+    <p>Kaplan 등(OpenAI, 2020)은 언어 모델의 테스트 손실이 파라미터 수 N, 데이터 D, 계산량 C에 대해 수 자릿수에 걸쳐 매끄러운 <span class="term">거듭제곱 법칙</span><span class="en">(power law)</span>을 따른다는 것을 보였다. 로그-로그 그래프에서 직선이라는 뜻이다. 이 관찰 덕분에 작은 모델 수십 개를 학습해 보고, 수백 배 큰 모델의 손실을 학습 전에 예측할 수 있게 되었다.</p>
+    <p>그렇다면 계산 예산 C가 정해졌을 때 N과 D를 어떻게 나눠야 할까? 큰 모델을 적은 데이터로? 작은 모델을 많은 데이터로? Hoffmann 등(DeepMind, 2022)은 400개 넘는 모델을 학습해 다음 형태를 적합했다.</p>
+    <div class="formula">$$L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}, \qquad E=1.69,\ A=406.4,\ B=410.7,\ \alpha=0.34,\ \beta=0.28$$
+      <div class="where">\(E\)는 아무리 키워도 남는 손실(텍스트 자체의 엔트로피), 두 번째 항은 모델이 유한해서, 세 번째 항은 데이터가 유한해서 생기는 손실이다. 제약 \(C = 6ND\) 아래에서 \(L\)을 최소화하면 \(N_{opt} \propto C^{\beta/(\alpha+\beta)}\), \(D_{opt} \propto C^{\alpha/(\alpha+\beta)}\)가 된다.</div>
+    </div>
+    <p>논문의 핵심 결론은 "N과 D를 거의 같은 비율로 키워라", 구체적으로 <strong>파라미터당 약 20 토큰</strong>이었다. 같은 계산량(약 5.8×10²³ FLOPs)으로 Gopher 280B(300B 토큰)보다 Chinchilla 70B(1.4T 토큰)가 모든 평가에서 더 좋았다. GPT-3(175B, 300B 토큰, 파라미터당 1.7 토큰)는 이 기준으로 크게 <strong>데이터 부족</strong>이었던 셈이다.</p>
+    <div class="callout warn"><strong>같은 논문, 다른 숫자</strong>
+      <p>위 수식의 계수(논문의 '접근법 3')를 그대로 최소화하면 최적 비율이 파라미터당 20이 아니라 계산량에 따라 30~150 토큰으로 나온다. 논문의 다른 두 접근법은 약 20을 줬다. Besiroglu 등(Epoch AI, 2024)은 원 데이터를 재구성해 다시 적합한 결과(E=1.82, A=482.0, B=2085.4, α=0.348, β=0.366)가 접근법 1·2와 일치하는 약 20 토큰/파라미터를 준다고 보고했다. 아래 시뮬레이터에서 두 계수 세트를 바꿔 볼 수 있다. 스케일링 법칙은 물리 법칙이 아니라 <strong>경험적 적합</strong>이며, 데이터 구성·토크나이저·아키텍처가 바뀌면 계수도 바뀐다는 점을 기억하자.</p>
+    </div>
+
+    <div class="sim" id="sim-scaling">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스케일링 법칙 탐색: N–D 평면의 손실 지형</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-sc-cv"></canvas><canvas id="lm-sc-cv2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>계산 예산 C <output id="lm-sc-c-out"></output></span><input type="range" id="lm-sc-c" min="18" max="27" step="0.01" value="23.5"></label>
+          <div class="ctrl"><span>계수</span><div class="seg" id="lm-sc-fit"><button data-value="h" class="on">Hoffmann 2022</button><button data-value="b">Epoch 2024 재적합</button></div></div>
+          <label class="check"><input type="checkbox" id="lm-sc-models" checked> 실제 모델 표시</label>
+          <button class="btn" id="lm-sc-opt">탐침을 최적점으로</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 N<sub>opt</sub></span><span class="v" id="lm-sc-no">—</span></div>
+        <div class="stat"><span class="k">최적 D<sub>opt</sub></span><span class="v" id="lm-sc-do">—</span></div>
+        <div class="stat"><span class="k">D/N (최적)</span><span class="v" id="lm-sc-r">—</span></div>
+        <div class="stat"><span class="k">L<sub>opt</sub></span><span class="v" id="lm-sc-lo">—</span></div>
+        <div class="stat"><span class="k">탐침 (N, D)</span><span class="v" id="lm-sc-p">—</span></div>
+        <div class="stat"><span class="k">탐침 손실 / 손해</span><span class="v" id="lm-sc-pl">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 위 그림은 가로 N, 세로 D(모두 로그)에서 손실 L(N,D)의 등고선이고, 흰 대각선이 계산량 C = 6ND가 일정한 선이다. 아래 그림은 그 선을 따라 잘라 본 손실(가로 N)이다. ① 위 그림의 탐침(◆)을 끌어 보자. 탐침을 지나는 등계산량 선이 다시 그려지고, 같은 계산량에서 최적점(●) 대비 손실이 얼마나 나쁜지 보여 준다. GPT-3 점에 가져가면 같은 계산으로 더 작은 모델·더 많은 데이터가 낫다는 것이 보인다. ② C 슬라이더를 10¹⁹에서 10²⁶까지 움직이면 최적점이 대각선 방향 직선(로그-로그)을 따라 이동한다. 계수를 'Epoch 2024 재적합'으로 바꾸면 D/N이 약 20 근처로 안정된다. ③ Llama 3 8B(15T 토큰)는 최적점에서 한참 위(데이터 쪽)에 있다. 같은 계산이면 더 큰 모델이 손실은 낮지만, 작은 모델은 <strong>추론 비용</strong>이 싸다. 수억 명에게 서비스할 모델이라면 학습에 계산을 더 써서 작은 모델을 '과학습'시키는 편이 전체 비용이 적다.</div>
+    </div>
+    <p>Chinchilla 이후 업계는 두 방향으로 갈렸다. 최고 성능 하나만 노리는 경우에는 계산 최적 근처를, 널리 배포할 모델은 계산 최적보다 훨씬 많은 데이터로 학습하는 <span class="term">과학습</span><span class="en">(overtraining)</span>을 택한다. Llama 3 8B의 파라미터당 약 1,900 토큰이 극단적인 예다. Meta는 8B와 70B 모두 15T 토큰까지도 손실이 로그-선형으로 계속 내려갔다고 보고했다. 학습은 한 번이지만 추론은 수조 번 일어나므로, 수명 전체의 계산을 최소화하는 기준이 달라지는 것이다. 또 다른 제약은 <strong>데이터 고갈</strong>이다. 고품질 공개 텍스트는 수십조 토큰 규모로 추정되어, 합성 데이터와 여러 에폭 반복이 활발히 연구되고 있다.</p>
+    <h3>2024~2026년: 계산 최적을 한참 넘어서</h3>
+    <p>과학습은 이후 더 극단으로 갔다. Qwen3(2025)는 0.6B짜리 가장 작은 모델까지 약 36T 토큰 규모의 데이터로 학습했다. 파라미터당 약 60,000 토큰으로, Chinchilla 기준(약 20)의 3,000배다. 위 시뮬레이터의 'Qwen3 0.6B' 점이 계산 최적 궤적에서 얼마나 멀리 있는지 확인해 보자. 이렇게 해도 손실이 계속 내려가는 한, 스마트폰이나 노트북에서 돌릴 작은 모델에는 이득이다. 학습 비용은 한 번이지만 추론 비용은 사용량에 비례하기 때문이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th class="num">파라미터 (활성)</th><th class="num">토큰</th><th class="num">토큰 / 활성 파라미터</th></tr></thead>
+      <tbody>
+        <tr><td>Chinchilla (2022)</td><td class="num">70B</td><td class="num">1.4T</td><td class="num">20</td></tr>
+        <tr><td>Llama 3 8B (2024)</td><td class="num">8B</td><td class="num">15T</td><td class="num">~1,900</td></tr>
+        <tr><td>Qwen3-0.6B (2025)</td><td class="num">0.6B</td><td class="num">~36T</td><td class="num">~60,000</td></tr>
+        <tr><td>Llama 4 Scout (2025)</td><td class="num">17B (총 109B)</td><td class="num">~40T</td><td class="num">~2,400</td></tr>
+        <tr><td>DeepSeek-V4-Flash (2026)</td><td class="num">13B (총 284B)</td><td class="num">32T 이상</td><td class="num">~2,500</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout"><strong>MoE에서 'N'은 무엇인가</strong>
+      <p>MoE 모델에는 파라미터 수가 두 개 있다. 토큰 하나를 처리하는 데 쓰이는 <strong>활성 파라미터</strong> \(N_{\text{활성}}\)이 계산량 \(C \approx 6N_{\text{활성}}D\)와 추론 속도를 정하고, <strong>총 파라미터</strong> \(N_{\text{총}}\)이 메모리와 '지식 용량'을 정한다. 같은 계산(같은 \(N_{\text{활성}}\))에서 전문가를 늘려 총 파라미터를 키우면 손실이 더 내려간다는 것이 MoE의 핵심이고, 그래서 2025~2026년 플래그십은 총 1T 안팎에 활성은 그 2~5%(예: Kimi K2 32B/1T, DeepSeek-V4-Pro 49B/1.6T, Qwen3.5 17B/397B) 수준이다. 밀집 모델용 Chinchilla 식을 그대로 쓸 수는 없어서, 희소도(총/활성 비율)를 변수로 넣은 MoE 스케일링 법칙이 따로 연구되고 있다. 대가는 메모리다. 1.6T 파라미터는 FP8로도 1.6 TB라 GPU 여러 장에 나눠 올려야 하고, 전문가 사이의 통신과 부하 균형이 서빙의 핵심 문제가 된다(<a href="design.html">12장</a>).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="lm-align">
+    <h2>사전학습 이후: SFT와 선호 학습</h2>
+    <p>사전학습만 마친 <span class="term">베이스 모델</span><span class="en">(base model)</span>은 "인터넷 문서를 이어 쓰는 기계"다. "프랑스의 수도는?"이라고 넣으면 답 대신 "독일의 수도는? 이탈리아의 수도는?"처럼 퀴즈 목록을 이어 쓸 수도 있다. 이 모델을 사람의 지시를 따르고, 도움이 되며, 해로운 요청을 거절하는 조수로 바꾸는 과정을 <span class="term">사후 학습</span><span class="en">(post-training)</span> 또는 정렬(alignment)이라 한다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 320" role="img" aria-label="사전학습, SFT, 선호 학습, RLVR 파이프라인">
+        <defs><marker id="lm-ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker></defs>
+        <text x="400" y="28" text-anchor="middle" class="t-dim">네 단계 모두 "다음 토큰 확률"을 바꾸는 학습이다. 달라지는 것은 데이터와 손실(보상)이다.</text>
+        <!-- stage 1 -->
+        <rect x="10" y="50" width="178" height="134" rx="12" class="f-surface"/>
+        <text x="99" y="78" text-anchor="middle" class="t-acc">① 사전학습</text>
+        <text x="99" y="102" text-anchor="middle" class="t-dim">웹·책·코드 ~10¹³ 토큰</text>
+        <text x="99" y="122" text-anchor="middle" class="t-dim">다음 토큰 CE</text>
+        <text x="99" y="142" text-anchor="middle" class="t-dim">계산의 대부분</text>
+        <text x="99" y="168" text-anchor="middle" class="t-mono">→ 베이스 모델</text>
+        <path d="M190 117 H202" class="s-line" marker-end="url(#lm-ar4)"/>
+        <!-- stage 2 -->
+        <rect x="206" y="50" width="178" height="134" rx="12" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="295" y="78" text-anchor="middle" class="t-acc">② SFT (지시 튜닝)</text>
+        <text x="295" y="102" text-anchor="middle" class="t-dim">(지시, 모범 답변) 쌍</text>
+        <text x="295" y="122" text-anchor="middle" class="t-dim">수만~수백만 개</text>
+        <text x="295" y="142" text-anchor="middle" class="t-dim">답변 토큰에만 CE</text>
+        <text x="295" y="168" text-anchor="middle" class="t-mono">→ SFT 모델 π_ref</text>
+        <path d="M386 117 H398" class="s-line" marker-end="url(#lm-ar4)"/>
+        <!-- stage 3 -->
+        <rect x="402" y="50" width="178" height="134" rx="12" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="491" y="78" text-anchor="middle" class="t" style="fill:var(--accent-2)">③ 선호 학습</text>
+        <text x="491" y="102" text-anchor="middle" class="t-dim">좋은 답 y_w ≻ 나쁜 답 y_l</text>
+        <text x="491" y="122" text-anchor="middle" class="t-dim">사람/AI 비교 데이터</text>
+        <text x="491" y="142" text-anchor="middle" class="t-dim">RLHF(PPO) 또는 DPO</text>
+        <text x="491" y="168" text-anchor="middle" class="t-mono">→ 채팅 모델</text>
+        <path d="M582 117 H594" class="s-line" marker-end="url(#lm-ar4)"/>
+        <!-- stage 4 -->
+        <rect x="598" y="50" width="192" height="134" rx="12" class="f-ok-soft" style="stroke:var(--ok)"/>
+        <text x="694" y="78" text-anchor="middle" class="t" style="fill:var(--ok)">④ RLVR (추론 RL)</text>
+        <text x="694" y="102" text-anchor="middle" class="t-dim">검증 가능한 과제</text>
+        <text x="694" y="122" text-anchor="middle" class="t-dim">규칙 보상: 정답·테스트</text>
+        <text x="694" y="142" text-anchor="middle" class="t-dim">PPO·GRPO 온라인 RL</text>
+        <text x="694" y="168" text-anchor="middle" class="t-mono">→ 추론 모델</text>
+        <!-- details -->
+        <rect x="402" y="222" width="178" height="64" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="491" y="248" text-anchor="middle" class="t">보상 모델 r_φ(x, y)</text>
+        <text x="491" y="270" text-anchor="middle" class="t-dim">또는 DPO: 보상 모델 없이</text>
+        <path d="M491 186 V218" class="s-line" style="stroke-dasharray:3 3"/>
+        <rect x="598" y="222" width="192" height="64" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="694" y="248" text-anchor="middle" class="t">프롬프트당 G개 샘플</text>
+        <text x="694" y="270" text-anchor="middle" class="t-dim">검증기 채점 → 그룹 내 비교</text>
+        <path d="M694 186 V218" class="s-line" style="stroke-dasharray:3 3"/>
+        <text x="24" y="246" class="t-dim">사람/AI 평가자가</text>
+        <text x="24" y="266" class="t-dim">두 응답 중 나은 쪽을 고름</text>
+        <path d="M226 254 H398" class="s-line" marker-end="url(#lm-ar4)"/>
+        <text x="694" y="308" text-anchor="middle" class="t-dim">자세한 GRPO는 11장</text>
+      </svg>
+      <figcaption><b>그림 7-4.</b> LLM 학습 파이프라인. 계산의 대부분은 사전학습에 들고, SFT와 선호 학습은 훨씬 적은 데이터로 모델의 '행동 방식'을 바꾼다. RLHF는 보상 모델을 따로 학습해 강화학습(PPO)으로 정책을 최적화하고, DPO는 같은 목표를 비교 데이터에 대한 분류 손실 하나로 푼다. 2025년 이후 추론 모델에는 정답을 자동으로 채점할 수 있는 과제에서 강화학습을 하는 ④ RLVR 단계가 더해졌다(이 장 끝의 개요, <a href="agent.html">11장</a>). 실제로는 단계가 여러 번 반복·교차되기도 한다(예: DeepSeek-R1의 SFT → RL → SFT → RL).</figcaption>
+    </figure>
+    <h3>SFT와 채팅 템플릿</h3>
+    <p><span class="term">지도 미세조정</span><span class="en">(SFT, Supervised Fine-Tuning)</span>은 사람이 쓴(또는 강한 모델이 생성하고 사람이 검수한) "지시 → 모범 답변" 쌍으로 같은 다음 토큰 손실을 계속 학습한다. 다만 손실은 답변 부분 토큰에만 건다. 대화는 역할을 구분하는 <span class="term">특수 토큰</span>으로 감싼 <span class="term">채팅 템플릿</span>으로 직렬화된다. 다음은 Llama 3 Instruct의 형식이다.</p>
+<pre class="lm-pre no-math"><span class="sp">&lt;|begin_of_text|&gt;&lt;|start_header_id|&gt;</span>system<span class="sp">&lt;|end_header_id|&gt;</span>
+
+너는 친절한 조수다.<span class="sp">&lt;|eot_id|&gt;&lt;|start_header_id|&gt;</span>user<span class="sp">&lt;|end_header_id|&gt;</span>
+
+프랑스의 수도는?<span class="sp">&lt;|eot_id|&gt;&lt;|start_header_id|&gt;</span>assistant<span class="sp">&lt;|end_header_id|&gt;</span>
+
+<span class="ro">프랑스의 수도는 파리입니다.</span><span class="sp">&lt;|eot_id|&gt;</span>     <span class="ro">← 이 부분에만 손실</span></pre>
+    <p>특수 토큰은 어휘에 따로 예약된 ID를 가지며 일반 텍스트로는 만들어지지 않는다. 모델은 <code>&lt;|eot_id|&gt;</code>를 생성하는 것으로 "내 차례가 끝났다"를 표시하고, 서빙 시스템은 이 토큰을 만나면 생성을 멈춘다. 템플릿이 학습 때와 다르면 모델 품질이 눈에 띄게 떨어지므로, 추론 프레임워크는 모델과 함께 배포된 템플릿을 그대로 써야 한다.</p>
+    <h3>RLHF와 DPO</h3>
+    <p>SFT는 "모범 답을 흉내 내기"라서, 모범 답보다 나은 답을 배우기 어렵고 무엇이 <em>더</em> 나은지에 대한 신호가 없다. 사람에게 좋은 답을 직접 쓰게 하는 것보다 두 답 중 나은 쪽을 고르게 하는 것이 훨씬 쉽고 일관적이다. <span class="term">RLHF</span><span class="en">(Reinforcement Learning from Human Feedback)</span>는 이 비교 데이터로 보상 모델 \(r_\phi\)를 학습하고(Bradley–Terry 모델: \(P(y_w \succ y_l) = \sigma(r_\phi(y_w) - r_\phi(y_l))\)), 정책 \(\pi_\theta\)가 보상을 최대화하되 SFT 모델 \(\pi_{ref}\)에서 너무 멀어지지 않도록 KL 페널티를 건 목표를 PPO로 최적화한다(InstructGPT, 2022).</p>
+    <div class="formula">$$\max_{\pi_\theta}\ \mathbb{E}_{y\sim\pi_\theta}\bigl[r_\phi(x,y)\bigr] - \beta\, \mathrm{KL}\bigl(\pi_\theta(\cdot\mid x)\,\|\,\pi_{ref}(\cdot\mid x)\bigr)$$</div>
+    <p>이 목표의 최적해는 \(\pi^*(y\mid x) \propto \pi_{ref}(y\mid x)\exp(r(x,y)/\beta)\)로 닫힌 형태다. 이를 거꾸로 풀면 보상이 \(r = \beta\log\frac{\pi^*}{\pi_{ref}} + \text{상수}\)이므로, 보상 모델 없이 정책의 로그 확률비 자체를 "암묵적 보상"으로 쓸 수 있다. 이것을 Bradley–Terry 손실에 대입한 것이 <span class="term">DPO</span><span class="en">(Direct Preference Optimization, Rafailov 등 2023)</span>다.</p>
+    <div class="formula">$$\mathcal{L}_{DPO} = -\log\sigma\Bigl(\beta\Bigl[\log\frac{\pi_\theta(y_w\mid x)}{\pi_{ref}(y_w\mid x)} - \log\frac{\pi_\theta(y_l\mid x)}{\pi_{ref}(y_l\mid x)}\Bigr]\Bigr)$$
+      <div class="where">\(y_w\)는 선호된 응답, \(y_l\)은 거부된 응답이다. 괄호 안(마진)이 클수록 손실이 작다. 기울기는 \(\beta(1-\sigma(\cdot))\)만큼의 크기로 \(y_w\)의 로그 확률을 올리고 \(y_l\)을 내리며, 이미 잘 구분된 쌍(σ≈1)에서는 기울기가 거의 0이 된다. β는 참조 정책에서 얼마나 멀어지도록 허용할지 정하는 '목줄'이다.</div>
+    </div>
+    <p>실제 LLM에서 \(\log\pi_\theta(y\mid x)\)는 응답 토큰들의 로그 확률 합이다. 아래 장난감에서는 한 프롬프트에 대한 응답 후보 5개만 있는 범주형 정책 \(\pi_\theta = \mathrm{softmax}(\boldsymbol\theta)\)로 단순화해, 같은 DPO 기울기를 정확히 계산한다. 이 경우 \(\partial\mathcal{L}/\partial\boldsymbol\theta = -\beta(1-\sigma(h))(\mathbf{e}_w - \mathbf{e}_l)\)로, 두 응답의 로짓만 움직인다.</p>
+
+    <div class="sim" id="sim-dpo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>선호 최적화(DPO) 장난감</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view lm-view"><canvas id="lm-dpo-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>β (KL 목줄) <output id="lm-dpo-b-out"></output></span><input type="range" id="lm-dpo-b" min="0.05" max="2" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>학습률 η <output id="lm-dpo-lr-out"></output></span><input type="range" id="lm-dpo-lr" min="0.1" max="5" step="0.1" value="1"></label>
+          <div class="ctrl"><span>업데이트</span><div class="lm-btns"><button class="btn primary" id="lm-dpo-rep">마지막 쌍 ×10</button><button class="btn" id="lm-dpo-auto">자동 선호 ×30</button><button class="btn" id="lm-dpo-reset">초기화</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">마지막 쌍</span><span class="v" id="lm-dpo-pair">—</span></div>
+        <div class="stat"><span class="k">DPO 손실</span><span class="v" id="lm-dpo-loss">—</span></div>
+        <div class="stat"><span class="k">σ(마진)</span><span class="v" id="lm-dpo-sig">—</span></div>
+        <div class="stat"><span class="k">KL(π‖π<sub>ref</sub>)</span><span class="v" id="lm-dpo-kl">—</span></div>
+        <div class="stat"><span class="k">업데이트 수</span><span class="v" id="lm-dpo-n">0</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 프롬프트는 "파이썬에서 리스트를 뒤집는 방법은?"이다. 응답 막대를 <strong>먼저 선호하는 것, 다음에 거부할 것</strong> 순서로 누르면 'A ≻ B' 쌍 하나로 DPO 업데이트가 한 번 일어난다. 흐린 테두리는 참조 정책 π<sub>ref</sub>(SFT 모델), 진한 막대는 현재 정책 π다. ① A(정확·간결) ≻ C(틀린 답)를 여러 번 주면 C의 확률이 줄고, 마진이 커지면서 σ가 1에 가까워져 업데이트가 저절로 느려진다. ② β를 2로 올리고 '초기화 → 자동 선호 ×30'을 하면 KL이 작게 머물고, β=0.05면 훨씬 멀리 간다(학습률은 같게). ③ 오른쪽 숫자는 암묵적 보상 β·log(π/π<sub>ref</sub>)다. 비교에 한 번도 나오지 않은 응답은 직접 기울기를 받지 않지만, 확률은 소프트맥스 정규화 때문에 함께 변한다.</div>
+    </div>
+    <p>DPO는 보상 모델과 강화학습 루프가 필요 없어 구현이 간단하고 안정적이라 2023년 이후 오픈 모델에서 널리 쓰였다. Llama 3도 SFT 후 DPO를 여러 라운드 반복했다. 반면 PPO류의 온라인 강화학습은 정책이 직접 생성한 새 응답으로 계속 학습할 수 있어, 정답 검증이 가능한 수학·코드 과제에서 다시 주목받았다(다음 절의 추론 모델). 사람 대신 AI가 원칙에 따라 비교 판단을 내리게 하는 RLAIF, Constitutional AI 같은 방법도 함께 쓰인다.</p>
+    <div class="callout warn"><strong>보상 해킹과 아첨</strong>
+      <p>보상 모델은 사람 선호의 불완전한 근사다. 정책이 이를 과하게 최적화하면 길고 장황한 답, 확신에 찬 말투, 사용자의 의견에 무조건 동의하는 <span class="term">아첨</span><span class="en">(sycophancy)</span> 같은 '보상은 높지만 실제로는 나쁜' 행동을 배운다. KL 페널티(β)는 이런 과최적화를 막는 장치이며, 위 시뮬레이터에서 β가 작을수록 정책이 참조에서 멀리 벗어나는 것이 바로 그 위험이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="lm-emerge">
+    <h2>창발, 인컨텍스트 학습, 추론 모델</h2>
+    <p>GPT-3 논문(2020)의 제목은 "Language Models are Few-Shot Learners"였다. 가중치를 전혀 바꾸지 않고, 프롬프트에 예시 몇 개를 넣는 것만으로 모델이 새 과제를 수행한다는 발견이다. 이를 <span class="term">인컨텍스트 학습</span><span class="en">(in-context learning, ICL)</span>이라 한다.</p>
+<pre class="lm-pre no-math">영어 → 한국어
+cheese → 치즈
+sea otter → 해달
+peppermint → 페퍼민트
+plush giraffe → <span class="ro">봉제 기린</span>      <span class="sp">← 모델이 패턴을 이어 씀 (few-shot, 예시 3개)</span></pre>
+    <p>예시 없이 지시만 주면 zero-shot, 몇 개 주면 few-shot이다. 모델 입장에서는 이것도 그냥 "다음 토큰 예측"이다. 사전학습 데이터에 이런 패턴(목록, 표, 문답)이 무수히 있으므로, 문맥에서 과제를 추론하고 이어 쓰는 능력이 학습된다. 연구에 따르면 어텐션 헤드 중 일부가 "앞에서 A 다음에 B가 왔으면, 지금 A가 나왔을 때 B를 복사"하는 <span class="term">인덕션 헤드</span><span class="en">(induction head)</span>로 발달하며, 이것이 ICL의 기본 회로 중 하나로 알려져 있다(<a href="attention.html">5장</a>).</p>
+    <h3>창발 능력?</h3>
+    <p>특정 규모를 넘으면 갑자기 나타나는 듯한 능력을 <span class="term">창발</span><span class="en">(emergent abilities)</span>이라 부른다(Wei 등, 2022). 예를 들어 여러 자리 덧셈 정확도가 작은 모델에서는 0 근처이다가 어느 크기에서 급격히 오른다. 하지만 Schaeffer 등(2023)은 이 '급변'의 상당 부분이 평가 지표 때문이라고 지적했다. 정답 전체가 맞아야 1점인 정확도는 불연속적이지만, 토큰별 로그 확률 같은 연속 지표로 보면 손실과 함께 매끄럽게 좋아진다. 다음 토큰 손실의 매끄러운 감소(스케일링 법칙)가 사람이 보는 과제 성능에서는 문턱처럼 보일 수 있다는 뜻이다.</p>
+    <h3>Chain-of-thought와 테스트타임 계산</h3>
+    <p>"단계별로 생각해 보자"처럼 중간 추론을 글로 쓰게 하면 수학·논리 문제의 정확도가 크게 오른다. 이것이 <span class="term">chain-of-thought</span><span class="en">(CoT)</span> 프롬프팅이다. 이유는 계산 구조에서 찾을 수 있다. Transformer는 토큰 하나를 만들 때 고정된 층 수만큼의 계산만 한다. 답을 곧바로 한 토큰으로 내야 하면 그 안에 모든 계산을 끝내야 하지만, 중간 단계를 토큰으로 써 내려가면 생성한 토큰 수만큼 계산을 더 쓰고, 써 둔 중간 결과를 다시 읽어 활용할 수 있다.</p>
+    <p>2024~2025년의 <span class="term">추론 모델</span><span class="en">(reasoning models)</span>은 이것을 학습으로 끌어올렸다. OpenAI o1(2024), DeepSeek-R1(2025) 등은 답을 내기 전에 긴 사고 과정을 생성하도록 강화학습으로 훈련된다. 수학 정답이나 코드 테스트 통과처럼 <strong>자동으로 검증 가능한 보상</strong>을 주면, 모델은 스스로 검산하고, 막히면 다른 접근을 시도하는 긴 추론을 배운다. 이렇게 하면 모델 크기를 키우는 대신 <strong>추론 시점에 더 많은 토큰(계산)</strong>을 써서 성능을 올릴 수 있다. 이를 <span class="term">테스트타임 계산 스케일링</span><span class="en">(test-time compute)</span>이라 부르며, 학습 계산량에 이은 두 번째 스케일링 축으로 여겨진다. 대가는 응답 지연과 토큰 비용이다(<a href="generation.html">8장</a>, <a href="design.html">12장</a>). 학습 방법(RLVR)은 이 장의 11절에서 개요를, <a href="agent.html">11장</a>에서 자세히 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="lm-halluc">
+    <h2>환각과 보정</h2>
+    <p>LLM은 사실과 다른 내용을 그럴듯하게 만들어 내곤 한다. 존재하지 않는 논문을 인용하거나, 모르는 사람의 약력을 지어낸다. 이를 <span class="term">환각</span><span class="en">(hallucination)</span>이라 한다. 다음 토큰 예측의 관점에서 보면 이상한 일이 아니다. 모델은 "그럴듯한 다음 토큰"을 내도록 학습되었고, 사전학습 데이터에서 질문 다음에는 거의 항상 답이 온다. "모르겠다"로 이어지는 문서는 드물다. 드물게 등장한 사실(롱테일 지식)일수록 모델이 정확히 기억하지 못하면서도 형식만은 자신 있게 채운다.</p>
+    <p>그렇다면 모델이 자기 답의 신뢰도를 알 수는 있을까? 이를 재는 개념이 <span class="term">보정</span><span class="en">(calibration)</span>이다. 모델이 "확률 70%"라고 말한 답들을 모았을 때 실제로 70%가 맞으면 잘 보정된 것이다. GPT-4 기술 보고서(2023)는 사전학습만 한 모델이 객관식 문제에서 꽤 잘 보정되어 있지만, RLHF 후에는 보정이 나빠진다(과신하게 된다)는 그래프를 보여 줬다. 확신에 찬 답이 선호를 많이 받기 때문으로 해석된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 640 300" class="lm-narrow" role="img" aria-label="신뢰도 다이어그램">
+        <path d="M80 30 V250 H520" class="s-axis"/>
+        <path d="M80 250 L520 30" class="s-line" style="stroke-dasharray:5 5"/>
+        <text x="300" y="285" text-anchor="middle" class="t-dim">모델이 말한 확신도 (예측 확률)</text>
+        <text x="30" y="140" text-anchor="middle" class="t-dim" transform="rotate(-90 30 140)">실제 정답률</text>
+        <text x="80" y="268" text-anchor="middle" class="t-mono">0</text><text x="520" y="268" text-anchor="middle" class="t-mono">1</text>
+        <text x="70" y="254" text-anchor="end" class="t-mono">0</text><text x="70" y="34" text-anchor="end" class="t-mono">1</text>
+        <!-- calibrated base -->
+        <path d="M102 240 L146 218 L190 194 L234 174 L278 150 L322 130 L366 106 L410 86 L454 62 L498 42" class="s-acc" style="stroke-width:2.4;fill:none"/>
+        <!-- overconfident -->
+        <path d="M102 246 L146 240 L190 230 L234 220 L278 206 L322 192 L366 172 L410 150 L454 124 L498 90" class="s-acc2" style="stroke-width:2.4;fill:none"/>
+        <text x="300" y="56" class="t-dim">대각선 = 완벽한 보정</text>
+        <text x="330" y="114" class="t" style="fill:var(--accent)">잘 보정됨</text>
+        <text x="420" y="176" class="t" style="fill:var(--accent-2)">과신</text>
+        <text x="420" y="196" class="t-dim">(말한 것보다 덜 맞음)</text>
+      </svg>
+      <figcaption><b>그림 7-5.</b> 신뢰도 다이어그램(reliability diagram, 개념도). 예측을 확신도 구간별로 묶어 실제 정답률을 찍는다. 대각선 위에 있으면 잘 보정된 것이고, 아래로 처지면 과신이다. 선호 학습 후 모델이 과신 쪽으로 이동하는 경향이 보고되었다.</figcaption>
+    </figure>
+    <p>환각을 줄이는 실용적 방법은 여러 층에서 쓰인다. 모르면 모른다고 답하는 예시를 SFT·선호 데이터에 넣고, 사실성 평가로 보상을 주며, 무엇보다 모델 기억에만 의존하지 않고 <strong>검색한 문서를 문맥에 넣어</strong> 근거를 대며 답하게 한다. 이것이 <a href="rag.html">10장</a>의 RAG다. 출처를 인용하게 하면 사용자가 직접 확인할 수 있다는 장점도 있다.</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="lm-timeline">
+    <h2>컨텍스트 길이와 모델 연표</h2>
+    <p>모델이 한 번에 볼 수 있는 토큰 수인 <span class="term">컨텍스트 길이</span><span class="en">(context window)</span>는 몇 년 사이 수백 배 늘었다. 어텐션 계산량은 길이의 제곱에 비례하고 KV 캐시 메모리는 길이에 비례하므로(<a href="generation.html">8장</a>), 이는 FlashAttention 같은 커널 최적화, RoPE 주파수 조정 같은 위치 인코딩 확장 기법(<a href="transformer.html">6장</a>), 긴 문서로 하는 추가 학습이 함께 이룬 결과다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 330" role="img" aria-label="연도별 컨텍스트 길이 로그 막대 그래프">
+        <text x="20" y="22" class="t-dim">컨텍스트 길이 (토큰, 로그 눈금)</text>
+        <path d="M150 40 V300" class="s-axis"/>
+        <g class="t-mono">
+          <text x="150" y="318" text-anchor="middle">1K</text><text x="295" y="318" text-anchor="middle">8K</text><text x="440" y="318" text-anchor="middle">64K</text><text x="585" y="318" text-anchor="middle">512K</text><text x="730" y="318" text-anchor="middle">4M</text>
+        </g>
+        <path d="M295 40 V300 M440 40 V300 M585 40 V300 M730 40 V300" class="s-line" style="stroke-dasharray:2 4;opacity:.5"/>
+        <!-- bars: x = 150 + 145*log8(L/1024) ; log8 = log2/3 -->
+        <g>
+          <text x="140" y="60" text-anchor="end" class="t">GPT-2 (2019)</text><rect x="150" y="48" width="2" height="18" class="f-acc"/><text x="160" y="62" class="t-mono">1,024</text>
+          <text x="140" y="88" text-anchor="end" class="t">GPT-3 (2020)</text><rect x="150" y="76" width="48" height="18" class="f-acc"/><text x="206" y="90" class="t-mono">2,048</text>
+          <text x="140" y="116" text-anchor="end" class="t">Llama 2 (2023)</text><rect x="150" y="104" width="97" height="18" class="f-acc"/><text x="255" y="118" class="t-mono">4,096</text>
+          <text x="140" y="144" text-anchor="end" class="t">Llama 3 (2024.4)</text><rect x="150" y="132" width="145" height="18" class="f-acc"/><text x="303" y="146" class="t-mono">8,192</text>
+          <text x="140" y="172" text-anchor="end" class="t">GPT-4 Turbo (2023)</text><rect x="150" y="160" width="372" height="18" class="f-acc2"/><text x="530" y="174" class="t-mono">128K</text>
+          <text x="140" y="200" text-anchor="end" class="t">Llama 3.1 (2024.7)</text><rect x="150" y="188" width="372" height="18" class="f-acc"/><text x="530" y="202" class="t-mono">128K</text>
+          <text x="140" y="228" text-anchor="end" class="t">Claude 2.1 (2023)</text><rect x="150" y="216" width="402" height="18" class="f-acc2"/><text x="560" y="230" class="t-mono">200K</text>
+          <text x="140" y="256" text-anchor="end" class="t">Gemini 1.5 (2024)</text><rect x="150" y="244" width="517" height="18" class="f-acc2"/><text x="675" y="258" class="t-mono">1M</text>
+          <text x="140" y="284" text-anchor="end" class="t">(2M 확장)</text><rect x="150" y="272" width="566" height="18" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="724" y="286" class="t-mono" text-anchor="end">2M</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 7-6.</b> 대표 모델의 최대 컨텍스트 길이(공개 발표 기준, 로그 눈금). 보라색은 가중치 공개 모델, 분홍색은 API로만 제공되는 모델이다. 긴 문맥을 받는다고 해서 그 안의 정보를 고르게 잘 쓰는 것은 아니며, 중간 부분의 정보를 놓치는 'lost in the middle' 현상이 보고되었다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th>연도</th><th class="num">파라미터</th><th class="num">학습 토큰</th><th class="num">컨텍스트</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td>GPT-2</td><td>2019</td><td class="num">1.5B</td><td class="num">WebText 40 GB</td><td class="num">1,024</td><td>"너무 위험해서" 단계적 공개, 어휘 50,257</td></tr>
+        <tr><td>GPT-3</td><td>2020</td><td class="num">175B</td><td class="num">300B</td><td class="num">2,048</td><td>few-shot 인컨텍스트 학습</td></tr>
+        <tr><td>Chinchilla</td><td>2022</td><td class="num">70B</td><td class="num">1.4T</td><td class="num">2,048</td><td>계산 최적 스케일링</td></tr>
+        <tr><td>InstructGPT / ChatGPT</td><td>2022</td><td class="num">비공개</td><td class="num">—</td><td class="num">—</td><td>SFT + RLHF(PPO)의 대중화</td></tr>
+        <tr><td>GPT-4</td><td>2023</td><td class="num">비공개</td><td class="num">비공개</td><td class="num">8K / 32K</td><td>멀티모달 입력</td></tr>
+        <tr><td>Llama 2</td><td>2023</td><td class="num">7B / 13B / 70B</td><td class="num">2T</td><td class="num">4,096</td><td>상업 이용 가능한 공개 가중치</td></tr>
+        <tr><td>Mixtral 8×7B</td><td>2023</td><td class="num">46.7B (활성 12.9B)</td><td class="num">비공개</td><td class="num">32K</td><td>희소 MoE (<a href="transformer.html">6장</a>)</td></tr>
+        <tr><td>Llama 3 / 3.1</td><td>2024</td><td class="num">8B / 70B / 405B</td><td class="num">~15T</td><td class="num">8K → 128K</td><td>어휘 128,256, GQA, DPO</td></tr>
+        <tr><td>DeepSeek-V3</td><td>2024</td><td class="num">671B (활성 37B)</td><td class="num">14.8T</td><td class="num">128K</td><td>MoE, FP8 학습 (<a href="quantization.html">9장</a>)</td></tr>
+        <tr><td>OpenAI o1</td><td>2024</td><td class="num">비공개</td><td class="num">비공개</td><td class="num">128K</td><td>강화학습으로 훈련한 긴 추론</td></tr>
+        <tr><td>DeepSeek-R1</td><td>2025</td><td class="num">671B (활성 37B)</td><td class="num">V3 기반</td><td class="num">128K</td><td>검증 가능한 보상 RL, 공개 가중치 추론 모델</td></tr>
+        <tr><td>Llama 4 Scout / Maverick</td><td>2025.4</td><td class="num">109B (활성 17B) / 400B (활성 17B)</td><td class="num">~40T / ~22T</td><td class="num">10M / 1M</td><td>Meta 첫 MoE, 네이티브 멀티모달</td></tr>
+        <tr><td>Qwen3</td><td>2025.4</td><td class="num">0.6B~32B, 235B (활성 22B)</td><td class="num">~36T</td><td class="num">32K (확장 128K)</td><td>생각/비생각 모드 통합, Apache 2.0</td></tr>
+        <tr><td>Kimi K2</td><td>2025.7</td><td class="num">1.04T (활성 32.6B)</td><td class="num">15.5T</td><td class="num">128K</td><td>Muon(MuonClip) 학습 (<a href="training.html">3장</a>)</td></tr>
+        <tr><td>gpt-oss-120b / 20b</td><td>2025.8</td><td class="num">117B (활성 5.1B) / 21B (활성 3.6B)</td><td class="num">비공개</td><td class="num">128K</td><td>OpenAI의 공개 가중치 추론 모델, MoE 가중치 MXFP4</td></tr>
+        <tr><td>Qwen3.5</td><td>2026.2</td><td class="num">397B (활성 17B)</td><td class="num">비공개</td><td class="num">262K</td><td>Gated DeltaNet 선형 어텐션 3 : 풀 어텐션 1 하이브리드</td></tr>
+        <tr><td>Muse Spark (Meta)</td><td>2026.4</td><td class="num">비공개</td><td class="num">비공개</td><td class="num">—</td><td>Meta Superintelligence Labs의 첫 모델, Llama와 달리 가중치 비공개(API)</td></tr>
+        <tr><td>DeepSeek-V4-Pro / Flash</td><td>2026.4</td><td class="num">1.6T (활성 49B) / 284B (활성 13B)</td><td class="num">32T 이상</td><td class="num">1M</td><td>압축·희소 어텐션(CSA/HCA), Muon 학습</td></tr>
+      </tbody>
+    </table></div>
+    <p>비공개 모델의 파라미터 수와 데이터 규모는 공식 발표가 없으므로 표에 적지 않았다. 흐름을 요약하면 2019~2022년은 "더 크게", 2022~2024년은 "더 많은 데이터와 정렬", 2024년 이후는 "MoE로 효율적으로, 강화학습과 테스트타임 계산으로 더 깊게"라고 할 수 있다. 2025~2026년에는 대형 오픈 모델의 기본값이 MoE가 되었고(활성 파라미터는 총 파라미터의 수 % 수준), 선형·압축 어텐션 하이브리드로 수십만~100만 토큰 컨텍스트가 흔해졌으며, 거의 모든 플래그십이 생각 모드를 갖춘 추론 모델이 되었다. 공개 가중치 경쟁은 DeepSeek·Qwen·Kimi 같은 중국 연구소와 OpenAI(gpt-oss)가 이끌었고, Llama로 공개 가중치를 주도하던 Meta는 2026년 폐쇄형 Muse Spark로 방향을 틀었다. 아키텍처 세부는 <a href="transformer.html">6장</a>, 서빙 측면은 <a href="generation.html">8장</a>에서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="lm-rlvr">
+    <h2>추론 모델과 RLVR 개요</h2>
+    <p>8절에서 본 추론 모델이 어떻게 만들어지는지 파이프라인 관점에서 정리해 보자. 그림 7-4의 ④단계, <span class="term">RLVR</span><span class="en">(Reinforcement Learning with Verifiable Rewards)</span>이 핵심이다. 선호 학습은 "사람이 보기에 어느 쪽이 나은가"라는 흐릿한 신호를 쓰지만, 수학 문제의 최종 답이나 코드의 단위 테스트는 <strong>규칙으로 자동 채점</strong>할 수 있다. 보상 모델을 학습할 필요가 없고, 보상 모델의 허점을 파고드는 보상 해킹도 훨씬 적다.</p>
+    <div class="formula">$$r(x, y) = \begin{cases} 1 & \text{검증기 통과 (정답 일치, 테스트 통과)} \\ 0 & \text{그 외} \end{cases}, \qquad \max_{\pi_\theta}\ \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)}\bigl[r(x,y)\bigr] - \beta\,\mathrm{KL}\bigl(\pi_\theta\,\|\,\pi_{ref}\bigr)$$
+      <div class="where">목표의 모양은 RLHF와 같고, 보상 \(r_\phi\)가 규칙 기반 검증기로 바뀌었을 뿐이다. 형식 보상(생각을 정해진 태그 안에 쓰는가 등)을 더하기도 한다. 모델은 정답 여부만 알 뿐 "어떻게 풀어야 하는가"는 배우지 않는다. 긴 추론, 검산, 되돌아가기는 보상을 더 자주 받는 행동이라서 스스로 강화된다.</div>
+    </div>
+    <p>DeepSeek-R1(2025.1)이 쓴 <span class="term">GRPO</span><span class="en">(Group Relative Policy Optimization; DeepSeekMath, 2024)</span>는 프롬프트 하나에 응답 \(G\)개를 뽑아 채점하고, 각 응답의 어드밴티지를 <strong>그룹 안에서의 상대 점수</strong> \(A_i = (r_i - \operatorname{mean}(r))/\operatorname{std}(r)\)로 정한다. PPO처럼 가치 함수(critic) 모델을 따로 학습하지 않아도 된다. 모두 맞히거나 모두 틀린 프롬프트는 어드밴티지가 0이 되어 학습 신호가 없으므로, 모델에게 '적당히 어려운' 문제를 고르는 것이 중요하다. GRPO의 단계별 계산과 시뮬레이터, 그리고 추론 모델을 도구와 연결한 에이전트는 <a href="agent.html">11장</a>에서 자세히 다룬다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="RLVR 학습 루프와 테스트타임 계산">
+        <defs><marker id="lm-ar7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker></defs>
+        <rect x="14" y="88" width="130" height="64" rx="10" class="f-surface" style="stroke:var(--border)"/>
+        <text x="79" y="114" text-anchor="middle" class="t">문제 x</text><text x="79" y="136" text-anchor="middle" class="t-dim">수학·코드</text>
+        <path d="M146 120 H186" class="s-line" marker-end="url(#lm-ar7)"/>
+        <rect x="190" y="70" width="140" height="100" rx="10" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="260" y="100" text-anchor="middle" class="t-acc">정책 π_θ</text><text x="260" y="124" text-anchor="middle" class="t-dim">긴 생각 + 답</text><text x="260" y="146" text-anchor="middle" class="t-dim">G번 샘플</text>
+        <path d="M332 120 H372" class="s-line" marker-end="url(#lm-ar7)"/>
+        <g class="t-mono">
+          <rect x="376" y="40" width="150" height="30" rx="6" class="f-ok-soft"/><text x="451" y="60" text-anchor="middle">y₁ … 답 42  ✓ 1</text>
+          <rect x="376" y="78" width="150" height="30" rx="6" class="f-bad-soft"/><text x="451" y="98" text-anchor="middle">y₂ … 답 40  ✗ 0</text>
+          <rect x="376" y="116" width="150" height="30" rx="6" class="f-ok-soft"/><text x="451" y="136" text-anchor="middle">y₃ … 답 42  ✓ 1</text>
+          <rect x="376" y="154" width="150" height="30" rx="6" class="f-bad-soft"/><text x="451" y="174" text-anchor="middle">y₄ … 답 17  ✗ 0</text>
+        </g>
+        <path d="M528 112 H568" class="s-line" marker-end="url(#lm-ar7)"/>
+        <rect x="572" y="70" width="214" height="100" rx="10" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="679" y="98" text-anchor="middle" class="t" style="fill:var(--accent-2)">그룹 내 상대 점수</text>
+        <text x="679" y="122" text-anchor="middle" class="t-mono">A = (r − 0.5)/0.5 = ±1</text>
+        <text x="679" y="146" text-anchor="middle" class="t-dim">✓ 확률 ↑, ✗ 확률 ↓</text>
+        <path d="M679 172 V210 H260 V174" class="s-acc" style="fill:none" marker-end="url(#lm-ar7)"/>
+        <text x="470" y="228" text-anchor="middle" class="t-dim">정책 갱신 (− β·KL로 π_ref 근처 유지) → 다음 문제</text>
+        <text x="451" y="24" text-anchor="middle" class="t-dim">검증기: 답 비교·테스트 실행</text>
+      </svg>
+      <figcaption><b>그림 7-7.</b> RLVR 루프의 한 스텝(개념도). 같은 문제에 대해 응답 여러 개를 샘플하고, 검증기가 0/1로 채점한다. GRPO는 그룹 평균보다 나은 응답의 확률을 올리고 못한 응답의 확률을 내린다. 이 과정을 수많은 문제에 반복하면 정답에 이르는 긴 추론 습관이 강화된다.</figcaption>
+    </figure>
+    <h3>R1-Zero가 보여 준 것</h3>
+    <p>DeepSeek은 SFT 없이 베이스 모델(DeepSeek-V3-Base)에 곧바로 RLVR을 건 <strong>R1-Zero</strong>를 보고했다. 학습이 진행될수록 응답 길이가 저절로 길어지고, "잠깐, 다시 확인해 보자" 같은 자기 검증과 반성이 나타났다. 아무도 그런 추론 방식을 시범으로 보여 주지 않았다는 점이 중요하다. 다만 읽기 어려운 문장과 언어 섞임 문제가 있어서, 최종 R1은 소량의 긴 추론 예시로 먼저 SFT(cold start)를 한 뒤 RL → 거부 샘플링으로 만든 데이터로 다시 SFT → 다시 RL을 거쳤다.</p>
+    <h3>테스트타임 계산: 생각을 길게, 또는 여러 번</h3>
+    <p>추론 모델의 정확도는 생각 토큰을 더 쓸수록 오른다. 계산을 더 쓰는 방법은 두 갈래다. 하나는 <strong>한 응답을 길게</strong>(순차적 확장), 다른 하나는 <strong>여러 응답을 뽑아 고르기</strong>(병렬 확장)다. 병렬 확장의 가장 단순한 형태는 다수결(self-consistency)이다. 한 번 풀 때 정답률이 \(p = 0.6\)이고 시도가 독립이며 오답이 매번 다르다면, 5번 풀어 3번 이상 같은 답이 나올 확률만 따져도 \(\sum_{k\ge3}\binom{5}{k}0.6^k0.4^{5-k} \approx 0.68\)로 정답률이 오른다. 검증기가 있으면 정답이 하나라도 나오면 되므로(\(1 - 0.4^5 \approx 0.99\)) 더 크게 오른다. 대신 토큰 비용과 지연이 시도 횟수에 비례한다. 그래서 최근 모델은 Qwen3의 생각/비생각 모드 전환, gpt-oss의 추론 강도(low/medium/high)처럼 <strong>생각 예산</strong>을 조절하는 장치를 둔다. 생각 토큰이 출력의 대부분을 차지하면서 서빙 비용 구조도 바뀌었다(<a href="generation.html">8장</a>).</p>
+    <h3>증류: 큰 추론 모델의 생각을 작은 모델에</h3>
+    <p>작은 모델에 직접 RLVR을 거는 것보다, 큰 추론 모델이 생성한 추론 흔적으로 작은 모델을 SFT하는 <span class="term">증류</span><span class="en">(distillation)</span>가 더 싸고 강할 때가 많다. DeepSeek은 R1이 만든 약 80만 개의 샘플로 Qwen·Llama 기반 1.5B~70B 모델을 SFT한 R1-Distill 계열을 공개했고, 같은 크기의 모델에 RL을 직접 건 것보다 증류 쪽이 더 높은 성능을 보였다고 보고했다. 큰 모델이 RL로 찾아낸 추론 패턴을 '정답 데이터'로 바꿔 전달하는 셈이다.</p>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="lm-diff">
+    <h2>디퓨전 언어 모델은 대안이 될까</h2>
+    <p>이 장의 모든 모델은 <strong>자기회귀</strong>(autoregressive)였다. 왼쪽부터 한 토큰씩, 길이 \(L\)인 답에는 모델 호출이 \(L\)번 필요하다. 이미지 생성을 장악한 <span class="term">디퓨전</span><span class="en">(diffusion)</span>처럼 "전체를 대충 만든 뒤 여러 번 다듬는" 방식을 텍스트에 쓸 수는 없을까? 토큰은 연속값이 아니라서 가우시안 잡음을 더하는 대신, 토큰을 <code>[M]</code>(마스크)으로 바꾸는 것을 '잡음'으로 쓰는 <span class="term">마스크 디퓨전 언어 모델</span><span class="en">(masked diffusion LM)</span>이 가장 성공적인 형태다.</p>
+    <div class="formula">$$\text{순방향: } t \sim U(0,1),\ \text{각 토큰을 확률 } t \text{로 } [M] \text{으로}, \qquad \mathcal{L}(\theta) = -\,\mathbb{E}_{t,\,x_0,\,x_t}\Bigl[\frac{1}{t}\sum_{i:\,x_t^i = [M]} \log p_\theta\bigl(x_0^i \mid x_t\bigr)\Bigr]$$
+      <div class="where">\(x_0\)는 원문, \(x_t\)는 일부가 가려진 문장이다. 모델은 인과 마스크가 <strong>없는</strong> Transformer로, 가려진 모든 위치의 원래 토큰을 양쪽 문맥을 보고 동시에 예측한다. BERT의 마스크 언어 모델과 비슷하지만 마스크 비율이 0~100% 전 범위이고 \(1/t\) 가중이 붙어, 이 손실이 로그 우도의 상한(ELBO)이 된다. 그래서 '생성 모델'로 쓸 수 있다.</div>
+    </div>
+    <p><strong>생성</strong>은 거꾸로 간다. 길이 \(L\)을 정하고 전부 <code>[M]</code>인 상태에서 시작해, \(T\)번의 스텝마다 모델이 가려진 모든 위치를 예측하고 그중 <strong>가장 확신하는 몇 개만 확정</strong>한다(나머지는 다시 가린다, low-confidence remasking). \(T < L\)이면 한 스텝에 여러 토큰이 동시에 정해지므로 모델 호출 수가 줄어든다. 대표 사례는 다음과 같다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th>공개</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td>LLaDA 8B</td><td>2025.2</td><td>2.3T 토큰으로 처음부터 학습한 마스크 디퓨전 LM(연구). 여러 벤치마크에서 같은 규모의 자기회귀 모델(Llama 3 8B)과 비슷한 수준, '역방향 저주'(A는 B다 → B는 A다) 과제에서는 우위</td></tr>
+        <tr><td>Mercury (Inception Labs)</td><td>2025 / 2026.2 Mercury 2</td><td>상용 디퓨전 LLM. 코드 모델 Mercury Coder로 시작해, H100에서 초당 1,000 토큰 안팎의 속도를 내세움(회사 발표). Mercury 2는 추론형</td></tr>
+        <tr><td>Gemini Diffusion (Google)</td><td>2025.5</td><td>Google I/O에서 공개한 실험적 텍스트 디퓨전 모델. 빠른 생성 속도를 강조</td></tr>
+      </tbody>
+    </table></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="자기회귀 생성과 마스크 디퓨전 생성 비교">
+        <text x="190" y="24" text-anchor="middle" class="t-acc">자기회귀: L = 6 스텝</text>
+        <text x="600" y="24" text-anchor="middle" class="t" style="fill:var(--accent-2)">마스크 디퓨전: T = 3 스텝</text>
+        <g class="t-mono">
+          <!-- AR rows -->
+          <text x="20" y="58" class="t-dim">1</text><rect x="40" y="44" width="48" height="22" rx="4" class="f-acc-soft"/><text x="64" y="60" text-anchor="middle">나는</text>
+          <text x="20" y="88" class="t-dim">2</text><rect x="40" y="74" width="48" height="22" rx="4" class="f-surface"/><text x="64" y="90" text-anchor="middle">나는</text><rect x="92" y="74" width="48" height="22" rx="4" class="f-acc-soft"/><text x="116" y="90" text-anchor="middle">주말에</text>
+          <text x="20" y="118" class="t-dim">3</text><rect x="40" y="104" width="48" height="22" rx="4" class="f-surface"/><rect x="92" y="104" width="48" height="22" rx="4" class="f-surface"/><rect x="144" y="104" width="48" height="22" rx="4" class="f-acc-soft"/><text x="168" y="120" text-anchor="middle">친구와</text>
+          <text x="20" y="148" class="t-dim">4</text><rect x="40" y="134" width="48" height="22" rx="4" class="f-surface"/><rect x="92" y="134" width="48" height="22" rx="4" class="f-surface"/><rect x="144" y="134" width="48" height="22" rx="4" class="f-surface"/><rect x="196" y="134" width="48" height="22" rx="4" class="f-acc-soft"/><text x="220" y="150" text-anchor="middle">영화를</text>
+          <text x="20" y="178" class="t-dim">5</text><rect x="40" y="164" width="48" height="22" rx="4" class="f-surface"/><rect x="92" y="164" width="48" height="22" rx="4" class="f-surface"/><rect x="144" y="164" width="48" height="22" rx="4" class="f-surface"/><rect x="196" y="164" width="48" height="22" rx="4" class="f-surface"/><rect x="248" y="164" width="48" height="22" rx="4" class="f-acc-soft"/><text x="272" y="180" text-anchor="middle">본다.</text>
+          <text x="20" y="208" class="t-dim">6</text><rect x="40" y="194" width="48" height="22" rx="4" class="f-surface"/><rect x="92" y="194" width="48" height="22" rx="4" class="f-surface"/><rect x="144" y="194" width="48" height="22" rx="4" class="f-surface"/><rect x="196" y="194" width="48" height="22" rx="4" class="f-surface"/><rect x="248" y="194" width="48" height="22" rx="4" class="f-surface"/><rect x="300" y="194" width="48" height="22" rx="4" class="f-acc-soft"/><text x="324" y="210" text-anchor="middle">⟨/s⟩</text>
+          <!-- diffusion rows -->
+          <text x="420" y="58" class="t-dim">0</text>
+          <rect x="440" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="467" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="498" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="525" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="556" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="583" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="614" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="641" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="672" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="699" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="730" y="44" width="54" height="22" rx="4" class="f-surface"/><text x="757" y="60" text-anchor="middle" class="t-dim">[M]</text>
+          <text x="420" y="108" class="t-dim">1</text>
+          <rect x="440" y="94" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="467" y="110" text-anchor="middle">나는</text>
+          <rect x="498" y="94" width="54" height="22" rx="4" class="f-surface"/><text x="525" y="110" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="556" y="94" width="54" height="22" rx="4" class="f-surface"/><text x="583" y="110" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="614" y="94" width="54" height="22" rx="4" class="f-surface"/><text x="641" y="110" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="672" y="94" width="54" height="22" rx="4" class="f-surface"/><text x="699" y="110" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="730" y="94" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="757" y="110" text-anchor="middle">⟨/s⟩</text>
+          <text x="420" y="158" class="t-dim">2</text>
+          <rect x="440" y="144" width="54" height="22" rx="4" class="f-surface"/><text x="467" y="160" text-anchor="middle">나는</text>
+          <rect x="498" y="144" width="54" height="22" rx="4" class="f-surface"/><text x="525" y="160" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="556" y="144" width="54" height="22" rx="4" class="f-surface"/><text x="583" y="160" text-anchor="middle" class="t-dim">[M]</text>
+          <rect x="614" y="144" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="641" y="160" text-anchor="middle">영화를</text>
+          <rect x="672" y="144" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="699" y="160" text-anchor="middle">본다.</text>
+          <rect x="730" y="144" width="54" height="22" rx="4" class="f-surface"/><text x="757" y="160" text-anchor="middle">⟨/s⟩</text>
+          <text x="420" y="208" class="t-dim">3</text>
+          <rect x="440" y="194" width="54" height="22" rx="4" class="f-surface"/><text x="467" y="210" text-anchor="middle">나는</text>
+          <rect x="498" y="194" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="525" y="210" text-anchor="middle">주말에</text>
+          <rect x="556" y="194" width="54" height="22" rx="4" class="f-acc2-soft"/><text x="583" y="210" text-anchor="middle">친구와</text>
+          <rect x="614" y="194" width="54" height="22" rx="4" class="f-surface"/><text x="641" y="210" text-anchor="middle">영화를</text>
+          <rect x="672" y="194" width="54" height="22" rx="4" class="f-surface"/><text x="699" y="210" text-anchor="middle">본다.</text>
+          <rect x="730" y="194" width="54" height="22" rx="4" class="f-surface"/><text x="757" y="210" text-anchor="middle">⟨/s⟩</text>
+        </g>
+        <path d="M390 40 V220" class="s-line" style="stroke-dasharray:3 4"/>
+        <text x="190" y="242" text-anchor="middle" class="t-dim">한 스텝 = 토큰 1개 (왼쪽 문맥만 봄)</text>
+        <text x="600" y="242" text-anchor="middle" class="t-dim">한 스텝 = 여러 토큰 (양쪽 문맥을 봄)</text>
+      </svg>
+      <figcaption><b>그림 7-8.</b> 자기회귀 생성(왼쪽)과 마스크 디퓨전 생성(오른쪽, 설명용 예시). 색칠한 칸이 그 스텝에 새로 정해진 토큰이고, ⟨/s⟩는 문장 끝 토큰이다. 디퓨전은 문장 끝처럼 확신이 큰 위치부터 채우고, 이미 정해진 양쪽 토큰을 보며 가운데를 메운다. 6토큰을 3번의 모델 호출로 만들었지만, 매 호출은 시퀀스 전체를 처리한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-lm-diff">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>마스크 디퓨전 생성 (장난감)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><div class="sim-panel lm-df-wrap"><table class="lm-df" id="lm-df-tab"></table></div></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>길이 L (어절)</span><div class="seg" id="lm-df-L"><button data-value="4">4</button><button data-value="5" class="on">5</button><button data-value="6">6</button><button data-value="7">7</button></div></div>
+          <label class="ctrl"><span>디퓨전 스텝 T <output id="lm-df-T-out"></output></span><input type="range" id="lm-df-T" min="1" max="7" step="1" value="3"></label>
+          <div class="ctrl"><span>확정 순서</span><div class="seg" id="lm-df-ord"><button data-value="conf" class="on">확신도 순</button><button data-value="rand">무작위</button></div></div>
+          <label class="check"><input type="checkbox" id="lm-df-remask"> 재마스킹: 확정된 토큰도 확신이 낮아지면 다시 [M]</label>
+          <div class="ctrl"><span>생성</span><div class="lm-btns"><button class="btn primary" id="lm-df-go">다시 생성</button><button class="btn" id="lm-df-ar">자기회귀와 비교</button></div></div>
+        </div>
+      </div>
+      <div class="lm-panel"><h4 id="lm-df-cand-h">후보 분포 (표의 칸을 누르면 그 스텝·위치의 예측을 보여 준다)</h4><div class="lm-df-cand" id="lm-df-cand">—</div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">모델 호출 (디퓨전 / 자기회귀)</span><span class="v" id="lm-df-o-calls">—</span></div>
+        <div class="stat"><span class="k">스텝당 확정 토큰 (평균)</span><span class="v" id="lm-df-o-k">—</span></div>
+        <div class="stat"><span class="k">결과 문장 PPL (bigram 기준)</span><span class="v" id="lm-df-o-ppl">—</span></div>
+        <div class="stat"><span class="k">코퍼스에 있는 이웃 쌍</span><span class="v" id="lm-df-o-seen">—</span></div>
+        <div class="stat"><span class="k">재마스킹 횟수</span><span class="v" id="lm-df-o-rm">—</span></div>
+      </div>
+      <div class="sim-note">이 시뮬레이터의 '모델'은 신경망이 아니라, n-gram 절의 교육용 코퍼스(44문장)에서 센 <strong>어절 단위 bigram</strong>이다. 가려진 칸의 후보 \(c\) 점수는 왼쪽 이웃 \(a\)와 오른쪽 이웃 \(b\)가 정해져 있을 때 \(P(c\mid a)\,P(b\mid c)\)(정해지지 않은 쪽은 생략)로, 양쪽 문맥을 보는 아주 작은 양방향 모델이다. 표의 각 행이 한 스텝이고, 색칠한 칸이 그 스텝에 확정된 토큰이다. 해볼 것: ① T = L로 두면 한 스텝에 한 칸씩 채운다. 확신도 순이면 보통 문장 시작(⟨s⟩ 다음)이나 끝(마침표 앞)부터 채워진다. ② T = 1로 내리면 모든 칸을 한 번에 정한다. 이웃끼리 서로를 모른 채 동시에 정해져 "코퍼스에 있는 이웃 쌍"이 줄고 PPL이 나빠진다. 병렬 디코딩의 대가다. ③ T = 2~3에서 재마스킹을 켜 보자. 나중에 정해진 이웃과 어울리지 않는 토큰이 다시 [M]이 되어 고쳐질 기회를 얻는다. ④ '확정 순서'를 무작위로 바꾸면 확신 없는 칸을 먼저 정해 버려 결과가 나빠지는 경우가 많다. ⑤ 맨 아래 행의 토큰을 누르면 그 칸을 [M]으로 되돌리고 나머지를 고정한 채 다시 채운다(인필링). 자기회귀 모델은 오른쪽 문맥을 볼 수 없어 이런 '가운데 채우기'를 그대로는 못 한다. ⑥ '자기회귀와 비교'는 같은 bigram으로 왼쪽부터 L번 뽑은 결과다. 이 장난감에서는 끝(⟨/s⟩)을 미리 보지 못하는 자기회귀가 오히려 불리해 보이지만, 문맥이 길고 모델이 강한 실제 LLM에서는 이런 차이가 그대로 나타나지 않는다. 숫자보다 '생성 순서와 호출 수'의 차이를 보자.</div>
+    </div>
+
+    <h3>장점과 한계</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>자기회귀 (현재 주류)</th><th>마스크 디퓨전</th></tr></thead>
+      <tbody>
+        <tr><td>모델 호출 수</td><td>출력 토큰 수 \(L\)</td><td>스텝 수 \(T\) (보통 \(T &lt; L\), 줄일수록 품질 저하)</td></tr>
+        <tr><td>호출 하나의 비용</td><td>새 토큰 1개 + KV 캐시 재사용 (<a href="generation.html">8장</a>)</td><td>시퀀스 전체(양방향 어텐션이라 표준 KV 캐시를 그대로 못 씀)</td></tr>
+        <tr><td>문맥</td><td>왼쪽만</td><td>양쪽. 인필링·편집·역방향 관계에 유리</td></tr>
+        <tr><td>출력 길이</td><td>EOS가 나올 때까지 자유</td><td>미리 정한 길이 L(블록 단위 반자기회귀로 완화)</td></tr>
+        <tr><td>동시 결정 오류</td><td>없음(한 번에 하나)</td><td>한 스텝에 정한 토큰들은 서로를 모름 → 어긋날 수 있음</td></tr>
+      </tbody>
+    </table></div>
+    <p>현실의 디퓨전 LM은 블록 단위로 왼쪽에서 오른쪽으로 진행하면서 블록 안에서만 디퓨전을 하는 <strong>반자기회귀</strong> 방식, 블록 사이에 KV 캐시를 쓰는 기법 등으로 단점을 줄이고 있다. 긴 출력을 짧은 시간에 내야 하는 코드 자동완성 같은 곳에서 특히 매력적이다. 하지만 2026년 현재 최상위 범용 모델과 학습·서빙 생태계(KV 캐시, 추측 디코딩, RLVR 도구)는 여전히 자기회귀 중심이며, 디퓨전 LM은 빠르게 성장하는 <strong>대안 후보</strong>로 보는 것이 정확하다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>언어 모델은 연쇄법칙 \(P(x_{1:T}) = \prod_t P(x_t\mid x_{\lt t})\)에 따라 다음 토큰 분포만 학습한다. 손실은 정답 토큰 확률의 −log 평균(교차 엔트로피), 퍼플렉시티는 그 지수다.</li>
+      <li>n-gram은 카운트로 확률을 추정하지만 문맥 가짓수가 \(V^{n-1}\)로 폭발해 희소성 문제가 생긴다. 스무딩·백오프로 0 확률을 피한다.</li>
+      <li>신경망 언어 모델은 임베딩으로 비슷한 토큰끼리 통계를 공유해 일반화한다. 같은 역전파+Adam으로 학습하며, 데이터가 작으면 학습/검증 손실이 벌어지는 과적합이 나타난다.</li>
+      <li>RNN의 순차 계산과 장거리 정보 손실을 Transformer가 병렬 어텐션으로 해결했고, 이 병렬성이 대규모 스케일링을 가능하게 했다.</li>
+      <li>학습 계산량은 \(C \approx 6ND\). GPU 수 × 최대 FLOPS × MFU로 나누면 학습 기간이 나온다. Llama 3.1 405B는 약 \(3.8\times10^{25}\) FLOPs였다.</li>
+      <li>Chinchilla 스케일링 법칙 \(L = E + A/N^\alpha + B/D^\beta\)는 계산 최적이 대략 파라미터당 20 토큰임을 보였다. 추론 비용을 고려해 실제 배포 모델은 그보다 훨씬 많은 데이터로 과학습한다.</li>
+      <li>사전학습 → SFT(채팅 템플릿, 답변 토큰 손실) → 선호 학습(RLHF/PPO, DPO). DPO는 \(\beta\log(\pi/\pi_{ref})\)를 암묵적 보상으로 써서 비교 데이터에 직접 분류 손실을 건다.</li>
+      <li>인컨텍스트 학습, CoT, 추론 모델(테스트타임 계산)은 모두 "다음 토큰 예측"의 연장이다. 환각은 그럴듯함을 학습한 결과이며, 보정과 RAG가 대응책이다.</li>
+      <li>2024~2026년 모델은 계산 최적(파라미터당 ~20 토큰)을 수백~수만 배 넘겨 학습한다(Qwen3-0.6B 약 36T 토큰). MoE는 계산이 활성 파라미터, 메모리가 총 파라미터에 비례해, 총 1T급·활성 수십 B가 플래그십의 표준이 되었다.</li>
+      <li>추론 모델은 사전학습 → SFT → 선호 학습 뒤에 RLVR(정답·테스트로 자동 채점하는 강화학습, 예: GRPO)을 더해 만든다. 테스트타임 계산(길게 생각하기, 여러 번 풀기)으로 성능을 올리고, 큰 모델의 추론 흔적을 작은 모델에 증류한다.</li>
+      <li>마스크 디퓨전 LM은 전부 [M]인 시퀀스를 T번의 스텝에 걸쳐 확신도 높은 위치부터 병렬로 채운다. 호출 수는 줄지만 동시 결정 오류·고정 길이·KV 캐시 문제가 있어, 아직 자기회귀가 주류다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 어떤 모델이 평가 텍스트의 모든 토큰에 평균적으로(기하평균) 확률 0.25를 줬다. 퍼플렉시티와 손실(nats)은?</p><div class="opts">
+        <button class="opt">PPL 0.25, 손실 0.25</button><button class="opt" data-correct>PPL 4, 손실 ln 4 ≈ 1.39</button><button class="opt">PPL 2, 손실 2 bits</button><button class="opt">PPL 25, 손실 3.2</button>
+      </div><div class="quiz-exp">PPL은 확률 기하평균의 역수이므로 1/0.25 = 4이고, 손실은 −ln 0.25 = ln 4 ≈ 1.39 nats(= 2 bits)다. "매 스텝 4개 후보 중에서 균등하게 헷갈리는 수준"으로 읽는다.</div></div>
+      <div class="quiz-q"><p>2. MLE(스무딩 없는) 4-gram 모델로 평가 문장의 퍼플렉시티가 무한대가 나왔다. 가장 직접적인 원인은?</p><div class="opts">
+        <button class="opt">어휘가 너무 작다</button><button class="opt">n이 너무 작다</button><button class="opt" data-correct>평가 문장에 학습 코퍼스에서 한 번도 나오지 않은 4-gram이 있어 확률 0이 곱해졌다</button><button class="opt">온도가 너무 높다</button>
+      </div><div class="quiz-exp">카운트 비율로 추정하면 본 적 없는 조합은 확률 0이고, 하나라도 0이면 곱 전체가 0, −log는 무한대다. n을 키울수록 이런 일이 더 자주 생긴다(희소성). 스무딩, 백오프, 그리고 근본적으로는 임베딩 기반 신경망 모델이 해법이다.</div></div>
+      <div class="quiz-q"><p>3. 70B 파라미터 모델을 2T 토큰으로 학습한다. H100(BF16 989 TFLOPS) 2,048개, MFU 40%라면 학습 기간은 대략?</p><div class="opts">
+        <button class="opt">약 1일</button><button class="opt" data-correct>약 12일</button><button class="opt">약 4개월</button><button class="opt">약 3년</button>
+      </div><div class="quiz-exp">C = 6 × 7×10¹⁰ × 2×10¹² = 8.4×10²³ FLOPs. 초당 2,048 × 989×10¹² × 0.4 ≈ 8.1×10¹⁷ FLOPs이므로 약 1.04×10⁶초 ≈ 12일이다.</div></div>
+      <div class="quiz-q"><p>4. Chinchilla 분석에 따르면 GPT-3(175B, 300B 토큰)는 같은 계산량에서 어떻게 했어야 손실이 더 낮았을까?</p><div class="opts">
+        <button class="opt">더 큰 모델을 더 적은 토큰으로</button><button class="opt" data-correct>더 작은 모델(수십 B)을 훨씬 많은 토큰(조 단위)으로</button><button class="opt">같은 모델을 같은 데이터로 여러 에폭</button><button class="opt">N과 D는 손실에 무관하고 C만 중요하다</button>
+      </div><div class="quiz-exp">GPT-3는 파라미터당 1.7 토큰으로 계산 최적(약 20)보다 데이터가 크게 부족했다. 같은 C에서 N을 줄이고 D를 늘리면 L(N,D)가 더 낮아진다. 스케일링 시뮬레이터에서 탐침을 GPT-3에 두고 같은 등계산량 선 위 최적점과 비교해 보면 보인다.</div></div>
+      <div class="quiz-q"><p>5. DPO 손실에서 β를 키우면 어떤 효과가 있는가?</p><div class="opts">
+        <button class="opt">보상 모델이 커진다</button><button class="opt">참조 정책이 함께 업데이트된다</button><button class="opt" data-correct>작은 확률비 변화에도 σ가 빨리 포화되어, 정책이 참조 정책 가까이(작은 KL) 머문다</button><button class="opt">선호와 거부가 뒤바뀐다</button>
+      </div><div class="quiz-exp">마진은 β × (로그 확률비 차이)이므로 β가 크면 확률비가 조금만 벌어져도 σ(마진)이 1에 가까워지고 기울기 β(1−σ)가 빠르게 줄어든다. 이는 RLHF 목표의 KL 페널티 계수 β와 같은 역할이다.</div></div>
+      <div class="quiz-q"><p>6. Chain-of-thought가 어려운 문제의 정확도를 높이는 이유로 가장 적절한 것은?</p><div class="opts">
+        <button class="opt">추론 중에 가중치가 업데이트되기 때문이다</button><button class="opt" data-correct>중간 단계를 토큰으로 생성하면서 토큰마다 고정된 계산을 여러 번 더 쓰고, 그 결과를 다시 읽을 수 있기 때문이다</button><button class="opt">컨텍스트 길이가 줄어들기 때문이다</button><button class="opt">소프트맥스 온도가 0이 되기 때문이다</button>
+      </div><div class="quiz-exp">Transformer는 토큰 하나당 층 수만큼의 고정 계산만 한다. 중간 추론을 써 내려가면 계산을 토큰 수만큼 늘리고 중간 결과를 문맥으로 재활용한다. 추론 모델은 이 '테스트타임 계산'을 강화학습으로 체계화했다. 가중치는 추론 중에 바뀌지 않는다.</div></div>
+      <div class="quiz-q"><p>7. GRPO로 수학 문제 하나에 응답 4개를 샘플했더니 모두 정답(보상 1)이었다. 이 문제에서 생기는 학습 신호는?</p><div class="opts">
+        <button class="opt">네 응답의 확률을 모두 크게 올린다</button><button class="opt" data-correct>그룹 평균과 같아 어드밴티지가 모두 0이므로 (KL 항을 빼면) 신호가 거의 없다</button><button class="opt">보상 모델이 다시 학습된다</button><button class="opt">가치 함수(critic)가 대신 신호를 준다</button>
+      </div><div class="quiz-exp">GRPO의 어드밴티지는 A<sub>i</sub> = (r<sub>i</sub> − mean)/std로 그룹 안의 상대 점수다. 모두 맞히거나 모두 틀리면 r<sub>i</sub> − mean = 0이라 정책 기울기가 0이 된다. 그래서 너무 쉽거나 너무 어려운 문제는 학습에 쓸모가 적고, 정답률이 중간인 문제를 골라 쓰는 것이 중요하다. GRPO에는 critic이 없다(<a href="agent.html">11장</a>).</div></div>
+      <div class="quiz-q"><p>8. 길이 256 토큰의 답을 마스크 디퓨전 LM으로 T = 32 스텝에 생성한다. 자기회귀 모델과 비교한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">모델 호출 수가 같다</button><button class="opt">한 스텝에 1토큰씩 정하므로 256스텝이 필요하다</button><button class="opt" data-correct>호출은 32번(스텝당 평균 8토큰)으로 줄지만, 매 호출이 시퀀스 전체를 양방향으로 처리하고 같은 스텝에 정한 토큰끼리는 서로를 보지 못한다</button><button class="opt">출력 길이를 미리 정할 필요가 없다</button>
+      </div><div class="quiz-exp">자기회귀는 256번 호출(토큰당 1번, KV 캐시로 한 번의 비용은 작음)이 필요하다. 마스크 디퓨전은 T = 32번이면 되지만 매번 전체 시퀀스를 처리하고, 한 스텝에 동시에 정하는 8개 토큰은 서로 독립적으로 뽑혀 어긋날 수 있다. T를 줄일수록 빨라지고 품질은 떨어진다. 보통 길이 L은 미리 정한다(또는 블록 단위로 진행한다).</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var FONT = function () { return getComputedStyle(document.body).getPropertyValue("--font"); };
+  var MONO = function () { return getComputedStyle(document.body).getPropertyValue("--mono"); };
+  // 포인터 드래그 헬퍼: cb(x, y, type) — 캔버스 CSS 픽셀 좌표
+  function drag(cv, cb) {
+    var active = false;
+    function pos(e) { var r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+    cv.addEventListener("pointerdown", function (e) { active = true; try { cv.setPointerCapture(e.pointerId); } catch (_) {} var p = pos(e); cb(p[0], p[1], "down"); e.preventDefault(); });
+    cv.addEventListener("pointermove", function (e) { if (!active) return; var p = pos(e); cb(p[0], p[1], "move"); });
+    var up = function (e) { if (!active) return; active = false; var p = pos(e); cb(p[0], p[1], "up"); };
+    cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+  }
+  function sup(x, d) { // 10^k 표기 HTML
+    if (!isFinite(x) || x <= 0) return "—";
+    var e = Math.floor(Math.log10(x)), m = x / Math.pow(10, e);
+    if (m >= 9.995) { m /= 10; e++; }
+    return m.toFixed(d == null ? 2 : d) + "×10<sup>" + e + "</sup>";
+  }
+  function showCh(c) { return c === " " ? "␣" : c === "\n" ? "⏎" : c; }
+  function sampleIdx(p, r) { var u = r(), j = 0; for (; j < p.length - 1; j++) { u -= p[j]; if (u <= 0) break; } return j; }
+  function temper(p, T) { var q = p.map(function (v) { return v > 0 ? Math.pow(v, 1 / T) : 0; }); var s = q.reduce(function (a, b) { return a + b; }, 0); return s > 0 ? q.map(function (v) { return v / s; }) : p; }
+
+  /* =====================================================================
+     SIM 1: 연쇄법칙과 퍼플렉시티
+     ===================================================================== */
+  (function () {
+    var toks = ["오늘", "은", " 날씨", "가", " 정말", " 좋다", "."];
+    var presets = {
+      good: [0.35, 0.6, 0.45, 0.85, 0.3, 0.55, 0.9],
+      unsure: [0.08, 0.2, 0.06, 0.3, 0.05, 0.1, 0.25],
+      oops: [0.35, 0.6, 0.45, 0.85, 0.3, 0.001, 0.9],
+      unif: toks.map(function () { return 1 / 50257; })
+    };
+    var p = presets.good.slice();
+    var unit = AB.seg("lm-chain-unit", function () { cv.redraw(); readout(); });
+    var LMIN = -5; // log10 하한
+    var geo = {};
+    var cv = AB.canvas($("lm-chain-cv"), function (ctx, w, h) {
+      var P = AB.palette();
+      var L = 54, R = 12, T = 22, B = 64;
+      var bw = (w - L - R) / toks.length;
+      geo = { L: L, T: T, bw: bw, ph: h - T - B, h: h };
+      var Y = function (v) { return T + (h - T - B) * (Math.log10(v) / LMIN); };
+      ctx.font = "11px " + MONO();
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      for (var e = 0; e >= LMIN; e--) {
+        var y = Y(Math.pow(10, e));
+        ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(w - R, y); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.fillText(e === 0 ? "1" : "1e" + e, L - 6, y);
+      }
+      var bits = unit() === "bit";
+      var nl = toks.map(function (_, i) { return -Math.log(p[i]); });
+      var worst = AB.argmax(nl);
+      toks.forEach(function (t, i) {
+        var x = L + i * bw + bw * 0.18, ww = bw * 0.64, y = Y(p[i]);
+        ctx.fillStyle = i === worst ? AB.alpha(P.accent2, 0.85) : AB.alpha(P.accent, 0.8);
+        ctx.fillRect(x, y, ww, T + geo.ph - y);
+        ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.font = "11px " + MONO();
+        ctx.fillText(p[i] >= 0.01 ? p[i].toFixed(2) : p[i].toExponential(0), x + ww / 2, y - 3);
+        ctx.font = "13px " + FONT(); ctx.textBaseline = "top"; ctx.fillStyle = P.text;
+        ctx.fillText(t.replace(" ", "␣"), x + ww / 2, T + geo.ph + 6);
+        ctx.font = "11px " + MONO(); ctx.fillStyle = i === worst ? P.accent2 : P.dim;
+        var v = bits ? nl[i] / Math.LN2 : nl[i];
+        ctx.fillText("−log " + v.toFixed(2), x + ww / 2, T + geo.ph + 26);
+      });
+      ctx.save(); ctx.translate(13, T + geo.ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillStyle = P.dim; ctx.font = "12px " + FONT(); ctx.fillText("P(xₜ | x<ₜ) (로그)", 0, 0); ctx.restore();
+    }, { aspect: 0.52, minHeight: 280, maxHeight: 380 });
+    drag(cv.canvas, function (x, y) {
+      var i = Math.floor((x - geo.L) / geo.bw); if (i < 0 || i >= toks.length) return;
+      var t = AB.clamp((y - geo.T) / geo.ph, 0, 1);
+      p[i] = Math.max(1e-5, Math.min(1, Math.pow(10, t * LMIN)));
+      cv.redraw(); readout();
+    });
+    document.querySelectorAll("#sim-chain [data-preset]").forEach(function (b) {
+      b.addEventListener("click", function () { p = presets[b.dataset.preset].slice(); cv.redraw(); readout(); });
+    });
+    function readout() {
+      var bits = unit() === "bit", s = 0, lj = 0;
+      p.forEach(function (v) { s -= Math.log(v); lj += Math.log10(v); });
+      var ce = s / p.length;
+      AB.stat("lm-chain-joint", sup(Math.pow(10, lj), 2));
+      AB.stat("lm-chain-ce", (bits ? (ce / Math.LN2).toFixed(3) + " bits" : ce.toFixed(3) + " nats"));
+      AB.stat("lm-chain-ppl", AB.fmt(Math.exp(ce), 4));
+      var nl = p.map(function (v) { return -Math.log(v); }), w = AB.argmax(nl);
+      AB.stat("lm-chain-worst", "'" + toks[w].trim() + "' " + Math.round(nl[w] / s * 100) + "%");
+    }
+    readout();
+  })();
+
+  /* =====================================================================
+     SIM 2: n-gram
+     ===================================================================== */
+  (function () {
+    var KO = "나는 아침에 학교에 간다.\n나는 학교에서 친구를 만난다.\n나는 친구와 함께 점심을 먹는다.\n우리는 학교 앞에서 버스를 기다린다.\n동생은 아침에 우유를 마신다.\n동생은 학교에 걸어서 간다.\n엄마는 아침에 빵을 굽는다.\n아빠는 저녁에 신문을 읽는다.\n나는 저녁에 숙제를 한다.\n나는 밤에 일찍 잠을 잔다.\n친구는 도서관에서 책을 읽는다.\n우리는 도서관에서 함께 공부를 한다.\n선생님은 교실에서 수학을 가르친다.\n학생들은 교실에서 선생님의 말을 듣는다.\n오늘은 날씨가 정말 좋다.\n오늘은 하늘이 맑고 바람이 시원하다.\n어제는 비가 많이 내렸다.\n내일은 눈이 올 것 같다.\n고양이가 소파 위에서 잠을 잔다.\n고양이는 생선을 좋아한다.\n강아지가 공원에서 공을 쫓아 달린다.\n강아지는 산책을 좋아한다.\n우리는 주말에 공원에서 자전거를 탄다.\n나는 주말에 친구와 영화를 본다.\n할머니는 시장에서 과일을 산다.\n할아버지는 마당에서 꽃을 가꾼다.\n봄에는 꽃이 피고 가을에는 단풍이 든다.\n여름에는 바다에서 수영을 한다.\n겨울에는 산에서 눈썰매를 탄다.\n나는 사과를 좋아하고 동생은 포도를 좋아한다.\n형은 컴퓨터로 게임을 한다.\n누나는 음악을 들으며 그림을 그린다.\n나는 학교가 끝나면 집에 간다.\n우리는 저녁에 함께 밥을 먹는다.\n엄마는 부엌에서 국을 끓인다.\n아빠는 회사에 지하철을 타고 간다.\n나는 매일 아침 일곱 시에 일어난다.\n친구는 학교에 자전거를 타고 온다.\n선생님은 칠판에 글씨를 쓴다.\n우리는 운동장에서 축구를 한다.\n비가 오면 우리는 우산을 쓴다.\n바람이 불면 나뭇잎이 떨어진다.\n나는 책을 읽는 것을 좋아한다.\n동생은 노래를 부르는 것을 좋아한다.";
+    var ta = $("lm-ng-corpus"); ta.value = KO;
+    var nSeg = AB.seg("lm-ng-n", update);
+    var kGet = AB.range("lm-ng-k", function (v) { return v.toFixed(2); }, update);
+    var tGet = AB.range("lm-ng-t", function (v) { return v.toFixed(2); });
+    var bo = $("lm-ng-bo"); bo.addEventListener("change", update);
+    var ctxIn = $("lm-ng-ctx"), testIn = $("lm-ng-test");
+    ctxIn.addEventListener("input", update); testIn.addEventListener("input", update);
+    var model = null, bars = [], geo = {};
+    build();
+    function build() {
+      var lines = ta.value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+      var s = "\n" + lines.join("\n") + "\n";
+      var vocab = Array.from(new Set(Array.from(s))).sort();
+      var maps = [new Map(), new Map(), new Map(), new Map()];
+      var chars = Array.from(s);
+      for (var i = 1; i < chars.length; i++) {
+        for (var m = 0; m <= 3; m++) {
+          if (i - m < 0) break;
+          var h = chars.slice(i - m, i).join("");
+          var e = maps[m].get(h); if (!e) { e = { total: 0, next: new Map() }; maps[m].set(h, e); }
+          e.total++; e.next.set(chars[i], (e.next.get(chars[i]) || 0) + 1);
+        }
+      }
+      model = { vocab: vocab, maps: maps };
+    }
+    // 반환: {p: Map char→prob, seen: 원래 문맥 출현 수, used: 실제 사용한 문맥 길이} 또는 p=null
+    function dist(ctxStr) {
+      var n = Number(nSeg()), k = kGet(), V = model.vocab.length;
+      var full = Array.from("\n" + ctxStr);
+      var m = Math.min(n - 1, full.length);
+      var h = full.slice(full.length - m).join("");
+      var e = model.maps[m].get(h), seen = e ? e.total : 0, used = m;
+      if (!e && bo.checked) { while (m > 0 && !e) { m--; h = full.slice(full.length - m).join(""); e = model.maps[m].get(h); } used = m; }
+      var tot = e ? e.total : 0;
+      if (tot === 0 && k === 0) return { p: null, seen: seen, used: used };
+      var p = new Map();
+      model.vocab.forEach(function (c) { p.set(c, ((e && e.next.get(c)) || 0) + k); });
+      p.forEach(function (v, c) { p.set(c, v / (tot + k * V)); });
+      return { p: p, seen: seen, used: used };
+    }
+    var cv = AB.canvas($("lm-ng-cv"), function (ctx, w, h) {
+      var P = AB.palette();
+      var d = dist(ctxIn.value);
+      ctx.font = "12px " + FONT(); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      var n = Number(nSeg()), full = Array.from("\n" + ctxIn.value), m = Math.min(n - 1, full.length);
+      var hstr = full.slice(full.length - m).map(showCh).join("");
+      ctx.fillText("문맥 h = \"" + hstr + "\"" + (d.used < m ? "  → 백오프: 길이 " + d.used : ""), 12, 8);
+      if (!d.p) {
+        ctx.fillStyle = P.bad; ctx.font = "15px " + FONT(); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("본 적 없는 문맥: c(h) = 0 → 확률 0/0 (정의 안 됨)", w / 2, h / 2 - 12);
+        ctx.fillStyle = P.dim; ctx.font = "13px " + FONT();
+        ctx.fillText("스무딩 k > 0, 백오프, 또는 더 작은 n을 시도해 보자", w / 2, h / 2 + 14);
+        bars = []; return;
+      }
+      var arr = Array.from(d.p.entries()).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 14);
+      var L = 12, R = 12, T = 34, B = 44, bw = (w - L - R) / arr.length, ph = h - T - B;
+      var mx = Math.max(0.05, arr[0][1]);
+      geo = { L: L, bw: bw };
+      bars = arr.map(function (a) { return a[0]; });
+      arr.forEach(function (a, i) {
+        var x = L + i * bw + bw * 0.14, ww = bw * 0.72, bh = ph * a[1] / mx;
+        ctx.fillStyle = i === 0 ? P.accent : AB.alpha(P.accent, 0.55);
+        ctx.fillRect(x, T + ph - bh, ww, bh);
+        ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.font = "16px " + FONT();
+        ctx.fillText(showCh(a[0]), x + ww / 2, T + ph + 6);
+        ctx.font = "10.5px " + MONO(); ctx.fillStyle = P.dim; ctx.textBaseline = "bottom";
+        ctx.fillText(a[1] >= 0.1 ? a[1].toFixed(2) : a[1] >= 0.001 ? a[1].toFixed(3).slice(1) : "~0", x + ww / 2, T + ph - bh - 2);
+      });
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, T + ph); ctx.lineTo(w - R, T + ph); ctx.stroke();
+    }, { aspect: 0.5, minHeight: 240, maxHeight: 340 });
+    cv.canvas.addEventListener("pointerdown", function (e) {
+      var r = cv.canvas.getBoundingClientRect(), i = Math.floor((e.clientX - r.left - geo.L) / geo.bw);
+      if (i >= 0 && i < bars.length) { var c = bars[i]; if (c === "\n") return; ctxIn.value += c; update(); }
+    });
+    function update() {
+      var d = dist(ctxIn.value), n = Number(nSeg());
+      AB.stat("lm-ng-v", model.vocab.length);
+      AB.stat("lm-ng-ch", d.seen === 0 ? '<span class="lm-warn">0 (처음 봄)</span>' : d.seen);
+      AB.stat("lm-ng-nctx", model.maps[n - 1].size.toLocaleString());
+      // 평가 문장 PPL
+      var s = Array.from("\n" + testIn.value.trim() + "\n"), nll = 0, cnt = 0, zero = 0;
+      for (var i = 1; i < s.length; i++) {
+        var dd = dist(s.slice(1, i).join("")), pr = dd.p ? (dd.p.get(s[i]) || 0) : 0;
+        if (pr <= 0) zero++; else nll -= Math.log(pr);
+        cnt++;
+      }
+      AB.stat("lm-ng-ppl", zero ? '<span class="lm-warn">∞</span>' : AB.fmt(Math.exp(nll / cnt), 4));
+      AB.stat("lm-ng-zero", zero ? '<span class="lm-warn">' + zero + " / " + cnt + "</span>" : '<span class="lm-ok">0</span> / ' + cnt);
+      cv.redraw();
+    }
+    $("lm-ng-gen").addEventListener("click", function () {
+      var r = AB.rng((Date.now() & 0xffff) + 1), out = "", stop = "";
+      for (var i = 0; i < 60; i++) {
+        var d = dist(ctxIn.value + out);
+        if (!d.p) { stop = " [본 적 없는 문맥 → 중단]"; break; }
+        var chars = Array.from(d.p.keys()), p = temper(chars.map(function (c) { return d.p.get(c); }), tGet());
+        var c = chars[sampleIdx(p, r)];
+        if (c === "\n") { stop = " ⏎"; break; }
+        out += c;
+      }
+      $("lm-ng-out").innerHTML = '<span class="ctx"></span><span class="new"></span><span class="lm-warn"></span>';
+      var sp = $("lm-ng-out").children; sp[0].textContent = ctxIn.value; sp[1].textContent = out; sp[2].textContent = stop;
+    });
+    $("lm-ng-clr").addEventListener("click", function () { ctxIn.value = ""; update(); });
+    var tmr = 0;
+    ta.addEventListener("input", function () { clearTimeout(tmr); tmr = setTimeout(function () { build(); update(); }, 250); });
+    update();
+  })();
+
+  /* =====================================================================
+     SIM 3: 문자 단위 MLP 언어 모델 (실제 역전파 + Adam)
+     ===================================================================== */
+  /* ---------- 문자 단위 MLP 언어 모델 (Bengio 2003 스타일): 임베딩 → tanh 은닉층 → 소프트맥스 ---------- */
+  function makeMLP(V, K, D, H, seed) {
+    var r = AB.rng(seed || 1);
+    var I = K * D;
+    var P = {
+      C: new Float32Array(V * D), W1: new Float32Array(I * H), b1: new Float32Array(H),
+      W2: new Float32Array(H * V), b2: new Float32Array(V)
+    };
+    var i;
+    for (i = 0; i < P.C.length; i++) P.C[i] = r.n() * 0.5;
+    var s1 = 1 / Math.sqrt(I) * 1.0;
+    for (i = 0; i < P.W1.length; i++) P.W1[i] = r.n() * s1;
+    var s2 = 0.1 / Math.sqrt(H);
+    for (i = 0; i < P.W2.length; i++) P.W2[i] = r.n() * s2;
+    var names = ["C", "W1", "b1", "W2", "b2"];
+    var G = {}, M = {}, S = {};
+    names.forEach(function (n) { G[n] = new Float32Array(P[n].length); M[n] = new Float32Array(P[n].length); S[n] = new Float32Array(P[n].length); });
+    var cap = 0, e, h, pr, dh;
+    function ensure(B) {
+      if (B <= cap) return;
+      cap = B; e = new Float32Array(B * I); h = new Float32Array(B * H); pr = new Float32Array(B * V); dh = new Float32Array(B * H);
+    }
+    // X: Int32Array(B*K) 문맥 인덱스, Y: Int32Array(B) 정답. grad=true면 G에 기울기 누적(평균). 반환: 평균 손실(nats)
+    function forward(X, Y, B, grad) {
+      ensure(B);
+      var b, k, j, t, loss = 0;
+      for (b = 0; b < B; b++) {
+        var eo = b * I;
+        for (k = 0; k < K; k++) { var c = X[b * K + k] * D, o = eo + k * D; for (j = 0; j < D; j++) e[o + j] = P.C[c + j]; }
+        var ho = b * H;
+        for (j = 0; j < H; j++) h[ho + j] = P.b1[j];
+        for (t = 0; t < I; t++) { var ev = e[eo + t]; if (ev === 0) continue; var wo = t * H; for (j = 0; j < H; j++) h[ho + j] += ev * P.W1[wo + j]; }
+        for (j = 0; j < H; j++) h[ho + j] = Math.tanh(h[ho + j]);
+        var po = b * V, mx = -1e30;
+        for (j = 0; j < V; j++) pr[po + j] = P.b2[j];
+        for (t = 0; t < H; t++) { var hv = h[ho + t], w2 = t * V; for (j = 0; j < V; j++) pr[po + j] += hv * P.W2[w2 + j]; }
+        for (j = 0; j < V; j++) if (pr[po + j] > mx) mx = pr[po + j];
+        var sum = 0;
+        for (j = 0; j < V; j++) { pr[po + j] = Math.exp(pr[po + j] - mx); sum += pr[po + j]; }
+        for (j = 0; j < V; j++) pr[po + j] /= sum;
+        if (Y) loss -= Math.log(Math.max(pr[po + Y[b]], 1e-12));
+      }
+      loss /= B;
+      if (!grad) return loss;
+      names.forEach(function (n) { G[n].fill(0); });
+      var inv = 1 / B;
+      for (b = 0; b < B; b++) {
+        var po2 = b * V, ho2 = b * H, eo2 = b * I;
+        // dlogits = (p - onehot)/B
+        pr[po2 + Y[b]] -= 1;
+        for (j = 0; j < V; j++) { pr[po2 + j] *= inv; G.b2[j] += pr[po2 + j]; }
+        for (t = 0; t < H; t++) {
+          var hv2 = h[ho2 + t], w = t * V, acc = 0;
+          for (j = 0; j < V; j++) { var g = pr[po2 + j]; G.W2[w + j] += hv2 * g; acc += P.W2[w + j] * g; }
+          dh[ho2 + t] = acc * (1 - hv2 * hv2); // tanh'
+          G.b1[t] += dh[ho2 + t];
+        }
+        for (t = 0; t < I; t++) {
+          var ev2 = e[eo2 + t], wo2 = t * H, de = 0;
+          for (j = 0; j < H; j++) { var d = dh[ho2 + j]; G.W1[wo2 + j] += ev2 * d; de += P.W1[wo2 + j] * d; }
+          var kk = (t / D) | 0;
+          G.C[X[b * K + kk] * D + (t - kk * D)] += de;
+        }
+      }
+      return loss;
+    }
+    var stepN = 0;
+    function adam(lr, wd) {
+      stepN++;
+      var b1 = 0.9, b2 = 0.999, c1 = 1 - Math.pow(b1, stepN), c2 = 1 - Math.pow(b2, stepN);
+      names.forEach(function (n) {
+        var p = P[n], g = G[n], m = M[n], s = S[n];
+        for (var q = 0; q < p.length; q++) {
+          m[q] = b1 * m[q] + (1 - b1) * g[q];
+          s[q] = b2 * s[q] + (1 - b2) * g[q] * g[q];
+          p[q] -= lr * ((m[q] / c1) / (Math.sqrt(s[q] / c2) + 1e-8) + (wd || 0) * p[q]);
+        }
+      });
+    }
+    // 한 문맥의 다음 글자 확률(Float32Array 복사본)
+    function probs(ctx) {
+      var X = new Int32Array(ctx); forward(X, null, 1, false);
+      return Array.prototype.slice.call(pr, 0, V);
+    }
+    var nParams = 0; names.forEach(function (n) { nParams += P[n].length; });
+    return { P: P, G: G, forward: forward, adam: adam, probs: probs, nParams: nParams, V: V, K: K, D: D, H: H, get steps() { return stepN; } };
+  }
+
+  (function () {
+    var TEXT = "the old man walked to the river in the morning. the river was cold and the water was clear. a small boat waited by the shore. the man sat in the boat and looked at the sky. the sky was blue and the wind was soft. he took the oars and rowed across the river. on the other side there was a green hill. a girl lived on the hill with her mother. every morning the girl went down to the river to fill a jar with water. she saw the old man and waved to him. the old man waved back and smiled. they talked about the weather and the fish in the river. the girl said the fish were hiding under the stones. the man said the fish were waiting for the rain. in the evening the rain came. the rain fell on the hill and on the river and on the roof of the house. the mother made a warm fire and the girl sat near the fire. she listened to the rain on the roof. the old man sat in his house by the river and listened to the rain too. the next morning the sun was bright. the river was high and fast. the old man walked to the shore and found his boat full of water. he laughed and pulled the boat onto the sand. the girl came down the hill with her jar. she helped the man turn the boat over. the water ran out of the boat and back into the river. then the man and the girl sat on the sand and watched the river. a bird flew over the water. a fish jumped and fell back with a splash. the girl laughed and the man laughed with her. the mother called from the hill and the girl ran home. the man stayed by the river until the sun was high. he cleaned his boat and fixed the oars. in the afternoon he rowed out to the middle of the river and waited for the fish. the fish did not come. the man did not mind. he liked the quiet water and the warm sun. when the sun went down he rowed back to the shore. the girl was waiting on the sand with a basket of bread. her mother had made the bread in the morning. the man thanked her and they ate the bread together by the river. the stars came out over the hill. the girl pointed at the brightest star and asked its name. the man said the star had many names. some people called it the morning star and some people called it the evening star. the girl said she would call it the river star. the man said that was a good name. then the girl walked back up the hill and the man walked back to his house. the river ran on in the dark, cold and clear and quiet. in the morning the old man walked to the river again. the boat was dry and the oars were ready. the girl came down the hill with her jar and her mother came with her. the mother wanted to see the river and the boat. the man rowed them across the river and back. the mother said the water was beautiful. the girl said the river was the best place in the world. the old man said nothing, but he smiled at the water and the sky.";
+    $("lm-mlp-corpus").textContent = TEXT;
+    var chars = Array.from(new Set(TEXT)).sort(), V = chars.length;
+    var ix = Array.from(TEXT).map(function (c) { return chars.indexOf(c); });
+    var NT = ix.length, SPLIT = Math.floor(NT * 0.9), BS = 64;
+    var kSeg = AB.seg("lm-mlp-k", reset), dSeg = AB.seg("lm-mlp-d", reset), hSeg = AB.seg("lm-mlp-h", reset);
+    var lrGet = AB.range("lm-mlp-lr", function (v) { return Math.pow(10, v).toExponential(1); });
+    var wdGet = AB.range("lm-mlp-wd", function (v) { return v.toFixed(2); });
+    var tGet = AB.range("lm-mlp-t", function (v) { return v.toFixed(2); });
+    var net, K, hist, rng, Xb, Yb, emaTr, running = false, trPos, sampleAt, sps = 0, embPts = [];
+    var SAMPLE_STEPS = [0, 100, 250, 500, 1000, 1500, 2000, 3000];
+    function evalLoss(lo, hi, positions) {
+      var ps = positions || (function () { var a = []; for (var p = lo + K; p < hi; p++) a.push(p); return a; })();
+      var s = 0;
+      for (var o = 0; o < ps.length; o += 256) {
+        var m = Math.min(256, ps.length - o), X = new Int32Array(m * K), Y = new Int32Array(m);
+        for (var b = 0; b < m; b++) { var p = ps[o + b]; for (var k = 0; k < K; k++) X[b * K + k] = ix[p - K + k]; Y[b] = ix[p]; }
+        s += net.forward(X, Y, m, false) * m;
+      }
+      return s / ps.length;
+    }
+    function generate(seed, T, len, r) {
+      var ctx = [];
+      var s = Array.from(seed.toLowerCase()).filter(function (c) { return chars.indexOf(c) >= 0; });
+      while (s.length < K) s.unshift(" ");
+      ctx = s.slice(s.length - K).map(function (c) { return chars.indexOf(c); });
+      var out = "";
+      for (var i = 0; i < len; i++) {
+        var p = temper(net.probs(ctx), T), j = sampleIdx(p, r);
+        out += chars[j]; ctx.shift(); ctx.push(j);
+      }
+      return out;
+    }
+    function addSample() {
+      var r = AB.rng(1234 + net.steps);
+      var txt = "the " + generate("the ", 0.8, 90, r);
+      var div = document.createElement("div");
+      div.innerHTML = "<b>step " + net.steps + "</b><span></span><i>val " + (hist.va.length ? hist.va[hist.va.length - 1][1].toFixed(2) : "—") + "</i>";
+      div.children[1].textContent = txt;
+      var box = $("lm-mlp-samples"); box.insertBefore(div, box.firstChild);
+      while (box.children.length > 8) box.removeChild(box.lastChild);
+    }
+    function computeEmb() {
+      var D = net.D, C = net.P.C, mean = new Float64Array(D), i, j, c;
+      for (c = 0; c < V; c++) for (j = 0; j < D; j++) mean[j] += C[c * D + j] / V;
+      var X = []; for (c = 0; c < V; c++) { var row = []; for (j = 0; j < D; j++) row.push(C[c * D + j] - mean[j]); X.push(row); }
+      if (D === 2) { embPts = X; return; }
+      var comps = [];
+      for (var q = 0; q < 2; q++) {
+        var v = []; for (j = 0; j < D; j++) v.push(Math.sin(j * 1.7 + q * 3.1) + 0.3);
+        for (var it = 0; it < 60; it++) {
+          var nv = new Array(D).fill(0);
+          for (i = 0; i < V; i++) { var d = AB.dot(X[i], v); for (j = 0; j < D; j++) nv[j] += d * X[i][j]; }
+          comps.forEach(function (u) { var d2 = AB.dot(nv, u); for (j = 0; j < D; j++) nv[j] -= d2 * u[j]; });
+          var nn = AB.norm(nv) || 1; v = nv.map(function (x) { return x / nn; });
+        }
+        comps.push(v);
+      }
+      embPts = X.map(function (x) { return [AB.dot(x, comps[0]), AB.dot(x, comps[1])]; });
+    }
+    function reset() {
+      K = Number(kSeg());
+      net = makeMLP(V, K, Number(dSeg()), Number(hSeg()), 7);
+      rng = AB.rng(99); Xb = new Int32Array(BS * K); Yb = new Int32Array(BS);
+      hist = { tr: [], va: [] }; emaTr = null; sampleAt = 0;
+      var r2 = AB.rng(5); trPos = []; for (var i = 0; i < 700; i++) trPos.push(K + Math.floor(r2() * (SPLIT - K)));
+      hist.tr.push([0, evalLoss(0, SPLIT, trPos)]); hist.va.push([0, evalLoss(SPLIT, NT)]);
+      $("lm-mlp-samples").innerHTML = ""; addSample(); sampleAt = 1;
+      AB.stat("lm-mlp-np", net.nParams.toLocaleString());
+      computeEmb(); readout(); cv.redraw(); ce.redraw();
+    }
+    function step() {
+      for (var b = 0; b < BS; b++) { var p = K + Math.floor(rng() * (SPLIT - K)); for (var k = 0; k < K; k++) Xb[b * K + k] = ix[p - K + k]; Yb[b] = ix[p]; }
+      var l = net.forward(Xb, Yb, BS, true);
+      net.adam(Math.pow(10, lrGet()), wdGet());
+      emaTr = emaTr == null ? l : 0.95 * emaTr + 0.05 * l;
+      var s = net.steps;
+      if (s % 50 === 0) { hist.tr.push([s, evalLoss(0, SPLIT, trPos)]); hist.va.push([s, evalLoss(SPLIT, NT)]); computeEmb(); }
+      var next = sampleAt < SAMPLE_STEPS.length ? SAMPLE_STEPS[sampleAt] : (Math.floor(s / 1000) + 1) * 1000;
+      if (s >= next && s % 50 === 0) { addSample(); sampleAt++; }
+    }
+    function readout() {
+      AB.stat("lm-mlp-step", net.steps.toLocaleString());
+      var tr = hist.tr[hist.tr.length - 1][1], va = hist.va[hist.va.length - 1][1];
+      AB.stat("lm-mlp-tr", tr.toFixed(3));
+      AB.stat("lm-mlp-va", va.toFixed(3));
+      AB.stat("lm-mlp-ppl", Math.exp(va).toFixed(2));
+      AB.stat("lm-mlp-sps", running ? Math.round(sps) + " step/s" : "정지");
+    }
+    var cv = AB.canvas($("lm-mlp-cv"), function (ctx, w, h) {
+      if (!net) return;
+      var P = AB.palette();
+      var xmax = Math.max(500, net.steps * 1.08);
+      var vmin = hist.va.reduce(function (a, b) { return b[1] < a[1] ? b : a; }, hist.va[0]);
+      AB.chart(ctx, null, {
+        x: [0, xmax], y: [0, 3.6], xLabel: "스텝 (미니배치 64)", yLabel: "손실 (nats/글자)",
+        series: [
+          { data: hist.tr, color: P.accent, width: 2.2 },
+          { data: hist.va, color: P.accent2, width: 2.2 }
+        ],
+        hlines: [{ y: Math.log(V), color: P.faint, label: "균등 ln " + V + " = " + Math.log(V).toFixed(2) }],
+        points: hist.va.length > 3 ? [{ x: vmin[0], y: vmin[1], color: P.accent2, r: 4, label: "검증 최저 " + vmin[1].toFixed(2) }] : []
+      });
+      ctx.font = "12px " + FONT(); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("— 학습 손실", w - 24, 24);
+      ctx.fillStyle = P.accent2; ctx.fillText("— 검증 손실", w - 24, 42);
+    }, { aspect: 0.55, minHeight: 260, maxHeight: 380 });
+    var VOW = "aeiou";
+    var ce = AB.canvas($("lm-mlp-emb"), function (ctx, w, h) {
+      var P = AB.palette();
+      if (!net || !embPts.length) return;
+      var xs = embPts.map(function (p) { return p[0]; }), ys = embPts.map(function (p) { return p[1]; });
+      var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs), y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+      var pad = 22, sx = (w - 2 * pad) / ((x1 - x0) || 1), sy = (h - 2 * pad) / ((y1 - y0) || 1);
+      ctx.strokeStyle = P.grid; ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      embPts.forEach(function (p, i) {
+        var c = chars[i], X = pad + (p[0] - x0) * sx, Y = h - pad - (p[1] - y0) * sy;
+        var isV = VOW.indexOf(c) >= 0, isP = c === " " || c === "." || c === ",";
+        ctx.fillStyle = isV ? AB.alpha(P.accent2, 0.18) : isP ? AB.alpha(P.warn, 0.2) : AB.alpha(P.accent, 0.12);
+        ctx.beginPath(); ctx.arc(X, Y, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = isV ? P.accent2 : isP ? P.warn : P.text;
+        ctx.font = (isV ? "bold " : "") + "14px " + MONO();
+        ctx.fillText(showCh(c), X, Y);
+      });
+      ctx.font = "11px " + FONT(); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(net.D === 2 ? "d=2: 실제 임베딩 좌표" : "d=" + net.D + " → PCA 2성분", 8, 6);
+    }, { aspect: 0.75, minHeight: 220, maxHeight: 300 });
+    var lastT = 0, stepCount = 0, accT = 0;
+    var loop = AB.loop($("sim-mlp"), function (dt) {
+      if (!running) return;
+      var t0 = performance.now(), n = 0;
+      while (performance.now() - t0 < 14 && n < 40) { step(); n++; }
+      stepCount += n; accT += dt;
+      if (accT > 0.5) { sps = stepCount / accT; stepCount = 0; accT = 0; }
+      readout(); cv.redraw(); if (net.steps % 50 < n) ce.redraw();
+    });
+    $("lm-mlp-run").addEventListener("click", function () {
+      running = !running; this.textContent = running ? "일시정지" : "학습 재개"; stepCount = 0; accT = 0; readout();
+    });
+    $("lm-mlp-reset").addEventListener("click", function () { reset(); });
+    $("lm-mlp-gen").addEventListener("click", function () {
+      var pr = $("lm-mlp-prompt").value;
+      var out = generate(pr, tGet(), 160, AB.rng((Date.now() & 0xffff) + 3));
+      var o = $("lm-mlp-out"); o.innerHTML = '<span class="ctx"></span><span class="new"></span>';
+      o.children[0].textContent = pr; o.children[1].textContent = out;
+    });
+    reset();
+  })();
+
+  /* =====================================================================
+     SIM 4: 학습 계산량 계산기
+     ===================================================================== */
+  (function () {
+    var nG = AB.range("lm-cmp-n", function (v) { return AB.big(Math.pow(10, v)); }, upd);
+    var dG = AB.range("lm-cmp-d", function (v) { return AB.big(Math.pow(10, v)); }, upd);
+    var gpu = AB.seg("lm-cmp-gpu", upd);
+    var gG = AB.range("lm-cmp-g", function (v) { return Math.round(Math.pow(10, v)).toLocaleString(); }, upd);
+    var mG = AB.range("lm-cmp-mfu", function (v) { return v + "%"; }, upd);
+    var PRE = {
+      gpt3: [175e9, 300e9, 1024], chin: [70e9, 1.4e12, 1024], l8: [8e9, 15e12, 2048],
+      l70: [70e9, 15e12, 8192], l405: [405e9, 15.6e12, 16384]
+    };
+    document.querySelectorAll("#sim-compute [data-cmp]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var q = PRE[b.dataset.cmp];
+        nG.el.value = Math.log10(q[0]); dG.el.value = Math.log10(q[1]); gpu.set("989", false); mG.el.value = 40;
+        gG.set(Math.log10(q[2]));
+        [nG, dG, mG].forEach(function (g) { g.el.dispatchEvent(new Event("input")); });
+      });
+    });
+    function vals() {
+      var N = Math.pow(10, nG()), D = Math.pow(10, dG()), F = Number(gpu()) * 1e12, G = Math.round(Math.pow(10, gG())), mfu = mG() / 100;
+      var C = 6 * N * D, gpuSec = C / (F * mfu);
+      return { N: N, D: D, F: F, G: G, mfu: mfu, C: C, gh: gpuSec / 3600, days: gpuSec / G / 86400 };
+    }
+    function dur(days) {
+      if (days < 1 / 24) return (days * 1440).toFixed(0) + " 분";
+      if (days < 1) return (days * 24).toFixed(1) + " 시간";
+      if (days < 365) return days.toFixed(days < 10 ? 1 : 0) + " 일";
+      return (days / 365).toFixed(days < 3650 ? 1 : 0) + " 년";
+    }
+    var geo = null;
+    var cv = AB.canvas($("lm-cmp-cv"), function (ctx, w, h) {
+      var P = AB.palette(), v = vals();
+      var data = [];
+      for (var e = 0; e <= 5.001; e += 0.05) { var g = Math.pow(10, e); data.push([g, v.gh / g / 24]); }
+      geo = AB.chart(ctx, null, {
+        x: [1, 1e5], y: [1e-2, 1e6], logX: true, logY: true, xLabel: "GPU 수 (이상적 선형 확장)", yLabel: "학습 기간 (일)",
+        xFmt: function (x) { return x >= 1000 ? x / 1000 + "K" : String(x); },
+        yFmt: function (y) { return y >= 1 ? String(y) : y.toExponential(0); },
+        series: [{ data: data, color: P.accent, width: 2.4 }],
+        hlines: [{ y: 1, color: P.faint, label: "1일" }, { y: 30, color: P.faint, label: "1달" }, { y: 365, color: P.warn, label: "1년" }],
+        points: [{ x: v.G, y: v.days, color: P.accent2, r: 7, label: dur(v.days) }]
+      });
+    }, { aspect: 0.6, minHeight: 260, maxHeight: 380 });
+    drag(cv.canvas, function (x) {
+      if (!geo) return;
+      var b = geo.box, t = AB.clamp((x - b.x) / b.w, 0, 1);
+      gG.set(Math.round(t * 5 * 100) / 100);
+    });
+    function upd() {
+      var v = vals();
+      AB.stat("lm-cmp-c", sup(v.C, 2) + " <small>FLOPs</small>");
+      AB.stat("lm-cmp-gh", AB.big(v.gh) + " <small>GPU·h</small>");
+      AB.stat("lm-cmp-days", dur(v.days));
+      AB.stat("lm-cmp-tpp", AB.fmt(v.D / v.N, 3));
+      AB.stat("lm-cmp-one", dur(v.gh / 24));
+      cv.redraw();
+    }
+    upd();
+  })();
+
+  /* =====================================================================
+     SIM: 마스크 디퓨전 생성 (어절 bigram 장난감)
+     ===================================================================== */
+  (function () {
+    var BOS = "⟨s⟩", EOS = "⟨/s⟩", MASK = null, KS = 0.02, TAU = 0.5;
+    var Lseg = AB.seg("lm-df-L", function (v) { var n = +v; $("lm-df-T").max = n; if (Tget() > n) Tget.set(n); run(); });
+    var Tget = AB.range("lm-df-T", function (v) { return String(Math.round(v)); }, function () { run(); });
+    var ordSeg = AB.seg("lm-df-ord", function () { run(); });
+    var rmCb = $("lm-df-remask"); rmCb.addEventListener("change", function () { run(); });
+    var seed = 11, M = null, res = null, ar = null, showAR = false, sel = null;
+    function build() {
+      var lines = $("lm-ng-corpus").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+      var uni = new Map(), big = new Map(), out = new Map(), N = 0;
+      lines.forEach(function (ln) {
+        var w = [BOS].concat(ln.split(/\s+/)).concat([EOS]);
+        for (var i = 0; i < w.length; i++) {
+          if (i > 0 && i < w.length - 1) { uni.set(w[i], (uni.get(w[i]) || 0) + 1); N++; }
+          if (i > 0) { var key = w[i - 1] + "\u0001" + w[i]; big.set(key, (big.get(key) || 0) + 1); out.set(w[i - 1], (out.get(w[i - 1]) || 0) + 1); }
+        }
+      });
+      var vocab = Array.from(uni.keys());
+      M = { uni: uni, big: big, out: out, N: N, vocab: vocab, V: vocab.length + 1 };
+    }
+    function pc(a, c) { return ((M.big.get(a + "\u0001" + c) || 0) + KS) / ((M.out.get(a) || 0) + KS * M.V); }
+    function pu(c) { return ((M.uni.get(c) || 0) + KS) / (M.N + KS * M.V); }
+    // 위치 i(1..L)의 후보 분포: 양쪽 이웃이 정해져 있으면 P(c|a)·P(b|c)
+    function dist(x, i) {
+      var a = x[i - 1], b = x[i + 1], s = 0;
+      var p = M.vocab.map(function (c) { var v = a != null ? pc(a, c) : pu(c); if (b != null) v *= pc(c, b); s += v; return v; });
+      return p.map(function (v) { return v / s; });
+    }
+    function top(p, n) { return p.map(function (v, j) { return [j, v]; }).sort(function (u, v) { return v[1] - u[1]; }).slice(0, n); }
+    function sampleTok(p, r) { var q = temper(p, TAU); return sampleIdx(q, r); }
+    function gen(x0, T, r) {
+      var x = x0.slice(), L = x.length - 2, rows = [{ x: x.slice(), nw: [], rm: [], cand: {} }], remasks = 0, calls = 0;
+      for (var s = 1; s <= T; s++) {
+        var masked = []; for (var i = 1; i <= L; i++) if (x[i] === MASK) masked.push(i);
+        if (!masked.length) break;
+        calls++;
+        var cand = {}, pick = masked.map(function (i) { var p = dist(x, i), j = sampleTok(p, r); cand[i] = top(p, 5); return { i: i, tok: M.vocab[j], conf: p[j] }; });
+        var n = Math.ceil(masked.length / (T - s + 1));
+        if (ordSeg() === "conf") pick.sort(function (u, v) { return v.conf - u.conf; });
+        else for (var q = pick.length - 1; q > 0; q--) { var z = Math.floor(r() * (q + 1)), t = pick[q]; pick[q] = pick[z]; pick[z] = t; }
+        var nw = pick.slice(0, n).map(function (o) { x[o.i] = o.tok; return o.i; });
+        var rm = [];
+        if (rmCb.checked && s < T) {
+          var worst = -1, wc = 0.05;
+          for (var j2 = 1; j2 <= L; j2++) {
+            if (x[j2] === MASK) continue;
+            var keep = x[j2]; x[j2] = MASK; var pp = dist(x, j2); x[j2] = keep;
+            var cf = pp[M.vocab.indexOf(keep)];
+            if (cf < wc) { wc = cf; worst = j2; }
+          }
+          if (worst > 0) { x[worst] = MASK; rm.push(worst); remasks++; }
+        }
+        rows.push({ x: x.slice(), nw: nw, rm: rm, cand: cand });
+      }
+      return { rows: rows, x: x, remasks: remasks, calls: calls };
+    }
+    function genAR(L, r) {
+      var x = [BOS];
+      for (var i = 1; i <= L; i++) { var a = x[i - 1]; var p = M.vocab.map(function (c) { return pc(a, c); }), s = p.reduce(function (u, v) { return u + v; }, 0); p = p.map(function (v) { return v / s; }); x.push(M.vocab[sampleTok(p, r)]); }
+      x.push(EOS); return x;
+    }
+    function score(x) {
+      var lp = 0, seen = 0, n = x.length - 1;
+      for (var i = 1; i < x.length; i++) { lp += Math.log(pc(x[i - 1], x[i])); if (M.big.get(x[i - 1] + "\u0001" + x[i])) seen++; }
+      return { ppl: Math.exp(-lp / n), seen: seen, n: n };
+    }
+    function fresh(L) { var x = [BOS]; for (var i = 0; i < L; i++) x.push(MASK); x.push(EOS); return x; }
+    function run() {
+      build();
+      var L = +Lseg(), T = Math.min(Math.round(Tget()), L), r = AB.rng(seed);
+      res = gen(fresh(L), T, r); res.T = T; res.L = L;
+      ar = genAR(L, AB.rng(seed + 1000));
+      sel = null; render();
+    }
+    function cell(tok, cls, data) { return '<td class="' + cls + '"' + (data ? ' data-c="' + data + '"' : "") + ">" + (tok === MASK ? "[M]" : tok) + "</td>"; }
+    function render() {
+      var L = res.L, h = '<tr><th>스텝</th><th class="b">⟨s⟩</th>';
+      for (var i = 1; i <= L; i++) h += "<th>" + i + "</th>";
+      h += '<th class="b">⟨/s⟩</th></tr>';
+      res.rows.forEach(function (row, s) {
+        var last = s === res.rows.length - 1;
+        h += "<tr><th>" + s + "</th>" + cell(BOS, "b");
+        for (var i = 1; i <= L; i++) {
+          var cls = row.x[i] === MASK ? "m" : "", isNew = row.nw.indexOf(i) >= 0, isRm = row.rm.indexOf(i) >= 0;
+          if (isNew) cls += " new"; if (isRm) cls += " rm"; if (last && row.x[i] !== MASK) cls += " fin";
+          if (sel && sel[0] === s && sel[1] === i) cls += " sel";
+          h += cell(row.x[i], cls, s + "," + i);
+        }
+        h += cell(EOS, "b") + "</tr>";
+      });
+      if (showAR) {
+        h += '<tr class="ar"><th>AR</th>' + cell(BOS, "b");
+        for (var j = 1; j <= L; j++) h += cell(ar[j], "arc");
+        h += cell(EOS, "b") + "</tr>";
+      }
+      $("lm-df-tab").innerHTML = h;
+      var sc = score(res.x), sa = score(ar);
+      AB.stat("lm-df-o-calls", res.calls + " / " + L);
+      AB.stat("lm-df-o-k", (L / Math.max(1, res.calls) + res.remasks / Math.max(1, res.calls)).toFixed(2));
+      AB.stat("lm-df-o-ppl", sc.ppl.toFixed(1) + (showAR ? " <small>(AR " + sa.ppl.toFixed(1) + ")</small>" : ""));
+      AB.stat("lm-df-o-seen", sc.seen + " / " + sc.n + (showAR ? " <small>(AR " + sa.seen + ")</small>" : ""));
+      AB.stat("lm-df-o-rm", String(res.remasks));
+      var box = $("lm-df-cand");
+      if (sel) {
+        var row = res.rows[sel[0] + 1], c = row && row.cand[sel[1]];
+        if (c) {
+          box.innerHTML = "스텝 " + (sel[0] + 1) + "에서 위치 " + sel[1] + "의 예측: " + c.map(function (q) { return '<span class="tok">' + M.vocab[q[0]] + " <small>" + (q[1] * 100).toFixed(1) + "%</small></span>"; }).join(" ");
+        } else box.textContent = "이 칸은 다음 스텝 전에 이미 정해져 있어 예측 분포가 없다. [M]인 칸을 누르자.";
+      } else box.textContent = "표의 [M] 칸을 누르면 바로 다음 스텝에서 그 위치에 대한 상위 5개 후보와 확률을 보여 준다.";
+    }
+    $("lm-df-tab").addEventListener("click", function (e) {
+      var td = e.target.closest("td[data-c]"); if (!td) return;
+      var sp = td.dataset.c.split(",").map(Number), s = sp[0], i = sp[1], last = s === res.rows.length - 1;
+      if (last && res.x[i] !== MASK) {
+        // 인필링: 이 칸만 [M]으로 되돌리고 나머지는 고정한 채 다시 채운다
+        var x = res.x.slice(); x[i] = MASK;
+        var g = gen(x, 1, AB.rng(seed * 7 + i + res.rows.length));
+        var base = res.rows.length - 1;
+        res.rows[base] = { x: x.slice(), nw: res.rows[base].nw, rm: res.rows[base].rm.concat([i]), cand: res.rows[base].cand };
+        g.rows.slice(1).forEach(function (rw) { res.rows.push(rw); });
+        res.x = g.x; res.calls += g.calls; sel = null; render(); return;
+      }
+      sel = [s, i]; render();
+    });
+    $("lm-df-go").addEventListener("click", function () { seed++; run(); });
+    $("lm-df-ar").addEventListener("click", function () { showAR = !showAR; this.textContent = showAR ? "자기회귀 숨기기" : "자기회귀와 비교"; render(); });
+    $("lm-ng-corpus").addEventListener("change", function () { run(); });
+    run();
+  })();
+
+  /* =====================================================================
+     SIM 5: Chinchilla 스케일링 법칙
+     ===================================================================== */
+  (function () {
+    var FITS = { h: { E: 1.69, A: 406.4, B: 410.7, a: 0.34, b: 0.28 }, b: { E: 1.8172, A: 482.01, B: 2085.43, a: 0.3478, b: 0.3658 } };
+    var MODELS = [
+      ["GPT-3", 175e9, 300e9], ["Gopher", 280e9, 300e9], ["Chinchilla", 70e9, 1.4e12], ["Llama 2 70B", 70e9, 2e12],
+      ["Llama 3 8B", 8e9, 15e12], ["Llama 3 70B", 70e9, 15e12], ["Llama 3.1 405B", 405e9, 15.6e12], ["Qwen3 0.6B", 0.6e9, 36e12]
+    ];
+    var NX = [7, 13], DY = [8, 14];
+    var fitSeg = AB.seg("lm-sc-fit", function () { upd(); });
+    var showM = $("lm-sc-models"); showM.addEventListener("change", function () { cv.redraw(); });
+    var probe = { N: 175e9, D: 300e9 };
+    var cG = AB.range("lm-sc-c", function (v) { return Math.pow(10, v).toExponential(1).replace("e+", "e"); }, function (v) {
+      probe.D = Math.pow(10, v) / (6 * probe.N); upd();
+    });
+    function F() { return FITS[fitSeg()]; }
+    function L(N, D) { var f = F(); return f.E + f.A / Math.pow(N, f.a) + f.B / Math.pow(D, f.b); }
+    function opt(C) { var f = F(); var G = Math.pow((f.a * f.A) / (f.b * f.B), 1 / (f.a + f.b)); var N = G * Math.pow(C / 6, f.b / (f.a + f.b)); return { N: N, D: C / 6 / N }; }
+    function C() { return Math.pow(10, cG()); }
+    probe.D = C() / (6 * probe.N); // 초기 C 슬라이더 값(≈GPT-3 계산량)에 맞춤
+    var g1 = {};
+    var cv = AB.canvas($("lm-sc-cv"), function (ctx, w, h) {
+      var P = AB.palette();
+      var bx = { x: 58, y: 12, w: w - 58 - 14, h: h - 12 - 46 };
+      var X = function (n) { return bx.x + (Math.log10(n) - NX[0]) / (NX[1] - NX[0]) * bx.w; };
+      var Y = function (d) { return bx.y + bx.h - (Math.log10(d) - DY[0]) / (DY[1] - DY[0]) * bx.h; };
+      g1 = { bx: bx };
+      // 히트맵
+      var cell = 5, lo = 1.75, hi = 4.0;
+      for (var px = 0; px < bx.w; px += cell) for (var py = 0; py < bx.h; py += cell) {
+        var n = Math.pow(10, NX[0] + (px + cell / 2) / bx.w * (NX[1] - NX[0]));
+        var d = Math.pow(10, DY[1] - (py + cell / 2) / bx.h * (DY[1] - DY[0]));
+        var t = 1 - AB.clamp((L(n, d) - lo) / (hi - lo), 0, 1);
+        ctx.fillStyle = AB.heat(0.08 + 0.62 * t * t);
+        ctx.fillRect(bx.x + px, bx.y + py, cell + 0.5, cell + 0.5);
+      }
+      // 등고선 (marching squares)
+      var GN = 90, GM = 70, vals = [], i, j;
+      for (i = 0; i <= GN; i++) { vals.push([]); for (j = 0; j <= GM; j++) vals[i].push(L(Math.pow(10, NX[0] + i / GN * 6), Math.pow(10, DY[0] + j / GM * 6))); }
+      var levels = [1.9, 2.0, 2.2, 2.5, 3.0, 3.5];
+      ctx.save(); ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h); ctx.clip();
+      ctx.strokeStyle = AB.alpha(P.text, 0.35); ctx.lineWidth = 1;
+      var gx = function (i) { return bx.x + i / GN * bx.w; }, gy = function (j) { return bx.y + bx.h - j / GM * bx.h; };
+      levels.forEach(function (lv) {
+        ctx.beginPath();
+        for (i = 0; i < GN; i++) for (j = 0; j < GM; j++) {
+          var a = vals[i][j], b = vals[i + 1][j], c = vals[i + 1][j + 1], d = vals[i][j + 1], pts = [];
+          var edge = function (v1, v2, x1, y1, x2, y2) { if ((v1 - lv) * (v2 - lv) < 0) { var t = (lv - v1) / (v2 - v1); pts.push([x1 + t * (x2 - x1), y1 + t * (y2 - y1)]); } };
+          edge(a, b, i, j, i + 1, j); edge(b, c, i + 1, j, i + 1, j + 1); edge(c, d, i + 1, j + 1, i, j + 1); edge(d, a, i, j + 1, i, j);
+          if (pts.length >= 2) { ctx.moveTo(gx(pts[0][0]), gy(pts[0][1])); ctx.lineTo(gx(pts[1][0]), gy(pts[1][1])); }
+          if (pts.length === 4) { ctx.moveTo(gx(pts[2][0]), gy(pts[2][1])); ctx.lineTo(gx(pts[3][0]), gy(pts[3][1])); }
+        }
+        ctx.stroke();
+      });
+      // 등고선 라벨: 대각선 N=D/... 위치에서 찾기
+      ctx.font = "10.5px " + MONO(); ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      levels.forEach(function (lv) {
+        // 최적 경로(N:D 비율 일정)에 가까운 선 D = 30N 에서 L=lv 지점
+        for (var e = NX[0]; e < NX[1]; e += 0.01) { var n = Math.pow(10, e), d = n * 30; if (Math.log10(d) > DY[1]) break; if (L(n, d) <= lv) { var x = X(n), y = Y(d); ctx.fillStyle = AB.alpha(P.bg, 0.8); ctx.fillRect(x - 13, y - 7, 26, 14); ctx.fillStyle = P.text; ctx.fillText(lv.toFixed(1), x, y); break; } }
+      });
+      // 최적 배분 궤적
+      ctx.setLineDash([6, 5]); ctx.strokeStyle = P.warn; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (var lc = 15; lc <= 30; lc += 0.25) { var o = opt(Math.pow(10, lc)); var xx = X(o.N), yy = Y(o.D); lc === 15 ? ctx.moveTo(xx, yy) : ctx.lineTo(xx, yy); }
+      ctx.stroke(); ctx.setLineDash([]);
+      // 등계산량 선
+      var c = C();
+      ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(X(Math.pow(10, NX[0])), Y(c / 6 / Math.pow(10, NX[0]))); ctx.lineTo(X(Math.pow(10, NX[1])), Y(c / 6 / Math.pow(10, NX[1]))); ctx.stroke();
+      // 모델 점
+      if (showM.checked) {
+        ctx.font = "11px " + FONT(); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        MODELS.forEach(function (m) {
+          var x = X(m[1]), y = Y(m[2]);
+          ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.rect(x - 4, y - 4, 8, 8); ctx.fill();
+          ctx.fillStyle = P.text; var narrow = bx.w < 420;
+          var SH = { "GPT-3": "GPT-3", "Gopher": "Gopher", "Chinchilla": "Chin.", "Llama 2 70B": "L2-70B", "Llama 3 8B": "L3-8B", "Llama 3 70B": "L3-70B", "Llama 3.1 405B": "L3-405B", "Qwen3 0.6B": "Q3-0.6B" };
+          var label = narrow ? SH[m[0]] : m[0];
+          var right = m[0] === "Llama 3 8B" || m[0] === "Chinchilla" || x > bx.x + bx.w - (narrow ? 60 : 90);
+          var dy = { "Gopher": 10, "GPT-3": -8, "Llama 3 70B": 11, "Llama 3.1 405B": -10, "Llama 2 70B": -4, "Chinchilla": 6 }[m[0]] || 0;
+          ctx.textAlign = right ? "right" : "left";
+          ctx.fillText(label, x + (right ? -8 : 8), y + dy);
+        });
+      }
+      // 최적점, 탐침
+      var oo = opt(c);
+      ctx.fillStyle = P.warn; ctx.strokeStyle = P.bg; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(X(oo.N), Y(oo.D), 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      var pxp = X(probe.N), pyp = Y(probe.D);
+      ctx.fillStyle = P.accent; ctx.beginPath(); ctx.moveTo(pxp, pyp - 9); ctx.lineTo(pxp + 9, pyp); ctx.lineTo(pxp, pyp + 9); ctx.lineTo(pxp - 9, pyp); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      // 축
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(bx.x, bx.y); ctx.lineTo(bx.x, bx.y + bx.h); ctx.lineTo(bx.x + bx.w, bx.y + bx.h); ctx.stroke();
+      ctx.font = "11px " + MONO(); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var nl = { 7: "10M", 8: "100M", 9: "1B", 10: "10B", 11: "100B", 12: "1T", 13: "10T" };
+      for (var e = NX[0]; e <= NX[1]; e++) ctx.fillText(nl[e], X(Math.pow(10, e)), bx.y + bx.h + 6);
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      var dl = { 8: "100M", 9: "1B", 10: "10B", 11: "100B", 12: "1T", 13: "10T", 14: "100T" };
+      for (e = DY[0]; e <= DY[1]; e++) ctx.fillText(dl[e], bx.x - 6, Y(Math.pow(10, e)));
+      ctx.font = "12px " + FONT(); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText("파라미터 N", bx.x + bx.w / 2, h - 4);
+      ctx.save(); ctx.translate(13, bx.y + bx.h / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle"; ctx.fillText("학습 토큰 D", 0, 0); ctx.restore();
+      ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = P.warn; ctx.font = "11px " + FONT();
+      ctx.fillText("- - 계산 최적 궤적", bx.x + 8, bx.y + 6);
+    }, { aspect: 0.72, minHeight: 300, maxHeight: 470 });
+    drag(cv.canvas, function (x, y) {
+      var bx = g1.bx; if (!bx) return;
+      var tn = AB.clamp((x - bx.x) / bx.w, 0, 1), td = AB.clamp(1 - (y - bx.y) / bx.h, 0, 1);
+      probe.N = Math.pow(10, NX[0] + tn * 6); probe.D = Math.pow(10, DY[0] + td * 6);
+      var lc = Math.log10(6 * probe.N * probe.D);
+      if (lc < 18 || lc > 27) { lc = AB.clamp(lc, 18, 27); probe.D = Math.pow(10, lc) / 6 / probe.N; }
+      cG.set(lc);
+    });
+    var g2 = {};
+    var cv2 = AB.canvas($("lm-sc-cv2"), function (ctx, w, h) {
+      var P = AB.palette(), c = C(), oo = opt(c), lo = L(oo.N, oo.D);
+      var data = [];
+      for (var e = NX[0]; e <= NX[1] + 1e-9; e += 0.02) { var n = Math.pow(10, e); data.push([n, L(n, c / 6 / n)]); }
+      g2 = AB.chart(ctx, null, {
+        x: [1e7, 1e13], y: [lo - 0.05, lo + 0.75], logX: true, xLabel: "등계산량 선 위의 N (D = C / 6N)", yLabel: "손실 L",
+        xFmt: function (x) { return AB.big(x); },
+        series: [{ data: data, color: P.accent, width: 2.4 }],
+        points: [{ x: oo.N, y: lo, color: P.warn, r: 6, label: "최적" }, { x: probe.N, y: L(probe.N, probe.D), color: P.accent2, r: 6 }]
+      });
+    }, { aspect: 0.36, minHeight: 190, maxHeight: 260 });
+    drag(cv2.canvas, function (x) {
+      var b = g2.box; if (!b) return;
+      var t = AB.clamp((x - b.x) / b.w, 0, 1);
+      probe.N = Math.pow(10, NX[0] + t * 6); probe.D = C() / 6 / probe.N; upd();
+    });
+    $("lm-sc-opt").addEventListener("click", function () { var o = opt(C()); probe.N = o.N; probe.D = o.D; upd(); });
+    function upd() {
+      var c = C(), o = opt(c), lo = L(o.N, o.D), lp = L(probe.N, probe.D);
+      AB.stat("lm-sc-no", AB.big(o.N));
+      AB.stat("lm-sc-do", AB.big(o.D));
+      AB.stat("lm-sc-r", (o.D / o.N).toFixed(1));
+      AB.stat("lm-sc-lo", lo.toFixed(3));
+      AB.stat("lm-sc-p", AB.big(probe.N) + ", " + AB.big(probe.D));
+      AB.stat("lm-sc-pl", lp.toFixed(3) + " <small>(+" + (lp - lo).toFixed(3) + ")</small>");
+      cv.redraw(); cv2.redraw();
+    }
+    upd();
+  })();
+
+  /* =====================================================================
+     SIM 6: DPO 장난감
+     ===================================================================== */
+  (function () {
+    var R = [
+      ["A", "lst[::-1] 또는 lst.reverse()를 쓴다. 전자는 새 리스트, 후자는 제자리 변경."],
+      ["B", "방법이 많다. reversed(), 슬라이싱, 반복문, 재귀, 스택… (장황하게 나열)"],
+      ["C", "lst.sort(reverse=True)를 쓰면 뒤집힌다. (틀린 답: 정렬이 된다)"],
+      ["D", "죄송하지만 그 요청은 도와드릴 수 없습니다."],
+      ["E", "그것도 모르세요? 검색해 보세요."]
+    ];
+    var REF = [0.30, 0.28, 0.20, 0.12, 0.10], LREF = REF.map(Math.log);
+    var RANK = [0, 1, 3, 2, 4]; // 자동 선호에 쓰는 '숨은' 사람 선호 순위 (A > B > D > C > E)
+    var th = LREF.slice(), sel = -1, last = null, nUpd = 0, lastLoss = null, lastSig = null;
+    var bG = AB.range("lm-dpo-b", function (v) { return v.toFixed(2); }, function () { readout(); cv.redraw(); });
+    var lrG = AB.range("lm-dpo-lr", function (v) { return v.toFixed(1); });
+    function pi() { return AB.softmax(th); }
+    function margin(w, l) { return bG() * ((th[w] - th[l]) - (LREF[w] - LREF[l])); }
+    function update(w, l) {
+      var h = margin(w, l), s = AB.sigmoid(h), g = bG() * (1 - s), lr = lrG();
+      th[w] += lr * g; th[l] -= lr * g; nUpd++;
+      var h2 = margin(w, l); lastSig = AB.sigmoid(h2); lastLoss = -Math.log(lastSig);
+    }
+    var geo = {};
+    var cv = AB.canvas($("lm-dpo-cv"), function (ctx, w, h) {
+      var P = AB.palette(), p = pi(), beta = bG();
+      var top = 30, rh = (h - top - 8) / R.length, L = 12, Rr = 70, bw = w - L - Rr;
+      geo = { top: top, rh: rh };
+      ctx.font = "12.5px " + FONT(); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("프롬프트: \"파이썬에서 리스트를 뒤집는 방법은?\"", L, 8);
+      ctx.textAlign = "right"; ctx.fillText("β·log(π/π_ref)", w - 8, 8);
+      var mx = Math.max(0.5, Math.max.apply(null, p) * 1.05);
+      R.forEach(function (r, i) {
+        var y = top + i * rh;
+        var isSel = sel === i, isW = last && last[0] === i, isL = last && last[1] === i;
+        if (isSel) { ctx.fillStyle = AB.alpha(P.ok, 0.12); ctx.fillRect(2, y + 1, w - 4, rh - 2); }
+        ctx.font = "bold 13px " + MONO(); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillStyle = isSel ? P.ok : isW ? P.accent : isL ? P.accent2 : P.text;
+        ctx.fillText(r[0] + (isSel ? " ✓선호" : isW ? " ≻" : isL ? " ✗" : ""), L, y + 4);
+        ctx.font = "12px " + FONT(); ctx.fillStyle = P.dim;
+        var txt = r[1], maxW = w - L - 70 - Rr + 60;
+        while (ctx.measureText(txt).width > maxW && txt.length > 4) txt = txt.slice(0, -2);
+        if (txt !== r[1]) txt = txt.slice(0, -1) + "…";
+        ctx.fillText(txt, L + 62, y + 5);
+        var by = y + 24, bh = Math.max(8, rh - 32);
+        ctx.fillStyle = AB.alpha(P.accent, 0.75);
+        ctx.fillRect(L, by, bw * p[i] / mx, bh);
+        ctx.strokeStyle = P.faint; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5;
+        ctx.strokeRect(L, by, bw * REF[i] / mx, bh); ctx.setLineDash([]);
+        ctx.font = "11px " + MONO(); ctx.fillStyle = P.text; ctx.textBaseline = "middle";
+        var lx = L + bw * Math.max(p[i], REF[i]) / mx + 6;
+        ctx.fillText(p[i].toFixed(3), Math.min(lx, L + bw - 40), by + bh / 2);
+        var rw = beta * Math.log(p[i] / REF[i]);
+        ctx.textAlign = "right"; ctx.fillStyle = rw >= 0 ? P.ok : P.bad;
+        ctx.fillText((Math.abs(rw) < 0.005 ? "+0.00" : (rw >= 0 ? "+" : "") + rw.toFixed(2)), w - 8, by + bh / 2);
+      });
+    }, { aspect: 0.62, minHeight: 330, maxHeight: 400 });
+    cv.canvas.addEventListener("pointerdown", function (e) {
+      var r = cv.canvas.getBoundingClientRect(), y = e.clientY - r.top, i = Math.floor((y - geo.top) / geo.rh);
+      if (i < 0 || i >= R.length) return;
+      if (sel < 0) sel = i;
+      else if (sel === i) sel = -1;
+      else { last = [sel, i]; update(sel, i); sel = -1; }
+      readout(); cv.redraw();
+    });
+    $("lm-dpo-rep").addEventListener("click", function () { if (!last) return; for (var k = 0; k < 10; k++) update(last[0], last[1]); readout(); cv.redraw(); });
+    var arng = AB.rng(11);
+    $("lm-dpo-auto").addEventListener("click", function () {
+      for (var k = 0; k < 30; k++) {
+        var a = Math.floor(arng() * 5), b = Math.floor(arng() * 4); if (b >= a) b++;
+        var w = RANK.indexOf(a) < RANK.indexOf(b) ? a : b, l = w === a ? b : a;
+        last = [w, l]; update(w, l);
+      }
+      readout(); cv.redraw();
+    });
+    $("lm-dpo-reset").addEventListener("click", function () { th = LREF.slice(); sel = -1; last = null; nUpd = 0; lastLoss = null; lastSig = null; readout(); cv.redraw(); });
+    function readout() {
+      var p = pi(), kl = 0; p.forEach(function (v, i) { kl += v * Math.log(v / REF[i]); });
+      AB.stat("lm-dpo-pair", last ? R[last[0]][0] + " ≻ " + R[last[1]][0] : (sel >= 0 ? R[sel][0] + " ≻ ?" : "—"));
+      AB.stat("lm-dpo-loss", lastLoss == null ? "—" : lastLoss.toFixed(3));
+      AB.stat("lm-dpo-sig", lastSig == null ? "—" : lastSig.toFixed(3));
+      AB.stat("lm-dpo-kl", Math.max(0, kl).toFixed(4) + " <small>nats</small>");
+      AB.stat("lm-dpo-n", nUpd);
+    }
+    readout();
+  })();
+})();
+</script>
+</body>
+</html>

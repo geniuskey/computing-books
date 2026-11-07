@@ -1,0 +1,1405 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>머신러닝 기초 · AIBook</title>
+<meta name="description" content="AI·머신러닝·딥러닝·생성형 AI의 관계, 지도·비지도·강화·자기지도학습, 분류·회귀·군집화(k-means), 학습/검증/테스트 분할, 과적합과 편향-분산, 데이터 누수, 특성 공학, 교차 검증, 혼동 행렬과 정밀도·재현율·F1, ROC·AUC와 PR 곡선, 회귀 지표, 기준선, ML 프로젝트 흐름까지 직접 계산하는 시뮬레이터로 배운다.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .ml-drag { touch-action: none; cursor: crosshair; }
+  .ml-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ml-mini { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin: 0; }
+  .ml-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ml-two > div { position: relative; min-width: 0; }
+  .ml-two > div + div { border-left: 1px solid var(--border); }
+  @media (max-width: 680px) { .ml-two { grid-template-columns: minmax(0, 1fr); } .ml-two > div + div { border-left: 0; border-top: 1px solid var(--border); } }
+  .ml-cap { position: absolute; left: 10px; top: 6px; font-size: 12px; color: var(--text-dim); pointer-events: none; background: color-mix(in srgb, var(--canvas-bg) 75%, transparent); padding: 0 6px; border-radius: 4px; }
+  .ml-cm { border-collapse: collapse; margin: 0 auto; font-variant-numeric: tabular-nums; }
+  .ml-cm th, .ml-cm td { border: 1px solid var(--border); padding: 6px 10px; text-align: center; font-size: 13.5px; }
+  .ml-cm td { font-family: var(--mono); font-weight: 600; min-width: 74px; color: var(--text); }
+  .ml-cm td small { display: block; font-family: var(--font); font-weight: 400; font-size: 11px; color: var(--text-dim); }
+  .ml-cm th { font-weight: 600; color: var(--text-dim); background: var(--surface); }
+  .ml-folds { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); line-height: 1.6; margin: 0; padding: 10px 14px; word-break: break-word; }
+  .ml-check { list-style: none; padding-left: 0; }
+  .ml-check li { padding-left: 28px; position: relative; margin: 6px 0; }
+  .ml-check li::before { content: "☐"; position: absolute; left: 4px; color: var(--accent); }
+  figure.diagram svg.ml-narrow { max-width: 540px; margin: 0 auto; display: block; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="ml">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 00</div>
+    <h1>머신러닝 기초: 데이터에서 규칙을 배운다</h1>
+    <p class="lead">스팸 메일을 거르는 규칙을 사람이 일일이 적는 대신, 스팸과 정상 메일 수만 통을 보여 주고 컴퓨터가 규칙을 스스로 찾게 할 수 있을까? 이것이 머신러닝이다. 이 책의 나머지 장(벡터, 뉴런, 학습, 트랜스포머, LLM…)은 모두 이 한 가지 아이디어 위에 서 있다. 이 장에서는 수식을 최소화하고, 대신 "모델을 어떻게 평가하고 어떻게 속지 않을 것인가"를 직접 계산해 보며 익힌다. 정확도 99%짜리 암 검진 모델이 실제로는 쓸모없을 수 있는 이유를 설명할 수 있다면 이 장의 목표를 달성한 것이다.</p>
+    <ul class="objectives">
+      <li>AI ⊃ 머신러닝 ⊃ 딥러닝의 포함관계와 생성형 AI·LLM의 위치, 판별 모델과 생성 모델의 차이를 설명할 수 있다.</li>
+      <li>지도·비지도·강화·자기지도학습을 데이터 형태와 학습 신호로 구분하고, LLM 사전학습이 왜 자기지도인지 안다.</li>
+      <li>분류·회귀·군집화를 구분하고 k-means를 손으로 몇 단계 돌릴 수 있다.</li>
+      <li>학습/검증/테스트 분할의 역할, 과적합·과소적합, 편향-분산 분해를 수치로 설명할 수 있다.</li>
+      <li>데이터 누수의 네 가지 유형을 알아보고 교차 검증을 데이터 구조(불균형·시간·그룹)에 맞게 고를 수 있다.</li>
+      <li>혼동 행렬에서 정확도·정밀도·재현율·F1·ROC-AUC·PR 곡선을 계산하고, 불균형 데이터에서 어떤 지표를 봐야 하는지 판단할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="ai-ml-dl">
+    <h2>AI, 머신러닝, 딥러닝, 생성형 AI</h2>
+    <p>뉴스에서는 AI, 머신러닝, 딥러닝, 생성형 AI가 거의 같은 뜻처럼 쓰이지만 범위가 다르다. 가장 넓은 <span class="term">인공지능</span><span class="en">(Artificial Intelligence, AI)</span>은 "사람이라면 지능이 필요하다고 할 일을 기계가 하게 만드는 모든 기술"이다. 체스 프로그램의 탐색 알고리즘, 사람이 규칙을 적어 넣은 전문가 시스템도 AI다. 그 안의 <span class="term">머신러닝</span><span class="en">(Machine Learning, ML)</span>은 규칙을 사람이 쓰지 않고 <strong>데이터로부터 학습</strong>하는 방법들이다. 다시 그 안의 <span class="term">딥러닝</span><span class="en">(Deep Learning, DL)</span>은 여러 층의 신경망(<a href="neuron.html">2장</a>)을 쓰는 머신러닝이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 480 400" class="ml-narrow" role="img" aria-label="AI가 ML을, ML이 DL을 포함하고, 생성 모델 영역이 DL 경계를 가로지르며 LLM은 DL과 생성 모델의 교집합에 있는 포함관계 그림">
+        <rect x="8" y="8" width="464" height="384" rx="22" class="f-surface" style="stroke:var(--border)"/>
+        <text x="24" y="34" class="t" style="font-weight:700;font-size:16px">인공지능 (AI)</text>
+        <text x="24" y="54" class="t-dim" style="font-size:13px">규칙 기반 전문가 시스템, 탐색(체스 α-β), 계획</text>
+        <rect x="22" y="66" width="436" height="318" rx="18" class="f-acc-soft" style="stroke:var(--accent);stroke-opacity:.5"/>
+        <text x="38" y="92" class="t-acc" style="font-weight:700;font-size:16px">머신러닝 (ML)</text>
+        <text x="38" y="112" class="t-dim" style="font-size:13px">선형·로지스틱 회귀, 결정 트리, SVM, k-means</text>
+        <rect x="38" y="128" width="404" height="192" rx="16" class="f-acc-soft" style="stroke:var(--accent);stroke-width:1.6"/>
+        <text x="54" y="154" class="t-acc" style="font-weight:700;font-size:16px">딥러닝 (DL)</text>
+        <text x="54" y="174" class="t-dim" style="font-size:13px">MLP, CNN, RNN, BERT(인코더)</text>
+        <ellipse cx="240" cy="304" rx="205" ry="72" class="f-acc2-soft" style="stroke:var(--accent-2);stroke-width:1.8;stroke-dasharray:6 4;fill-opacity:.55"/>
+        <text x="240" y="256" text-anchor="middle" class="t" style="font-weight:700;font-size:14px;fill:var(--accent-2)">생성 모델 / 생성형 AI</text>
+        <text x="240" y="276" text-anchor="middle" class="t-dim" style="font-size:13px">GAN, VAE, 확산 모델</text>
+        <rect x="195" y="284" width="90" height="28" rx="9" class="f-elev" style="stroke:var(--accent-2);stroke-width:2"/>
+        <text x="240" y="303" text-anchor="middle" class="t" style="font-weight:700;font-size:14px">LLM</text>
+        <text x="240" y="346" text-anchor="middle" class="t-dim" style="font-size:12.5px">고전(딥러닝 아님): GMM, 나이브 베이즈, n-gram</text>
+      </svg>
+      <figcaption><b>그림 0-1.</b> 포함관계. AI ⊃ ML ⊃ DL은 깔끔한 부분집합 관계지만, '생성 모델'(점선)은 학습 방식이 아니라 <em>무엇을 모델링하느냐</em>에 따른 다른 축의 분류라서 ML과 DL의 경계를 가로지른다. 오늘날 '생성형 AI'라 부르는 것의 대부분(확산 모델, LLM)은 딥러닝 안에 있고, LLM은 딥러닝 ∩ 생성 모델에 속한다.</figcaption>
+    </figure>
+
+    <h3 id="rule-vs-learning">규칙 기반 vs 학습 기반</h3>
+    <p>전통적인 프로그래밍은 <strong>규칙 + 데이터 → 답</strong>이다. 머신러닝은 방향을 뒤집어 <strong>데이터 + 답 → 규칙</strong>을 만든다. 예를 들어 스팸 필터를 규칙으로 만들면 "제목에 '무료'가 있고 링크가 3개 이상이면 스팸" 같은 조건을 사람이 계속 추가해야 한다. 스팸 발송자가 '무.료'라고 쓰면 규칙은 바로 무력해진다. 학습 기반이라면 '스팸/정상' 표시가 붙은 메일 수만 통에서 단어별 가중치를 자동으로 찾고, 새 수법이 나오면 새 데이터로 다시 학습하면 된다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>규칙 기반 (전통적 프로그래밍)</th><th>학습 기반 (머신러닝)</th></tr></thead>
+      <tbody>
+        <tr><td>입력 → 출력</td><td>규칙 + 데이터 → 답</td><td>데이터 + 답(또는 신호) → 규칙(모델)</td></tr>
+        <tr><td>지식의 출처</td><td>전문가가 명시적으로 작성</td><td>예시 데이터에서 통계적으로 추출</td></tr>
+        <tr><td>강점</td><td>설명 가능, 데이터 불필요, 동작 보장</td><td>규칙으로 쓰기 어려운 패턴(이미지·음성·언어) 처리, 변화에 재학습으로 대응</td></tr>
+        <tr><td>약점</td><td>예외가 폭발, 유지보수 비용, 애매한 경계</td><td>데이터 품질에 종속, 오류를 확률적으로 냄, 설명 어려움</td></tr>
+        <tr><td>좋은 예</td><td>세금 계산, 주민번호 형식 검사</td><td>얼굴 인식, 번역, 추천, 사기 탐지</td></tr>
+      </tbody>
+    </table></div>
+    <p>실무에서는 둘을 섞는다. 예를 들어 LLM 서비스도 출력 형식 검사, 금지어 필터, 권한 확인은 규칙으로 처리한다. "머신러닝이 필요한가?"의 첫 판단 기준은 <strong>사람이 규칙을 적을 수 있는가</strong>이다. 적을 수 있고 규칙이 잘 바뀌지 않는다면 규칙이 더 싸고 안전하다.</p>
+
+    <h3 id="discriminative-generative">판별 모델과 생성 모델</h3>
+    <p>모델이 <em>무엇을</em> 학습하느냐에 따라 두 부류로 나눌 수 있다. <span class="term">판별 모델</span><span class="en">(discriminative model)</span>은 입력 \(x\)가 주어졌을 때 답 \(y\)의 확률 \(p(y\mid x)\), 또는 그냥 경계선만 배운다. "이 사진이 고양이일 확률 0.93"처럼. <span class="term">생성 모델</span><span class="en">(generative model)</span>은 데이터 자체의 분포 \(p(x)\) 또는 \(p(x, y)\)를 배운다. 분포를 알면 그 분포에서 <strong>새 샘플을 뽑을</strong> 수 있다. 그래서 "생성"이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>판별 모델</th><th>생성 모델</th></tr></thead>
+      <tbody>
+        <tr><td>학습 대상</td><td>\(p(y\mid x)\) 또는 결정 경계</td><td>\(p(x)\), \(p(x,y)\), 또는 \(p(x\mid \text{조건})\)</td></tr>
+        <tr><td>할 수 있는 일</td><td>분류·회귀 (주어진 x에 라벨 붙이기)</td><td>새 데이터 샘플링, 확률 평가, (베이즈 규칙으로) 분류도 가능</td></tr>
+        <tr><td>고전적 예</td><td>로지스틱 회귀, SVM, 결정 트리</td><td>나이브 베이즈, 가우스 혼합(GMM), 은닉 마르코프 모델, n-gram 언어 모델</td></tr>
+        <tr><td>딥러닝 예</td><td>이미지 분류 CNN, BERT 감성 분류기</td><td>GAN, VAE, 확산 모델, GPT류 LLM</td></tr>
+        <tr><td>난이도 (같은 데이터)</td><td>상대적으로 쉬움: 경계만 알면 됨</td><td>어려움: 데이터의 모든 구조를 알아야 함</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "생성 모델 = 생성형 AI"</strong>
+      <p>통계적 의미의 생성 모델(나이브 베이즈처럼 \(p(x,y)\)를 모델링)은 1990년대부터 스팸 필터에 쓰였지만 아무도 '생성형 AI'라 부르지 않았다. 오늘날 '생성형 AI'<span class="en">(Generative AI)</span>는 텍스트·이미지·음성처럼 <strong>사람이 쓸 만한 고차원 콘텐츠를 만들어 내는</strong> 대형 딥러닝 생성 모델을 가리키는 제품/산업 용어에 가깝다. 반대로, 생성형 AI 모델로도 판별 작업(감성 분류 등)을 할 수 있다. 프롬프트에 "긍정/부정 중 하나로 답하라"고 시키면 된다.</p>
+    </div>
+
+    <h3 id="where-llm">LLM은 어디에 속하나</h3>
+    <p>대형 언어 모델(LLM, <a href="llm.html">7장</a>)은 다음 토큰의 확률 \(p(x_t\mid x_{&lt;t})\)를 배우는 <strong>자기회귀 생성 모델</strong>이고, 트랜스포머(<a href="transformer.html">6장</a>)라는 <strong>심층 신경망</strong>으로 구현된다. 따라서 AI ⊃ ML ⊃ DL ⊃ (DL ∩ 생성 모델) ∋ LLM이다. 학습 방식으로 보면 한 가지가 아니다. 사전학습은 <a href="#self-supervised">자기지도학습</a>, 지시 따르기 미세조정(SFT)은 <a href="#supervised">지도학습</a>, 사람 선호나 검증 가능한 보상으로 다듬는 단계는 <a href="#reinforcement">강화학습</a>이다(<a href="llm.html#lm-align">7장</a>). 바로 다음 절에서 이 세 가지를 구분한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="learning-types">
+    <h2>학습 방식: 지도·비지도·강화·자기지도</h2>
+    <p>머신러닝 방법은 "학습 신호가 어디서 오는가"로 나누는 것이 가장 기본이다. 같은 신경망이라도 어떤 신호로 학습하느냐에 따라 전혀 다른 일을 하게 된다.</p>
+
+    <h3 id="supervised">지도학습 <span class="en">(Supervised Learning)</span></h3>
+    <p>입력 \(x\)와 정답 \(y\)의 쌍 \(\{(x_i, y_i)\}_{i=1}^{N}\)이 주어지고, \(f(x)\approx y\)가 되게 하는 함수 \(f\)를 찾는다. 정답을 <span class="term">라벨</span><span class="en">(label)</span> 또는 타깃이라 한다. 메일 → 스팸 여부, 집 정보 → 가격, 이미지 → 고양이/개. 학습 신호가 가장 명확하고 성능 측정도 쉽지만, <strong>라벨을 붙이는 비용</strong>이 병목이다. 의료 영상 1장에 전문의 판독 수 분이 걸린다면 10만 장이면 수천 시간이다.</p>
+
+    <h3 id="unsupervised">비지도학습 <span class="en">(Unsupervised Learning)</span></h3>
+    <p>라벨 없이 \(\{x_i\}\)만 있다. 데이터 안의 구조를 찾는다. 비슷한 고객끼리 묶기(<a href="#clustering">군집화</a>), 고차원 데이터를 2차원으로 줄여 보기(차원 축소, PCA), 평소와 다른 거래 찾기(이상 탐지), 데이터 분포 자체를 추정하기(밀도 추정)가 대표적이다. "정답"이 없으므로 결과의 좋고 나쁨을 판단하기가 어렵다는 것이 근본적 한계다.</p>
+
+    <h3 id="reinforcement">강화학습 <span class="en">(Reinforcement Learning, RL)</span></h3>
+    <p><span class="term">에이전트</span>가 환경에서 행동 \(a\)를 하고, 그 결과로 <span class="term">보상</span><span class="en">(reward)</span> \(r\)이라는 스칼라 점수를 받는다. 정답 행동은 알려 주지 않고 "얼마나 좋았는지"만 알려 준다. 게다가 보상은 늦게 온다. 바둑에서 100수 뒤에 이겼다면 어느 수가 좋았던 걸까(신용 할당 문제)? 그래서 지도학습보다 학습이 훨씬 비효율적이고 불안정하지만, 정답을 모르는 문제(게임, 로봇 제어)에서 사람보다 나은 전략을 찾을 수 있다. LLM에서는 사람 선호 점수(RLHF)나 정답 검증기(RLVR, <a href="llm.html#lm-rlvr">7장</a>)를 보상으로 써서 모델을 다듬는다. 에이전트 학습의 GRPO는 <a href="agent.html#ag-grpo">11장</a>에서 다룬다.</p>
+
+    <h3 id="self-supervised">자기지도학습 <span class="en">(Self-Supervised Learning)</span></h3>
+    <p>라벨을 사람이 붙이지 않고 <strong>데이터 자체에서 만들어 내는</strong> 지도학습이다. 형식상으로는 \((x, y)\) 쌍으로 학습하니 지도학습이지만, \(y\)가 원본 데이터의 일부라서 라벨 비용이 0이다. 그래서 인터넷 규모의 데이터를 쓸 수 있다.</p>
+    <ul>
+      <li><strong>다음 토큰 예측</strong>(GPT류, <a href="llm.html#lm-pretrain">7장</a>): 문장 "고양이가 매트 위에 앉았다"에서 입력 "고양이가 매트 위에" → 타깃 "앉았다". 문장 하나가 토큰 수만큼의 학습 예제가 된다. 약 15조 토큰으로 사전학습했다면(Llama 3, 2024) 그만큼의 '라벨'이 공짜로 생긴 셈이다.</li>
+      <li><strong>마스크 예측</strong>(BERT): 토큰의 약 15%를 가리고 원래 토큰을 맞힌다.</li>
+      <li><strong>대조 학습</strong>(CLIP 등): 같은 이미지의 두 변형, 또는 짝인 이미지-캡션은 가깝게, 짝이 아닌 것은 멀게 임베딩한다(<a href="embedding.html">4장</a>).</li>
+    </ul>
+    <div class="callout warn"><strong>흔한 오해: "LLM 사전학습은 비지도학습이다"</strong>
+      <p>예전 문헌에서는 사람이 붙인 라벨이 없다는 이유로 '비지도 사전학습'이라 부르기도 했다. 하지만 학습 과정은 명확한 정답 토큰에 대한 교차 엔트로피 최소화(<a href="training.html">3장</a>)로, 지도학습과 수식이 똑같다. 달라진 것은 정답의 <em>출처</em>뿐이다. 그래서 오늘날에는 자기지도학습이라는 이름이 표준이다.</p>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>데이터 형태</th><th>학습 신호</th><th>대표 예</th><th>주된 어려움</th></tr></thead>
+      <tbody>
+        <tr><td>지도</td><td>\((x, y)\) 쌍</td><td>정답 라벨과의 오차</td><td>스팸 분류, 집값 예측, 이미지 분류, LLM의 SFT</td><td>라벨 비용, 라벨 오류</td></tr>
+        <tr><td>비지도</td><td>\(x\)만</td><td>데이터 구조 자체(거리, 밀도, 재구성 오차)</td><td>고객 군집화, PCA, 이상 탐지</td><td>"좋은 결과"의 기준이 모호</td></tr>
+        <tr><td>강화</td><td>상태·행동·보상의 궤적</td><td>스칼라 보상 (지연·희소)</td><td>게임 AI, 로봇 제어, RLHF/RLVR</td><td>신용 할당, 탐색, 불안정성, 보상 해킹</td></tr>
+        <tr><td>자기지도</td><td>\(x\)만 (라벨을 \(x\)에서 생성)</td><td>가린/다음 부분 예측, 대조</td><td>LLM 사전학습, BERT, CLIP</td><td>거대한 계산량, 데이터 품질</td></tr>
+      </tbody>
+    </table></div>
+    <p>중간 형태도 많다. 소수의 라벨과 다량의 무라벨 데이터를 함께 쓰는 <span class="term">준지도학습</span><span class="en">(semi-supervised)</span>, 큰 모델이 붙인 라벨로 작은 모델을 학습시키는 <span class="term">지식 증류</span><span class="en">(distillation)</span>가 그 예다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="tasks">
+    <h2>분류, 회귀, 군집화</h2>
+    <p>학습 방식이 "신호가 어디서 오나"라면, <span class="term">태스크</span>는 "무엇을 출력하나"다. 가장 기본적인 세 가지를 보자.</p>
+
+    <h3 id="classification">분류 <span class="en">(Classification)</span></h3>
+    <p>출력이 정해진 <strong>범주 중 하나</strong>다. 스팸/정상(이진 분류), 숫자 0~9(다중 분류), 한 영화에 여러 장르 태그(다중 라벨 분류). 대부분의 분류 모델은 사실 각 클래스의 <strong>점수나 확률</strong>을 출력하고, 그 위에 <span class="term">임계값</span><span class="en">(threshold)</span>이나 argmax를 적용해 최종 클래스를 정한다. 예를 들어 스팸 확률 0.73이 나왔을 때 임계값이 0.5면 스팸, 0.9면 정상으로 판정한다. 이 임계값을 어떻게 고르느냐가 뒤의 <a href="#metrics">평가 지표</a> 절의 핵심 주제다. LLM의 다음 토큰 예측도 어휘 크기(예: 약 128,000개)만큼의 클래스를 가진 분류 문제다.</p>
+
+    <h3 id="regression">회귀 <span class="en">(Regression)</span></h3>
+    <p>출력이 <strong>연속적인 수</strong>다. 집값, 내일 기온, 배송 소요 시간. 평가도 "맞았다/틀렸다"가 아니라 "얼마나 차이 나는가"로 한다(<a href="#regression-metrics">회귀 지표</a>). 이름 때문에 헷갈리기 쉬운 점: <strong>로지스틱 회귀는 분류 모델</strong>이다. 확률이라는 연속값을 회귀하듯 출력하고, 임계값으로 클래스를 정하기 때문에 붙은 역사적 이름이다.</p>
+
+    <h3 id="clustering">군집화 <span class="en">(Clustering)</span>와 k-means</h3>
+    <p>라벨 없이 비슷한 데이터끼리 묶는 비지도 태스크다. 가장 유명한 알고리즘인 <span class="term">k-means</span>는 \(k\)개의 <span class="term">중심</span><span class="en">(centroid)</span>을 두고 두 단계를 반복한다.</p>
+    <ol>
+      <li><strong>할당 단계</strong>: 각 점을 가장 가까운(유클리드 거리) 중심의 군집에 넣는다.</li>
+      <li><strong>갱신 단계</strong>: 각 중심을 자기 군집에 속한 점들의 평균 위치로 옮긴다.</li>
+    </ol>
+    <p>할당이 더 이상 바뀌지 않으면 멈춘다. 이 과정은 다음 <span class="term">군집 내 제곱합</span><span class="en">(WCSS, inertia)</span>을 매 단계 줄이거나 그대로 둔다. 할당 단계는 각 점에 더 가까운 중심을 고르니 줄어들고, 갱신 단계는 평균이 제곱 거리 합을 최소화하는 점이니 줄어든다. 값이 0 이상이고 할당 조합이 유한하므로 반드시 수렴한다.</p>
+    <div class="formula">$$J = \sum_{j=1}^{k}\sum_{x_i \in C_j} \lVert x_i - \mu_j \rVert^2$$
+      <div class="where">\(C_j\)는 \(j\)번째 군집, \(\mu_j\)는 그 중심(평균). <a href="vector.html">1장</a>의 유클리드 거리 제곱이다.</div>
+    </div>
+    <p><strong>손 계산 예</strong>: 1차원 점 {1, 2, 3, 10, 11, 12}, k = 2, 초기 중심 \(\mu_1=1,\ \mu_2=3\). 할당: 1→\(\mu_1\); 2는 두 중심에서 같은 거리 1이라 낮은 번호 \(\mu_1\)로(동점 규칙); 3, 10, 11, 12→\(\mu_2\). 갱신: \(\mu_1 = (1+2)/2 = 1.5\), \(\mu_2=(3+10+11+12)/4=9\). 다시 할당: 3은 \(|3-1.5|=1.5 &lt; |3-9|=6\)이므로 \(\mu_1\)으로 이동. 갱신: \(\mu_1=2,\ \mu_2=11\). 다음 할당은 바뀌지 않아 수렴, \(J = (1+0+1)+(1+0+1) = 4\).</p>
+
+    <div class="sim" id="sim-ml-kmeans">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>k-means를 한 단계씩</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ml-cv-km" class="ml-drag"></canvas><span class="hint">점·중심(◆)을 끌어 옮기기 · 빈 곳 클릭 = 점 추가</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>군집 수 k <output id="ml-km-k-out"></output></span><input type="range" id="ml-km-k" min="1" max="6" step="1" value="3"></label>
+          <div class="ctrl"><span>한 단계</span><div class="ml-btns"><button class="btn" id="ml-km-assign">① 할당</button><button class="btn" id="ml-km-update">② 중심 갱신</button></div></div>
+          <div class="ctrl"><span>반복</span><div class="ml-btns"><button class="btn primary" id="ml-km-run">수렴까지</button><button class="btn" id="ml-km-init">중심 다시 뽑기</button></div></div>
+          <div class="ctrl"><span>데이터</span><div class="ml-btns"><button class="btn" data-mlkm="blobs">덩어리 3개</button><button class="btn" data-mlkm="uneven">크기 불균등</button><button class="btn" data-mlkm="rings">고리 모양</button></div></div>
+          <p class="ml-mini">초기 중심은 무작위 데이터 점에서 뽑는다(시드 고정, '다시 뽑기'마다 바뀜).</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">WCSS J</span><span class="v" id="ml-km-j">—</span></div>
+        <div class="stat"><span class="k">반복 횟수</span><span class="v" id="ml-km-it">0</span></div>
+        <div class="stat"><span class="k">다음에 할 단계</span><span class="v" id="ml-km-next" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="ml-km-st" style="font-size:15px">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① '① 할당'과 '② 중심 갱신'을 번갈아 눌러 J가 절대 늘지 않음을 확인하자. ② '중심 다시 뽑기'를 여러 번 누르면 같은 데이터에서도 수렴한 J가 달라진다. k-means는 <strong>지역 최적</strong>에 빠질 수 있어 실무에서는 초기화를 여러 번(예: 10번) 해서 J가 가장 낮은 결과를 쓴다(scikit-learn의 기본값은 k-means++ 초기화). ③ k를 1→6으로 올리면 J는 계속 줄어든다. k = 점 개수면 J = 0이다. 그러니 J만 보고 k를 고를 수 없다. 꺾이는 지점(엘보)을 보거나 실루엣 점수 같은 다른 기준을 쓴다. ④ '고리 모양'에서는 k-means가 안쪽 원과 바깥 고리를 나누지 못한다. 중심과의 거리만 보므로 군집이 대략 둥근 덩어리라고 가정하기 때문이다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>태스크</th><th>출력</th><th>예</th><th>대표 지표</th><th>학습 방식</th></tr></thead>
+      <tbody>
+        <tr><td>분류</td><td>범주 (또는 클래스별 확률)</td><td>스팸, 질병 유무, 다음 토큰</td><td>정확도, 정밀도/재현율, F1, AUC</td><td>지도</td></tr>
+        <tr><td>회귀</td><td>연속 실수</td><td>집값, 수요, 소요 시간</td><td>MAE, RMSE, R²</td><td>지도</td></tr>
+        <tr><td>군집화</td><td>군집 번호 (의미는 사후 해석)</td><td>고객 세분화, 문서 묶기</td><td>WCSS, 실루엣 (정답이 있으면 ARI)</td><td>비지도</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: 군집화와 분류는 같다</strong>
+      <p>둘 다 데이터를 그룹으로 나누지만 분류는 <strong>미리 정해진 이름표</strong>(스팸/정상)를 맞히는 지도학습이고, 군집화는 이름표 없이 그룹을 <strong>발견</strong>하는 비지도학습이다. k-means가 낸 "군집 2"가 무엇을 뜻하는지는 사람이 나중에 해석해야 하며, 다시 실행하면 번호가 바뀔 수도 있다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="data-split">
+    <h2>학습 / 검증 / 테스트 분할</h2>
+    <p>모델의 진짜 목표는 이미 본 데이터를 잘 맞히는 것이 아니라 <strong>처음 보는 데이터</strong>에서 잘하는 것, 곧 <span class="term">일반화</span><span class="en">(generalization)</span>다. 이를 측정하려면 학습에 쓰지 않은 데이터가 필요하다. 그래서 데이터를 세 덩어리로 나눈다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 480 240" class="ml-narrow" role="img" aria-label="데이터를 학습 70%, 검증 15%, 테스트 15%로 나누고 각각의 역할을 표시한 그림">
+        <text x="240" y="22" text-anchor="middle" class="t-dim" style="font-size:13px">전체 데이터 · 분할은 가장 먼저 (전처리보다도 먼저)</text>
+        <rect x="10" y="34" width="320" height="52" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="334" y="34" width="66" height="52" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <rect x="404" y="34" width="66" height="52" rx="8" class="f-warn-soft" style="stroke:var(--warn)"/>
+        <text x="170" y="66" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">학습 70%</text>
+        <text x="367" y="57" text-anchor="middle" class="t" style="font-weight:700;font-size:13px">검증</text>
+        <text x="367" y="76" text-anchor="middle" class="t" style="font-size:13px">15%</text>
+        <text x="437" y="57" text-anchor="middle" class="t" style="font-weight:700;font-size:13px">테스트</text>
+        <text x="437" y="76" text-anchor="middle" class="t" style="font-size:13px">15%</text>
+        <rect x="14" y="108" width="14" height="14" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="36" y="120" class="t" style="font-size:14px"><tspan style="font-weight:700">학습</tspan>: 파라미터(가중치)를 맞춘다 · 매 스텝</text>
+        <rect x="14" y="138" width="14" height="14" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="36" y="150" class="t" style="font-size:14px"><tspan style="font-weight:700">검증</tspan>: 모델·하이퍼파라미터 선택 · 여러 번</text>
+        <rect x="14" y="168" width="14" height="14" rx="3" class="f-warn-soft" style="stroke:var(--warn)"/>
+        <text x="36" y="180" class="t" style="font-size:14px"><tspan style="font-weight:700">테스트</tspan>: 최종 성능 보고만 · 딱 한 번</text>
+        <text x="240" y="222" text-anchor="middle" class="t-dim" style="font-size:13px">비유: 학습 = 연습문제, 검증 = 모의고사, 테스트 = 수능</text>
+      </svg>
+      <figcaption><b>그림 0-2.</b> 세 분할의 역할. 비율은 데이터 양에 따라 다르다. 수천 개 규모면 60/20/20이나 70/15/15, 수백만 개면 98/1/1이어도 검증·테스트 각각 수만 개라 충분하다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>분할</th><th>누가 보나</th><th>무엇을 결정하나</th><th>몇 번 쓰나</th></tr></thead>
+      <tbody>
+        <tr><td>학습 <span class="en">(training)</span></td><td>최적화 알고리즘</td><td>가중치, 회귀 계수, 트리 분기</td><td>매 스텝</td></tr>
+        <tr><td>검증 <span class="en">(validation, dev)</span></td><td>사람(또는 튜닝 알고리즘)</td><td>모델 종류, 차수, 학습률, 규제 강도, 조기 종료 시점, 임계값</td><td>여러 번</td></tr>
+        <tr><td>테스트 <span class="en">(test, held-out)</span></td><td>아무도 (마지막에만)</td><td>아무것도 결정하지 않음: 성능을 <em>보고</em>만 함</td><td>한 번</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 id="test-once">"테스트 세트는 한 번만" 원칙</h3>
+    <p>검증 세트 점수를 보고 모델을 고르는 순간, 그 점수는 낙관적으로 편향된다. 우연히 그 세트에 잘 맞은 모델이 뽑히기 때문이다. 극단적인 예로, <strong>동전 던지기로 예측하는 쓸모없는 분류기 100개</strong>를 테스트 샘플 100개로 각각 평가하면 각 정확도는 평균 50%, 표준편차 \(\sqrt{0.5\cdot0.5/100}=5\%\)다. 그런데 그중 최고를 고르면 그 점수의 기댓값은 <strong>약 62.5%</strong>다(시뮬레이션으로 확인한 값). 아무것도 배우지 않은 모델이 "12.5%p 더 낫다"고 보고되는 것이다.</p>
+    <p>그래서 선택은 검증 세트로 하고, 테스트 세트는 모든 결정이 끝난 뒤 <strong>한 번</strong>만 열어 본다. 테스트 점수를 보고 다시 모델을 고친다면, 그 테스트 세트는 이제 검증 세트가 된 것이며 새 테스트 세트가 필요하다. 공개 벤치마크에서 수많은 논문이 같은 테스트 세트로 경쟁하는 것도 사회 전체가 테스트 세트에 과적합하는 효과를 낳는다. LLM은 여기에 더해 벤치마크 문제가 학습 데이터에 섞여 들어가는 <a href="#data-leakage">오염(누수)</a> 문제까지 있다.</p>
+    <div class="callout tip"><strong>테스트 점수의 오차 막대</strong>
+      <p>테스트 샘플 \(n\)개에서 정확도 \(\hat p\)를 얻었다면 표준오차는 약 \(\sqrt{\hat p(1-\hat p)/n}\)다. \(n=1{,}000\), \(\hat p = 0.90\)이면 \(\sqrt{0.09/1000}\approx 0.0095\), 95% 신뢰구간은 약 ±1.9%p다. 이 테스트 세트에서 두 모델이 90.3% 대 90.8%로 갈렸다면 그 차이는 잡음 수준이다(같은 샘플을 쓴 짝비교라면 구간이 다소 좁아지지만, 여전히 0.5%p는 의미 있다고 하기 어렵다).</p>
+    </div>
+    <div class="callout warn"><strong>흔한 오해: "검증 세트와 테스트 세트는 같은 말이다"</strong>
+      <p>일상적으로 섞어 쓰는 경우가 많고, 데이터가 적은 연구에서는 '검증 = 테스트'처럼 쓰기도 한다. 하지만 역할은 분명히 다르다. 검증은 <strong>선택</strong>에 쓰여서 점수가 오염되고, 테스트는 선택에 전혀 쓰이지 않아야 편향 없는 추정치가 된다. 논문이나 보고서에서 "테스트 성능"이 사실 튜닝에 쓴 세트의 점수라면 과대평가된 수치다.</p>
+    </div>
+    <p>분할 방법에도 주의가 필요하다. 클래스가 불균형하면 각 분할의 클래스 비율이 같도록 <strong>층화</strong><span class="en">(stratified)</span> 분할을 쓰고, 시간 순서가 있는 데이터는 무작위가 아니라 <strong>시간으로</strong> 자르며, 같은 사람·같은 문서에서 나온 여러 샘플은 <strong>같은 쪽에</strong> 몰아 넣는다. 이 세 가지는 <a href="#cross-validation">교차 검증</a>과 <a href="#data-leakage">데이터 누수</a>에서 다시 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="overfitting">
+    <h2>과적합과 과소적합</h2>
+    <p><span class="term">과소적합</span><span class="en">(Underfitting)</span>은 모델이 너무 단순해 데이터의 패턴조차 못 잡는 상태로, 학습 오차와 검증 오차가 <strong>둘 다 높다</strong>. <span class="term">과적합</span><span class="en">(Overfitting)</span>은 모델이 너무 유연해서 패턴뿐 아니라 그 학습 세트에만 있는 우연한 노이즈까지 외운 상태로, 학습 오차는 낮은데 검증 오차가 높다(<strong>격차가 크다</strong>). 다항식 차수에 따른 모습과 L2 정규화·드롭아웃·조기 종료 같은 처방은 <a href="training.html#tr-gen">3장 과적합과 일반화</a>에서 이미 실험했다. 여기서는 실무에서 더 자주 쓰는 <strong>진단 도구</strong> 두 가지에 집중한다.</p>
+    <ul>
+      <li><strong>복잡도 곡선</strong><span class="en">(validation curve)</span>: 가로축 = 모델 복잡도(차수, 트리 깊이 등), 세로축 = 학습·검증 오차. 검증 오차가 U자를 그리고 그 바닥이 최적 복잡도다.</li>
+      <li><strong>학습 곡선</strong><span class="en">(learning curve)</span>: 복잡도는 고정하고 가로축 = 학습 데이터 수. "데이터를 더 모으면 나아질까?"에 답한다.</li>
+    </ul>
+
+    <div class="sim" id="sim-ml-fit">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>다항 회귀: 복잡도 곡선과 학습 곡선으로 진단하기</h3></div>
+      <div class="sim-body">
+        <div class="sim-view ml-two">
+          <div><canvas id="ml-cv-fit"></canvas><span class="ml-cap">● 학습 점 · 점선 = 참 함수 · 실선 = 적합 결과</span></div>
+          <div><canvas id="ml-cv-fit-e"></canvas><span class="ml-cap" id="ml-fit-cap">차수별 MSE</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>다항식 차수 d <output id="ml-fit-d-out"></output></span><input type="range" id="ml-fit-d" min="0" max="15" step="1" value="1"></label>
+          <label class="ctrl"><span>학습 데이터 수 n <output id="ml-fit-n-out"></output></span><input type="range" id="ml-fit-n" min="8" max="200" step="1" value="20"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="ml-fit-s-out"></output></span><input type="range" id="ml-fit-s" min="0.05" max="0.6" step="0.01" value="0.25"></label>
+          <div class="ctrl"><span>오른쪽 그래프</span><div class="seg" id="ml-fit-mode"><button data-value="cx" class="on">복잡도 곡선</button><button data-value="lc">학습 곡선</button></div></div>
+          <button class="btn" id="ml-fit-new">새 데이터 뽑기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">학습 MSE</span><span class="v" id="ml-fit-tr">—</span></div>
+        <div class="stat"><span class="k">검증 MSE (200점)</span><span class="v" id="ml-fit-va">—</span></div>
+        <div class="stat"><span class="k">노이즈 바닥 σ²</span><span class="v" id="ml-fit-s2">—</span></div>
+        <div class="stat"><span class="k">검증 최적 차수</span><span class="v" id="ml-fit-best">—</span></div>
+        <div class="stat"><span class="k">진단</span><span class="v" id="ml-fit-dx" style="font-size:15px">—</span></div>
+      </div>
+      <div class="sim-note">참 함수는 \(f(x)=\sin 2.5x + 0.3x^2\) (\(x\in[-1,1]\)), 관측은 \(y=f(x)+\varepsilon,\ \varepsilon\sim\mathcal N(0,\sigma^2)\). 계산은 르장드르 다항식 기저의 최소제곱(아주 작은 릿지 10⁻⁸로 수치 안정화). 학습 곡선은 각 n마다 학습 세트를 25번 새로 뽑아 평균한 값이다. 해볼 것: ① d = 1, '학습 곡선'을 보면 두 곡선이 n이 커질수록 <strong>σ²보다 한참 위에서</strong> 만난다. 데이터를 아무리 늘려도 안 낫는 <strong>과소적합</strong>의 전형이다. 처방은 데이터가 아니라 더 복잡한 모델이다. ② d = 12, n = 20이면 두 곡선 사이 격차가 크다(<strong>과적합</strong>). n을 끝까지 늘리면 격차가 줄어든다. 이 경우엔 데이터 추가가 효과적인 처방이다. ③ 진단 칸의 규칙(교육용 휴리스틱): 학습 MSE가 σ²의 1.5배 이상이면 과소적합, 검증 MSE가 학습 MSE의 1.5배 이상이면 과적합.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>증상</th><th>학습 오차</th><th>검증 오차</th><th>학습 곡선 모양</th><th>효과 있는 처방</th><th>효과 없는 처방</th></tr></thead>
+      <tbody>
+        <tr><td>과소적합 (높은 편향)</td><td>높음</td><td>높음, 학습 오차와 비슷</td><td>두 곡선이 높은 곳에서 일찍 수렴</td><td>모델 키우기, 특성 추가, 규제 줄이기, 더 오래 학습</td><td>데이터 더 모으기</td></tr>
+        <tr><td>과적합 (높은 분산)</td><td>낮음</td><td>높음 (격차 큼)</td><td>격차가 크고 n이 늘면 천천히 좁아짐</td><td>데이터 추가, 규제·드롭아웃, 조기 종료, 모델 줄이기, 앙상블</td><td>모델 더 키우기 (고전적 영역에서)</td></tr>
+        <tr><td>적정</td><td>σ² 근처</td><td>σ² 근처</td><td>둘 다 노이즈 바닥 근처</td><td>(더 좋아지려면 노이즈 자체를 줄이는 데이터 품질 개선)</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "학습 오차가 0이면 최고의 모델"</strong>
+      <p>노이즈가 있는 데이터에서 학습 오차 0은 노이즈까지 외웠다는 신호다. 관측 노이즈의 분산이 σ²라면 <em>참 함수 그 자체</em>도 새 데이터에서 MSE ≈ σ²를 낸다. 어떤 모델도 기댓값으로 이 바닥보다 낮을 수 없다(<a href="#bias-variance">다음 절</a>의 \(\sigma^2\) 항). 반대로 "과적합이니까 무조건 작은 모델"도 아니다. 데이터가 충분하다면 큰 모델이 이긴다. 판단은 언제나 검증 오차로 한다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="bias-variance">
+    <h2>편향-분산 트레이드오프</h2>
+    <p>과소적합과 과적합을 하나의 식으로 설명하는 것이 <span class="term">편향-분산 분해</span><span class="en">(Bias-Variance Decomposition)</span>다. 사고 실험을 해 보자. 같은 분포에서 학습 세트를 <em>여러 번</em> 새로 뽑아 같은 방식으로 모델을 학습시키면, 매번 조금씩 다른 모델 \(\hat f\)가 나온다. 이 모델들의 집합을 보면 두 가지를 물을 수 있다.</p>
+    <ul>
+      <li><strong>편향</strong><span class="en">(bias)</span>: 모델들의 <em>평균</em> \(\bar f(x)=\mathbb E[\hat f(x)]\)이 참 함수 \(f(x)\)에서 얼마나 벗어나 있나? 모델이 너무 단순하면(1차식으로 곡선을 맞추면) 아무리 많이 평균해도 곡선이 안 된다. 체계적 오차다.</li>
+      <li><strong>분산</strong><span class="en">(variance)</span>: 모델들이 학습 세트에 따라 <em>서로</em> 얼마나 다른가? 너무 유연한 모델은 학습 세트의 노이즈를 따라가므로 뽑을 때마다 모양이 크게 달라진다. 불안정성이다.</li>
+    </ul>
+    <div class="formula">$$\underbrace{\mathbb E\big[(y-\hat f(x))^2\big]}_{\text{기대 테스트 오차}} = \underbrace{\big(f(x)-\bar f(x)\big)^2}_{\text{편향}^2} + \underbrace{\mathbb E\big[(\hat f(x)-\bar f(x))^2\big]}_{\text{분산}} + \underbrace{\sigma^2}_{\text{줄일 수 없는 노이즈}}$$
+      <div class="where">기댓값은 학습 세트(와 새 관측 노이즈)에 대해 취한다. \(y=f(x)+\varepsilon\), \(\mathbb E[\varepsilon]=0\), \(\mathrm{Var}(\varepsilon)=\sigma^2\)인 제곱 오차일 때 정확히 성립한다(교차항이 기댓값 0이 되어 사라진다). 위 식은 한 점 \(x\)에서의 분해이고, 아래 시뮬레이터는 \(x\)에 대해 평균한다.</div>
+    </div>
+    <p><strong>수치 예</strong>: 어떤 점 \(x_0\)에서 참값 \(f(x_0)=2.0\), 노이즈 \(\sigma=0.3\). 학습 세트를 5번 뽑아 만든 모델의 예측이 1.6, 1.7, 1.5, 1.8, 1.4라면 평균 \(\bar f = 1.6\), 편향² \(=(2.0-1.6)^2=0.16\), 분산 \(=\frac{1}{5}(0^2+0.1^2+0.1^2+0.2^2+0.2^2)=0.02\), 노이즈 \(0.09\) → 기대 오차 \(0.27\). 편향이 지배적이니 모델을 더 유연하게 만들 차례다. 반대로 예측이 2.6, 1.3, 2.4, 1.5, 2.2였다면 평균은 2.0으로 편향 0이지만 분산이 \(\frac{1}{5}(0.36+0.49+0.16+0.25+0.04)=0.26\)으로 크다.</p>
+
+    <div class="sim" id="sim-ml-bv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>곡선 다발로 보는 편향² + 분산</h3></div>
+      <div class="sim-body">
+        <div class="sim-view ml-two">
+          <div><canvas id="ml-cv-bv"></canvas><span class="ml-cap">가는 선 = 각 학습 세트로 적합 · 굵은 선 = 평균 f̄ · 점선 = 참 f</span></div>
+          <div><canvas id="ml-cv-bv-e"></canvas><span class="ml-cap">차수별 분해 (로그 축)</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>다항식 차수 d <output id="ml-bv-d-out"></output></span><input type="range" id="ml-bv-d" min="0" max="12" step="1" value="3"></label>
+          <label class="ctrl"><span>학습 데이터 수 n <output id="ml-bv-n-out"></output></span><input type="range" id="ml-bv-n" min="10" max="100" step="1" value="20"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="ml-bv-s-out"></output></span><input type="range" id="ml-bv-s" min="0.05" max="0.6" step="0.01" value="0.3"></label>
+          <div class="ctrl"><span>학습 세트 만드는 법 (B = 40개)</span><div class="seg" id="ml-bv-mode"><button data-value="fresh" class="on">분포에서 새로</button><button data-value="boot">부트스트랩</button></div></div>
+          <button class="btn" id="ml-bv-new">다시 뽑기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">편향²</span><span class="v" id="ml-bv-b2">—</span></div>
+        <div class="stat"><span class="k">분산</span><span class="v" id="ml-bv-var">—</span></div>
+        <div class="stat"><span class="k">노이즈 σ²</span><span class="v" id="ml-bv-n2">—</span></div>
+        <div class="stat"><span class="k">합 (이론)</span><span class="v" id="ml-bv-sum">—</span></div>
+        <div class="stat"><span class="k">실측 테스트 MSE</span><span class="v" id="ml-bv-emp">—</span></div>
+      </div>
+      <div class="sim-note">B = 40개의 학습 세트로 각각 최소제곱 적합한 뒤, \([-1,1]\)에서 균등하게 뽑은 테스트 위치 400곳에서 \(\bar f\), 편향², 분산을 계산한다(왼쪽 그림은 격자 위의 곡선). '실측 테스트 MSE'는 40개 모델 각각을 그 400곳의 노이즈 섞인 새 관측값으로 평가한 평균으로, 이론 합과 거의 같아야 한다(분해가 맞다는 수치 확인. 차이는 노이즈 표본의 우연 오차 정도). '부트스트랩'은 데이터 하나(n개)에서 복원 추출로 B개 세트를 만든다. 실제로는 분포에서 새 데이터를 뽑을 수 없으므로 이렇게 분산을 근사한다(배깅·랜덤 포레스트의 원리). 해볼 것: ① d를 0→12로 올리며 오른쪽 그래프에서 편향²(내려감)과 분산(올라감)이 교차하는 지점을 찾자. 합이 가장 낮은 차수가 최적이다. ② d = 10에서 n을 10→100으로 늘리면 분산이 극적으로 줄고 최적 차수가 오른쪽으로 이동한다. 데이터가 많을수록 복잡한 모델을 감당할 수 있다. ③ σ를 키우면 분산도 같이 커진다. 노이즈는 바닥(σ²)을 올릴 뿐 아니라 모델을 흔든다.</div>
+    </div>
+        <div class="callout deep"><strong>딥러닝 시대의 편향-분산</strong>
+      <p>"용량을 늘리면 분산이 커진다"는 고전적 U자 그림은 파라미터 수가 데이터 수를 크게 넘는 현대 신경망에서는 그대로 성립하지 않는다(이중 하강, <a href="training.html#tr-gen">3장</a>). 그래도 분해식 자체는 언제나 참이다. 거대 모델에서는 SGD의 암묵적 규제 등으로 분산이 생각보다 작게 유지된다는 것이 현재의 대략적 이해다. 또 앙상블(여러 모델의 평균)이 거의 항상 성능을 올리는 이유가 바로 분산 항을 줄이기 때문이다. 서로 독립적인 오차를 가진 모델 \(M\)개를 평균하면 분산은 약 \(1/M\)로 준다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="data-leakage">
+    <h2>데이터 누수</h2>
+    <p><span class="term">데이터 누수</span><span class="en">(Data Leakage)</span>는 <strong>실제 예측 시점에는 알 수 없는 정보</strong>, 또는 <strong>평가 데이터의 정보</strong>가 학습 과정에 새어 들어가는 것이다. 증상은 언제나 같다. 검증 점수는 놀랍게 좋은데 배포하면 성능이 무너진다. 과적합은 검증 점수가 <em>나쁘게</em> 나와서 스스로 드러나지만, 누수는 검증 점수 자체를 부풀리기 때문에 <strong>평가로는 잡히지 않는다</strong>. 그래서 더 위험하다. 경험 법칙 하나: 너무 좋아서 믿기 힘든 결과는 대개 누수다.</p>
+
+    <h3 id="target-leakage">① 타깃 누수 <span class="en">(target leakage)</span></h3>
+    <p>정답과 같은 정보, 또는 정답이 정해진 <em>뒤에야</em> 생기는 정보가 특성에 들어간 경우다.</p>
+    <ul>
+      <li>폐렴 여부를 예측하는데 '항생제 처방 여부'가 특성에 있다. 항생제는 폐렴 진단 <em>후에</em> 처방되므로 모델은 진단 결과를 베껴 쓰는 셈이다.</li>
+      <li>고객 이탈 예측에 '해지 위약금 납부액'이 있다. 이미 해지한 사람만 0이 아니다.</li>
+      <li>대출 연체 예측에 '추심 담당자 배정일'이 있다.</li>
+    </ul>
+    <p>판별 질문: <strong>"예측을 하는 바로 그 순간, 이 값을 정말로 알 수 있는가?"</strong> 특성마다 '언제 기록되는 값인가'를 확인해야 한다.</p>
+
+    <h3 id="preprocessing-leakage">② 전처리 누수 <span class="en">(train-test contamination)</span></h3>
+    <p>분할 <em>전에</em> 전체 데이터로 전처리 통계를 계산하는 경우다. 대표적으로 전체 데이터의 평균·표준편차로 정규화한 뒤 나누면, 검증 세트의 정보(평균·분산)가 학습 쪽 변환에 섞인다. 단순 정규화는 보통 점수를 아주 조금만 바꾸지만, 같은 실수를 아래 작업에서 하면 피해가 크다.</p>
+    <ul>
+      <li><strong>특성 선택</strong>: 전체 데이터에서 타깃과 상관이 큰 특성을 고른 뒤 교차 검증하기 (아래 시뮬레이터).</li>
+      <li><strong>오버샘플링</strong>: 소수 클래스를 복제·합성(SMOTE 등)한 뒤 분할하면, 같은 샘플의 복사본이 학습과 검증 양쪽에 들어간다.</li>
+      <li><strong>타깃 인코딩</strong>: 범주별 타깃 평균을 특성으로 쓸 때 자기 자신의 타깃이 평균에 포함된다.</li>
+    </ul>
+    <p>원칙은 하나다. <strong>모든 '학습 가능한' 전처리(평균, 분산, 어휘, 선택된 특성 목록, 결측 대체값)는 학습 분할에서만 fit하고, 검증·테스트에는 transform만 한다.</strong> 교차 검증이라면 fold마다 다시 fit해야 한다. scikit-learn의 <code>Pipeline</code>이 존재하는 이유다.</p>
+
+    <h3 id="temporal-leakage">③ 시간 누수 <span class="en">(temporal leakage)</span></h3>
+    <p>시간 순서가 있는 데이터를 무작위로 나누면 "미래로 과거를 예측"하는 꼴이 된다. 2024년 6월 데이터로 학습해 2024년 3월을 맞히는 것은 실제로는 불가능한 일이다. 주가·수요 예측에서 무작위 분할을 하면 검증 점수가 크게 부풀려진다. 더 교묘한 형태도 있다. 중심 이동평균(앞뒤 3일)을 특성으로 쓰면 미래 3일이 들어가고, '월말 기준 고객 등급' 같은 스냅숏 테이블을 월중 예측에 붙이면 그달 말의 정보가 섞인다. 처방은 <strong>시간 기준 분할</strong>(과거로 학습, 미래로 평가)과 특성마다 <strong>기준 시점</strong>을 정해 그 이전 데이터만 쓰는 것이다.</p>
+
+    <h3 id="group-leakage">④ 중복·그룹 누수 <span class="en">(duplicate / group leakage)</span></h3>
+    <p>같은 개체에서 나온 여러 샘플이 학습과 평가에 나뉘어 들어가는 경우다. 환자 1명당 X선 사진 10장이 있는데 사진 단위로 무작위 분할하면, 모델은 '폐렴'이 아니라 '이 환자의 갈비뼈 모양'을 외워 점수를 낼 수 있다. 같은 문서의 문장들, 같은 화자의 음성, 웹 크롤링의 거의 같은 페이지도 마찬가지다. LLM 평가에서는 벤치마크 문제가 사전학습 데이터에 섞여 들어가는 <strong>벤치마크 오염</strong><span class="en">(contamination)</span>이 같은 문제다. 처방은 <strong>그룹 단위 분할</strong>(같은 환자는 한쪽에만)과 중복 제거다.</p>
+
+    <div class="sim" id="sim-ml-leak">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>순수한 잡음에서 90% 정확도 만들기: 특성 선택 누수</h3></div>
+      <div class="sim-body">
+        <div class="sim-view"><canvas id="ml-cv-leak"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>샘플 수 n <output id="ml-lk-n-out"></output></span><input type="range" id="ml-lk-n" min="30" max="200" step="10" value="50"></label>
+          <label class="ctrl"><span>후보 특성 수 p <output id="ml-lk-p-out"></output></span><input type="range" id="ml-lk-p" min="10" max="2000" step="10" value="1000"></label>
+          <label class="ctrl"><span>선택할 특성 수 m <output id="ml-lk-m-out"></output></span><input type="range" id="ml-lk-m" min="1" max="50" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="ml-lk-sig"> 진짜 신호가 있는 특성 5개 섞기</label>
+          <button class="btn" id="ml-lk-new">새 데이터</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">누수 CV 정확도</span><span class="v" id="ml-lk-bad">—</span></div>
+        <div class="stat"><span class="k">올바른 CV 정확도</span><span class="v" id="ml-lk-good">—</span></div>
+        <div class="stat"><span class="k">새 데이터 실제 정확도</span><span class="v" id="ml-lk-true">—</span></div>
+        <div class="stat"><span class="k">부풀려진 정도</span><span class="v" id="ml-lk-gap">—</span></div>
+      </div>
+      <div class="sim-note">설정: 특성 p개가 모두 \(\mathcal N(0,1)\) 잡음이고 라벨은 동전 던지기(50:50)다. 즉 맞힐 수 있는 정보가 <strong>전혀 없다</strong>. 분류기는 최근접 중심(클래스별 평균에 더 가까운 쪽), 평가는 5-fold 교차 검증. <strong>누수</strong>: 전체 n개로 라벨과 상관이 가장 큰 특성 m개를 고른 뒤 CV. <strong>올바름</strong>: fold마다 학습 부분에서만 특성을 골라 CV. '새 데이터'는 전체로 고른 모델을 독립된 2,000개 샘플로 평가한 값이다. 해볼 것: ① 기본값(n = 50, p = 1000, m = 10)에서 누수 CV가 대개 80~95%로 나온다. 같은 데이터에서 새 데이터 정확도는 50% 근처이고, 올바른 CV도 50% 언저리에서 흔들린다(n이 작아 대략 30~65%). ② p를 줄이면 부풀림이 줄어든다. 후보가 많을수록 우연히 라벨과 상관된 잡음 특성을 찾기 쉬워진다. ③ '진짜 신호'를 켜면 올바른 CV가 새 데이터 정확도를 잘 따라가는 반면, 누수 CV는 여전히 그보다 높다.</div>
+    </div>
+    <p>이 실험은 Hastie, Tibshirani, Friedman의 <em>The Elements of Statistical Learning</em>(7.10.2절, "교차 검증을 하는 잘못된 방법과 올바른 방법")에 나오는 고전적 예를 축소해 재현한 것이다. 유전자 수만 개 중 몇 개를 고르는 생물정보학 연구에서 실제로 반복된 실수다.</p>
+
+    <h3 id="leakage-checklist">누수 탐지 체크리스트</h3>
+    <ul class="ml-check">
+      <li>특성 중요도 1위가 <strong>압도적</strong>인가? 그 특성이 예측 시점에 존재하는지 확인한다(타깃 누수의 가장 흔한 신호).</li>
+      <li>검증 점수가 비슷한 문제의 기존 결과나 사람 전문가보다 <strong>비현실적으로</strong> 높은가?</li>
+      <li>분할을 <strong>가장 먼저</strong> 했는가? 정규화·결측 대체·특성 선택·오버샘플링·인코딩이 학습 분할에서만 fit되었는가?</li>
+      <li>시간 정보가 있다면 <strong>시간 기준</strong>으로 분할했는가? 모든 특성의 기준 시점이 예측 시점 이전인가?</li>
+      <li>같은 사람·기기·문서·세션에서 나온 샘플이 <strong>양쪽에 걸쳐</strong> 있지 않은가? 중복·근사 중복을 제거했는가?</li>
+      <li>무작위 분할 점수와 그룹/시간 분할 점수가 <strong>크게 다른가</strong>? 크게 다르다면 누수(또는 분포 이동)를 의심한다.</li>
+      <li>라벨을 무작위로 섞어(셔플) 학습해도 점수가 우연 수준보다 높게 나오는가? 높다면 파이프라인 어딘가가 새고 있다.</li>
+    </ul>
+    <div class="table-wrap"><table>
+      <thead><tr><th>유형</th><th>무엇이 새나</th><th>예</th><th>처방</th></tr></thead>
+      <tbody>
+        <tr><td>타깃 누수</td><td>정답 또는 정답 이후의 정보</td><td>항생제 처방 → 폐렴</td><td>특성별 기록 시점 검토, 의심 특성 제거</td></tr>
+        <tr><td>전처리 누수</td><td>검증 데이터의 통계</td><td>전체로 정규화·특성 선택·SMOTE 후 분할</td><td>분할 먼저, 파이프라인을 fold 안에서 fit</td></tr>
+        <tr><td>시간 누수</td><td>미래 정보</td><td>주가 무작위 분할, 중심 이동평균</td><td>시간 기준 분할, 기준 시점 이전 데이터만</td></tr>
+        <tr><td>중복/그룹 누수</td><td>같은 개체의 다른 샘플</td><td>환자별 여러 장 사진, 벤치마크 오염</td><td>그룹 단위 분할, 중복 제거</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="feature-engineering">
+    <h2>특성 공학</h2>
+    <p>모델은 숫자 벡터만 먹는다. 원시 데이터(날짜, 도시 이름, 소득, 빈칸)를 모델이 쓰기 좋은 숫자 벡터로 바꾸는 작업이 <span class="term">특성 공학</span><span class="en">(Feature Engineering)</span>이다. 표 형태의 데이터(엑셀 같은 데이터)를 다루는 고전 머신러닝에서는 성능의 대부분이 여기서 결정된다는 말이 있을 정도다.</p>
+
+    <h3 id="scaling">스케일링</h3>
+    <p>특성마다 단위와 범위가 다르면 거리나 경사에 기반한 모델이 큰 값의 특성에 휘둘린다. <strong>예</strong>: 고객 A(30세, 연소득 5,000만 원), B(60세, 5,100만 원), C(31세, 6,000만 원)가 있다. 소득을 만 원 단위로 두고 유클리드 거리를 재면 \(d(A,B)=\sqrt{30^2+100^2}\approx 104\), \(d(A,C)=\sqrt{1^2+1000^2}\approx 1000\)이라 A는 서른 살 많은 B와 "닮았다". 나이의 표준편차를 12세, 소득의 표준편차를 2,000만 원이라 하고 표준화하면 \(d(A,B)=\sqrt{2.5^2+0.05^2}\approx 2.50\), \(d(A,C)=\sqrt{0.083^2+0.5^2}\approx 0.51\)로 순위가 뒤집힌다.</p>
+    <div class="formula">$$\text{표준화: } z=\frac{x-\mu}{\sigma}\qquad\qquad \text{min-max: } x'=\frac{x-x_{\min}}{x_{\max}-x_{\min}}\in[0,1]$$
+      <div class="where">\(\mu,\sigma,x_{\min},x_{\max}\)는 <strong>학습 분할에서만</strong> 계산한다(<a href="#preprocessing-leakage">전처리 누수</a>). 경사하강에서도 스케일이 제각각이면 손실 지형이 길쭉해져 학습이 느려진다(<a href="training.html">3장</a>). 결정 트리 계열은 값의 순서만 보므로 스케일링이 필요 없다.</div>
+    </div>
+
+    <h3 id="one-hot">범주형 인코딩: 원핫</h3>
+    <p>도시 {서울, 부산, 대구}를 0, 1, 2로 바꾸면 모델은 "대구 = 서울의 2배", "부산은 서울과 대구의 중간"이라는 있지도 않은 순서와 거리를 배운다. <span class="term">원핫 인코딩</span><span class="en">(one-hot)</span>은 범주마다 차원을 하나씩 만들어 서울 = (1,0,0), 부산 = (0,1,0), 대구 = (0,0,1)로 바꾼다. 모든 범주가 서로 같은 거리 \(\sqrt2\)가 된다. 범주가 수만 개(상품 ID, 단어)면 벡터가 너무 커지고 희소해진다. 이때 쓰는 것이 학습되는 밀집 벡터, 곧 <a href="embedding.html">4장</a>의 <strong>임베딩</strong>이다. 실제로 임베딩 층은 원핫 벡터에 가중치 행렬을 곱하는 것과 수학적으로 같다.</p>
+
+    <h3 id="log-transform">로그 변환</h3>
+    <p>소득, 조회 수, 거래액처럼 오른쪽 꼬리가 긴 분포는 소수의 거대한 값이 모델(특히 MSE 손실과 선형 모델)을 좌우한다. \(\log\)를 취하면 곱셈적 차이가 덧셈적 차이가 된다. 연소득 1,000만, 1억, 10억 원은 원래 값으로는 간격이 9,000만 대 9억이지만 \(\log_{10}\)으로는 7, 8, 9로 등간격이다. 0이 있으면 \(\log(1+x)\)를 쓴다. 타깃에 적용하면 '상대 오차'를 줄이도록 학습하는 효과가 있다.</p>
+
+    <h3 id="interaction">교차 특성 <span class="en">(interaction features)</span></h3>
+    <p>두 특성의 <strong>조합</strong>이 중요할 때 곱이나 비율을 새 특성으로 만든다. 키와 몸무게 각각보다 BMI = 몸무게/키²가 건강 지표로 낫고, 면적과 평당 가격의 곱이 매매가다. <a href="neuron.html#xor">2장의 XOR</a>은 \(x_1\)과 \(x_2\) 각각으로는 직선 하나로 나눌 수 없지만, 교차 특성 \(x_1x_2\)를 추가하면 (부호를 ±1로 쓸 때) \(x_1x_2&gt;0\)인지 하나만 보면 되는 선형 문제가 된다. 은닉층이 하는 일을 사람이 손으로 해 준 것이다.</p>
+
+    <h3 id="missing-values">결측치</h3>
+    <p>빈칸을 그냥 지우면(행 삭제) 데이터가 줄고, 빈칸이 무작위가 아니라면 편향이 생긴다(예: 소득 응답을 거부하는 사람은 고소득층에 몰려 있을 수 있다). 흔한 처리는 학습 분할의 평균·중앙값·최빈값으로 채우고(대체, imputation), <strong>"결측이었음" 표시 특성</strong>을 함께 추가하는 것이다. 결측 여부 자체가 정보인 경우가 많기 때문이다(혈액검사 결과가 없다 = 의사가 검사할 필요를 못 느꼈다). 그래디언트 부스팅 트리 라이브러리 다수는 결측을 직접 처리한다.</p>
+
+    <h3 id="representation-learning">딥러닝: 특성을 사람이 아니라 모델이 만든다</h3>
+    <p>이미지에서 "귀 모양", "털 질감" 같은 특성을 사람이 설계하던 시대(SIFT, HOG 등)는 2012년 무렵 CNN이 원시 픽셀에서 특성을 직접 학습하면서 끝났다. 딥러닝의 핵심은 <span class="term">표현 학습</span><span class="en">(representation learning)</span>이다. 은닉층이 데이터에서 유용한 특성을 스스로 만들어 내고, 마지막 층은 그 특성 위의 단순한 선형 분류기일 뿐이다. 텍스트에서는 단어·토큰의 임베딩(<a href="embedding.html">4장</a>)과 문맥에 따라 바뀌는 표현(<a href="attention.html">5장</a>)이 학습된 특성이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>수작업 특성 + 고전 ML</th><th>표현 학습 (딥러닝)</th></tr></thead>
+      <tbody>
+        <tr><td>특성을 만드는 주체</td><td>도메인 전문가</td><td>신경망 (경사하강)</td></tr>
+        <tr><td>잘 맞는 데이터</td><td>표 형태(행 = 샘플, 열 = 의미 있는 변수)</td><td>이미지·음성·텍스트 같은 원시 고차원 데이터</td></tr>
+        <tr><td>필요한 데이터 양</td><td>수백~수만 개로도 가능</td><td>많을수록 좋음 (사전학습 모델로 완화)</td></tr>
+        <tr><td>해석</td><td>특성 의미가 명확</td><td>내부 표현 해석이 어려움</td></tr>
+        <tr><td>대표 도구</td><td>그래디언트 부스팅(XGBoost, LightGBM)</td><td>CNN, 트랜스포머</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "딥러닝 시대에 특성 공학은 필요 없다"</strong>
+      <p>원시 데이터에 대해서는 대체로 맞지만, 표 형태 데이터에서는 2020년대에도 잘 만든 특성 + 그래디언트 부스팅 트리가 딥러닝과 대등하거나 더 나은 경우가 많다고 여러 벤치마크 연구가 보고한다. 또 딥러닝에서도 입력 정규화, 결측 처리, 누수 없는 특성 설계는 여전히 사람의 몫이다. LLM 애플리케이션에서 프롬프트에 어떤 정보를 어떤 형식으로 넣을지 고르는 것도 넓게 보면 특성 공학이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="cross-validation">
+    <h2>교차 검증</h2>
+    <p>데이터가 1,000개뿐인데 검증용으로 200개를 떼면 두 가지 문제가 생긴다. 학습 데이터가 줄고, 검증 점수가 그 200개가 무엇이었는지에 크게 좌우된다. <span class="term">k-겹 교차 검증</span><span class="en">(k-fold Cross Validation)</span>은 데이터를 \(k\)개 덩어리(fold)로 나누고, 각 덩어리를 한 번씩 검증으로, 나머지 \(k-1\)개를 학습으로 써서 \(k\)번 학습·평가한다. 모든 샘플이 정확히 한 번 검증에 쓰인다.</p>
+    <div class="formula">$$\text{CV 점수} = \frac{1}{k}\sum_{i=1}^{k} s_i,\qquad \text{표준편차} = \sqrt{\frac{1}{k-1}\sum_{i=1}^{k}(s_i-\bar s)^2}$$
+      <div class="where">\(s_i\)는 \(i\)번째 fold의 검증 점수. 예: 5-fold 정확도가 0.82, 0.85, 0.79, 0.88, 0.81이면 평균 0.830, 표본 표준편차 약 0.035. 두 모델의 CV 평균 차이가 이 표준편차보다 훨씬 작다면 우열을 단정하기 어렵다.</div>
+    </div>
+    <p>비용은 학습 \(k\)번이다. 흔히 \(k=5\) 또는 10을 쓴다. 극단인 \(k=n\)은 LOOCV<span class="en">(leave-one-out)</span>로, 학습 데이터를 최대로 쓰지만 \(n\)번 학습해야 한다. 거대 신경망은 한 번 학습도 비싸서 교차 검증 대신 고정된 검증 세트를 쓰는 것이 보통이다. 교차 검증은 데이터가 적고 학습이 싼 고전 ML에서 특히 중요하다.</p>
+    <p>어떻게 fold를 나누느냐는 데이터 구조에 따라 달라야 한다.</p>
+    <ul>
+      <li><strong>층화 k-fold</strong><span class="en">(stratified)</span>: 각 fold의 클래스 비율을 전체와 같게 맞춘다. 양성이 5%인 데이터를 5-fold로 무작위 분할하면 어떤 fold는 양성이 2%, 어떤 fold는 8%가 될 수 있어 점수가 출렁인다. 불균형 분류의 기본값이다.</li>
+      <li><strong>시계열 분할</strong><span class="en">(time series split)</span>: 항상 과거로 학습하고 바로 다음 구간으로 검증한다. 학습 구간이 점점 길어지는(확장 창) 방식이 흔하다. 미래 정보를 쓰지 않으므로 <a href="#temporal-leakage">시간 누수</a>를 막는다.</li>
+      <li><strong>그룹 k-fold</strong><span class="en">(group k-fold)</span>: 같은 그룹(환자, 사용자, 문서)의 샘플은 같은 fold에만 넣는다. 배포 후 '새 환자'에서의 성능을 추정하는 올바른 방법이다(<a href="#group-leakage">그룹 누수</a>).</li>
+    </ul>
+
+    <div class="sim" id="sim-ml-cv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>fold 나누기와 점수: 무작위 vs 층화 vs 그룹 vs 시계열</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ml-cv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>분할 방법</span><div class="seg" id="ml-cv-mode"><button data-value="kfold" class="on">k-fold</button><button data-value="strat">층화</button><button data-value="group">그룹</button><button data-value="time">시계열</button></div></div>
+          <label class="ctrl"><span>fold 수 k <output id="ml-cv-k-out"></output></span><input type="range" id="ml-cv-k" min="2" max="10" step="1" value="5"></label>
+          <div class="ctrl"><span>분류기</span><div class="seg" id="ml-cv-clf"><button data-value="1" class="on">1-NN</button><button data-value="7">7-NN</button></div></div>
+          <button class="btn" id="ml-cv-shuf">다시 섞기</button>
+          <p class="ml-mini">데이터: 환자 20명 × 측정 3회 = 60개, 양성 30%. 같은 환자의 측정값은 서로 매우 비슷하다. 가로 순서 = 측정 시간.</p>
+        </div>
+      </div>
+      <div class="sim-panel"><p class="ml-folds" id="ml-cv-scores">—</p></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CV 평균 정확도</span><span class="v" id="ml-cv-mean">—</span></div>
+        <div class="stat"><span class="k">표준편차</span><span class="v" id="ml-cv-sd">—</span></div>
+        <div class="stat"><span class="k">검증 fold 양성 비율 범위</span><span class="v" id="ml-cv-pos" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">새 환자 200명 실제 정확도</span><span class="v" id="ml-cv-true">—</span></div>
+      </div>
+      <div class="sim-note">격자의 각 행이 한 번의 학습·평가(fold)이고 각 칸이 샘플이다. 진한 칸 = 검증, 옅은 칸 = 학습, 빈 칸 = 사용 안 함. 맨 위 띠는 환자(그룹) 색, 그 아래 띠는 라벨(진한 = 양성). 분류기는 k-최근접 이웃(가장 가까운 학습 샘플 k개의 다수결)이다. 해볼 것: ① 1-NN에서 'k-fold'(무작위)와 '그룹'을 비교하자. 무작위 분할은 같은 환자의 다른 측정값이 학습 쪽에 있어 그 라벨을 그대로 베끼므로 점수가 높게 나온다. '새 환자' 실제 정확도에 가까운 쪽은 그룹 분할이다. ② '층화'에서는 검증 fold마다 양성 비율이 거의 같다. 'k-fold'의 양성 비율 범위와 비교해 보자. ③ '시계열'에서는 첫 구간이 학습에만 쓰이고, 학습 구간이 점점 길어진다. 그런데 점수는 여전히 높다. 한 환자의 측정이 여러 시점에 흩어져 있어 과거 구간에 같은 환자가 이미 있기 때문이다. 시간 분할이 그룹 누수까지 막아 주지는 않는다. 둘 다 필요하면 '그룹 + 시간'을 함께 고려해 나눈다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방법</th><th>나누는 기준</th><th>언제 쓰나</th><th>잘못 쓰면</th></tr></thead>
+      <tbody>
+        <tr><td>k-fold (무작위)</td><td>샘플을 섞어 k등분</td><td>샘플이 서로 독립(i.i.d.)이고 클래스가 균형</td><td>그룹·시간 구조가 있으면 낙관적 편향</td></tr>
+        <tr><td>층화 k-fold</td><td>각 fold의 클래스 비율 유지</td><td>불균형 분류 (사실상 분류의 기본값)</td><td>—</td></tr>
+        <tr><td>시계열 분할</td><td>시간 순서, 과거 → 미래</td><td>예측(forecasting), 로그·거래 데이터</td><td>무작위 분할 시 미래 누수</td></tr>
+        <tr><td>그룹 k-fold</td><td>그룹 단위로 fold 배정</td><td>환자·사용자·문서별 다중 샘플</td><td>샘플 단위 분할 시 개체를 외워서 점수 상승</td></tr>
+        <tr><td>LOOCV</td><td>샘플 1개씩</td><td>데이터가 아주 적을 때</td><td>계산량 n배, 추정 분산이 클 수 있음</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "교차 검증을 했으니 테스트 세트는 필요 없다"</strong>
+      <p>CV로 하이퍼파라미터를 고르면 CV 점수도 선택에 쓰인 점수, 곧 검증 점수가 된다(<a href="#test-once">앞의 원칙</a>). 최종 성능 보고에는 여전히 따로 떼어 둔 테스트 세트가 필요하다. 데이터가 너무 적어 테스트 세트를 떼기 어렵다면 바깥 CV가 평가, 안쪽 CV가 튜닝을 맡는 <strong>중첩 교차 검증</strong><span class="en">(nested CV)</span>을 쓴다. 또 CV는 모델 <em>선택</em> 도구다. 설정을 정한 뒤에는 보통 전체 학습 데이터로 한 번 더 학습해 최종 모델을 만든다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="metrics">
+    <h2>분류 평가 지표: 혼동 행렬에서 F1까지</h2>
+    <p>"정확도 95%"라는 말만으로는 모델이 좋은지 알 수 없다. 무엇을 어떻게 틀렸는지를 봐야 한다. 이진 분류의 모든 지표는 하나의 2×2 표에서 나온다.</p>
+
+    <h3 id="confusion-matrix">혼동 행렬 <span class="en">(Confusion Matrix)</span></h3>
+    <div class="table-wrap"><table class="ml-cm">
+      <thead><tr><th></th><th>예측: 양성 (Positive)</th><th>예측: 음성 (Negative)</th></tr></thead>
+      <tbody>
+        <tr><th>실제: 양성</th><td>TP<small>참 양성 · 제대로 찾음</small></td><td>FN<small>거짓 음성 · 놓침 (2종 오류)</small></td></tr>
+        <tr><th>실제: 음성</th><td>FP<small>거짓 양성 · 헛경보 (1종 오류)</small></td><td>TN<small>참 음성 · 제대로 넘김</small></td></tr>
+      </tbody>
+    </table></div>
+    <p>이름 읽는 법: 뒤 글자(P/N)는 <strong>모델의 예측</strong>, 앞 글자(T/F)는 <strong>그 예측이 맞았는지</strong>다. FP는 "양성이라고 했는데(P) 틀렸다(F)", 즉 실제로는 음성이다. 어느 쪽을 '양성'이라 부를지는 관심 대상(질병, 사기, 스팸)으로 정하는 관례일 뿐이고 좋다/나쁘다의 뜻이 없다. 다중 클래스면 \(C\times C\) 표가 되고, 대각선이 정답, 비대각 칸은 "어떤 클래스를 무엇으로 착각했는지"를 보여 준다.</p>
+
+    <h3 id="precision-recall-f1">정확도, 정밀도, 재현율, F1</h3>
+    <div class="formula">$$\text{Accuracy}=\frac{TP+TN}{TP+FP+FN+TN}\qquad \text{Precision}=\frac{TP}{TP+FP}\qquad \text{Recall}=\frac{TP}{TP+FN}$$
+    $$F_1 = \frac{2\cdot \text{Precision}\cdot\text{Recall}}{\text{Precision}+\text{Recall}} = \frac{2TP}{2TP+FP+FN}$$
+      <div class="where"><strong>정밀도</strong><span class="en">(Precision)</span>: 모델이 "양성"이라 한 것 중 진짜 양성의 비율. 경보를 믿어도 되는가? <strong>재현율</strong><span class="en">(Recall, 민감도·TPR)</span>: 실제 양성 중 모델이 찾아낸 비율. 놓치지 않는가? <strong>특이도</strong><span class="en">(Specificity)</span> \(=TN/(TN+FP)\)는 음성 쪽의 재현율이고, \(1-\)특이도 = FPR(거짓 양성률)이다.</div>
+    </div>
+    <p>F1은 정밀도와 재현율의 <strong>조화 평균</strong>이다. 산술 평균이 아닌 이유는 한쪽이 형편없으면 점수도 형편없어야 하기 때문이다. 정밀도 1.0, 재현율 0.1인 모델(확실한 것 하나만 양성이라 말하는 겁쟁이 모델)의 산술 평균은 0.55지만 F1은 \(2\cdot1\cdot0.1/1.1\approx0.18\)이다. 재현율을 더 중시하면 \(F_\beta\)(\(\beta=2\)면 재현율에 4배 가중)를 쓴다.</p>
+    <p><strong>계산 예</strong>: 스팸 필터가 메일 1,000통 중 100통을 스팸으로 판정했고, 그중 90통이 진짜 스팸이었다. 실제 스팸은 모두 120통이다. TP = 90, FP = 10, FN = 30, TN = 1000 − 90 − 10 − 30 = 870. 정확도 = 960/1000 = 96.0%, 정밀도 = 90/100 = 0.90, 재현율 = 90/120 = 0.75, F1 = 180/(180+10+30) ≈ 0.818.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>상황</th><th>더 비싼 오류</th><th>중시할 지표</th><th>임계값 방향</th></tr></thead>
+      <tbody>
+        <tr><td>암 1차 검진</td><td>FN (환자를 놓침)</td><td>재현율 (정밀도는 2차 검사가 보완)</td><td>낮춤</td></tr>
+        <tr><td>스팸 필터</td><td>FP (중요 메일이 스팸함으로)</td><td>정밀도</td><td>높임</td></tr>
+        <tr><td>카드 사기 탐지</td><td>둘 다 비쌈 (손실 vs 고객 불편)</td><td>비용 가중 지표, PR 곡선</td><td>비용 비율로 결정</td></tr>
+        <tr><td>검색·RAG 후보 단계</td><td>FN (관련 문서 누락)</td><td>Recall@k (<a href="rag.html">10장</a>)</td><td>후보를 넉넉히</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 id="accuracy-trap">불균형 데이터에서 정확도의 함정</h3>
+    <p>유병률 1%인 암을 10,000명에게 검진한다고 하자. 실제 환자는 100명, 건강한 사람은 9,900명이다.</p>
+    <ul>
+      <li><strong>모델 A: 무조건 "음성"</strong>이라고 답한다. TP = 0, FN = 100, FP = 0, TN = 9,900. 정확도 = 9,900/10,000 = <strong>99.0%</strong>. 재현율 = <strong>0</strong>. 환자를 단 한 명도 찾지 못하는 모델이 정확도 99%다.</li>
+      <li><strong>모델 B: 민감도 90%, 특이도 91%</strong>인 진짜 검사다. TP = 90, FN = 10, FP = 9,900 × 0.09 = 891, TN = 9,009. 정확도 = 9,099/10,000 = <strong>90.99%</strong>로 A보다 <em>낮다</em>. 정밀도 = 90/981 ≈ <strong>9.2%</strong>, F1 ≈ 0.167.</li>
+    </ul>
+    <p>B가 A보다 훨씬 유용한데도 정확도로는 진다. 또 B에서 양성 판정을 받은 사람 중 실제 환자는 약 11명 중 1명뿐이다. 이것이 <strong>기저율 무시</strong><span class="en">(base rate fallacy)</span>다. 검사가 "90% 정확"해도 병이 드물면 양성 판정의 대부분은 헛경보다. 그래서 실제 검진은 민감한 1차 검사로 넓게 거른 뒤 정밀한 2차 검사로 확진하는 두 단계로 운영한다.</p>
+    <div class="callout warn"><strong>흔한 오해: "정밀도와 재현율은 모델의 고정된 성질이다"</strong>
+      <p>둘 다 <strong>임계값</strong>을 바꾸면 바뀐다. 임계값을 낮추면 양성 판정이 늘어 재현율↑ 정밀도↓, 높이면 반대다. 게다가 정밀도는 <strong>유병률</strong>에도 의존한다. 같은 모델(같은 민감도·특이도)이라도 양성 비율이 50%인 병원 데이터에서는 정밀도가 높고, 1%인 일반 인구에서는 낮다. 반면 재현율(TPR)과 FPR은 각 클래스 안에서의 비율이라 유병률과 무관하다. 아래 시뮬레이터에서 직접 확인해 보자.</p>
+    </div>
+
+    <div class="sim" id="sim-ml-thr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>임계값 하나로 움직이는 혼동 행렬, 정밀도·재현율, ROC·PR 곡선</h3></div>
+      <div class="sim-body">
+        <div class="sim-view ml-two">
+          <div><canvas id="ml-cv-thr" class="ml-drag"></canvas><span class="ml-cap" id="ml-thr-cap">점수 분포 · 세로선(임계값)을 끌어 보자</span></div>
+          <div><canvas id="ml-cv-roc"></canvas><span class="ml-cap" id="ml-roc-cap">ROC 곡선</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>임계값 t <output id="ml-thr-t-out"></output></span><input type="range" id="ml-thr-t" min="-3" max="6" step="0.01" value="1.34"></label>
+          <label class="ctrl"><span>클래스 분리도 d′ <output id="ml-thr-d-out"></output></span><input type="range" id="ml-thr-d" min="0" max="4" step="0.01" value="2.62"></label>
+          <label class="ctrl"><span>양성 비율(유병률) <output id="ml-thr-p-out"></output></span><input type="range" id="ml-thr-p" min="-3" max="-0.301" step="0.01" value="-2"></label>
+          <div class="ctrl"><span>왼쪽 세로축</span><div class="seg" id="ml-thr-y"><button data-value="dens" class="on">클래스별 밀도</button><button data-value="count">실제 개수</button></div></div>
+          <div class="ctrl"><span>오른쪽 곡선</span><div class="seg" id="ml-thr-curve"><button data-value="roc" class="on">ROC</button><button data-value="pr">PR</button></div></div>
+          <div class="ctrl"><span>프리셋</span><div class="ml-btns"><button class="btn" id="ml-thr-cancer">암 검진 예 (1%)</button><button class="btn" id="ml-thr-bal">균형 (50%)</button><button class="btn" id="ml-thr-f1">F1 최대 임계값</button></div></div>
+        </div>
+      </div>
+      <div class="sim-panel"><div class="table-wrap" style="margin:0"><table class="ml-cm" id="ml-thr-cm"></table></div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정확도</span><span class="v" id="ml-thr-acc">—</span></div>
+        <div class="stat"><span class="k">"모두 음성" 정확도</span><span class="v" id="ml-thr-base">—</span></div>
+        <div class="stat"><span class="k">정밀도</span><span class="v" id="ml-thr-prec">—</span></div>
+        <div class="stat"><span class="k">재현율 (TPR)</span><span class="v" id="ml-thr-rec">—</span></div>
+        <div class="stat"><span class="k">FPR</span><span class="v" id="ml-thr-fpr">—</span></div>
+        <div class="stat"><span class="k">F1</span><span class="v" id="ml-thr-f1v">—</span></div>
+        <div class="stat"><span class="k">ROC-AUC (사다리꼴)</span><span class="v" id="ml-thr-auc">—</span></div>
+        <div class="stat"><span class="k">AP (PR 곡선 아래)</span><span class="v" id="ml-thr-ap">—</span></div>
+      </div>
+      <div class="sim-note">모델 점수는 음성 \(\sim\mathcal N(0,1)\), 양성 \(\sim\mathcal N(d',1)\)에서 시드 고정으로 뽑은 10,000명분 실제 샘플이고, 점수 ≥ t면 양성으로 판정한다. 혼동 행렬, 곡선, AUC는 모두 이 샘플에서 직접 센 값이다(왼쪽 그래프의 매끈한 곡선만 이론 밀도). '암 검진 예'는 본문의 민감도 90%·특이도 91%·유병률 1%에 맞춘 설정이다. 해볼 것: ① 프리셋 '암 검진 예'에서 정확도가 "모두 음성"보다 낮음을 확인하자. ② 유병률 슬라이더만 50% → 0.1%로 움직이면 재현율·FPR·ROC 곡선·AUC는 거의 그대로인데 정밀도·F1·PR 곡선·AP는 무너진다. ③ 'F1 최대 임계값'은 모든 임계값을 훑어 F1이 가장 큰 곳으로 옮긴다. 유병률이 낮을수록 그 임계값이 오른쪽(보수적)으로 간다. ④ d′ = 0이면 점수가 아무 정보도 없어 ROC는 대각선, AUC ≈ 0.5다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="roc-auc">
+    <h2>ROC 곡선과 AUC, 그리고 PR 곡선</h2>
+    <p>임계값마다 혼동 행렬이 하나씩 나오니, 임계값 하나에 묶이지 않고 모델 자체의 <strong>순위 매기기 능력</strong>을 평가하고 싶다. <span class="term">ROC 곡선</span><span class="en">(Receiver Operating Characteristic)</span>은 임계값을 +∞에서 −∞로 내리며 (FPR, TPR) 점을 이은 것이다. 임계값이 +∞면 아무도 양성이 아니라 (0, 0), −∞면 모두 양성이라 (1, 1)이다. 완벽한 모델은 (0, 1) 모서리를 지나고, 동전 던지기는 대각선 위에 있다.</p>
+    <p><span class="term">AUC</span><span class="en">(Area Under the ROC Curve)</span>는 이 곡선 아래 넓이로, 0.5(무작위) ~ 1(완벽)이다. 아름다운 해석이 있다. <strong>AUC = 무작위로 뽑은 양성 하나의 점수가 무작위로 뽑은 음성 하나보다 높을 확률</strong>이다.</p>
+    <p><strong>손 계산 예</strong>: 양성 점수 {0.9, 0.6}, 음성 점수 {0.7, 0.3, 0.2}. 양성-음성 쌍 2 × 3 = 6개 중 양성이 이기는 쌍은 0.9가 셋 모두를 이겨 3개, 0.6이 0.3과 0.2를 이겨 2개, 합 5개 → AUC = 5/6 ≈ 0.833. 같은 값을 곡선으로 구해 보자. 점수를 내림차순으로 훑으면 ROC 점은 (0, 0) → 0.9(양성) → (0, 0.5) → 0.7(음성) → (1/3, 0.5) → 0.6(양성) → (1/3, 1) → (2/3, 1) → (1, 1). 사다리꼴(여기서는 직사각형) 넓이 = \(\frac13\times0.5+\frac23\times1=\frac56\). 두 해석이 일치한다.</p>
+    <div class="formula">$$\text{AUC}\approx\sum_{i}\big(\text{FPR}_{i}-\text{FPR}_{i-1}\big)\cdot\frac{\text{TPR}_{i}+\text{TPR}_{i-1}}{2} = P\big(s_{+}&gt;s_{-}\big)$$
+      <div class="where">시뮬레이터의 AUC 칸이 이 사다리꼴 합이다. 두 클래스 점수가 분산이 같은 정규분포이고 평균 차가 \(d'\)이면 이론값은 \(\Phi(d'/\sqrt2)\)다. \(d'=1\) → 약 0.760, \(d'=2\) → 약 0.921, \(d'=3\) → 약 0.983.</div>
+    </div>
+
+    <h3 id="pr-curve">PR 곡선: 불균형 데이터에서 더 정직한 그림</h3>
+    <p>ROC의 두 축 TPR과 FPR은 각각 양성 안, 음성 안에서의 비율이라 <strong>유병률이 바뀌어도 변하지 않는다</strong>. 장점 같지만 불균형 문제에서는 함정이 된다. 카드 거래 100만 건 중 사기가 0.1%(1,000건)라고 하자. FPR 1%, TPR 80%인 점은 ROC에서 왼쪽 위 모서리에 붙은 훌륭한 점으로 보인다. 그런데 개수로는 TP = 800, FP = 999,000 × 0.01 = 9,990이다. 정밀도 = 800/10,790 ≈ <strong>7.4%</strong>. 경보 13~14건 중 1건만 진짜 사기다. FPR 1%가 작아 보여도 음성이 워낙 많아 절대 개수가 크다.</p>
+    <p><span class="term">PR 곡선</span><span class="en">(Precision-Recall curve)</span>은 가로축 재현율, 세로축 정밀도로 이 문제를 그대로 드러낸다. 무작위 분류기의 PR 곡선은 정밀도 = 유병률인 수평선이라(0.1%면 0.001), 기준선 자체가 유병률을 반영한다. 곡선 아래 넓이를 <span class="term">AP</span><span class="en">(Average Precision)</span>라 부르며 \(\text{AP}=\sum_k (R_k-R_{k-1})P_k\)로 계산한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>ROC 곡선 / AUC</th><th>PR 곡선 / AP</th></tr></thead>
+      <tbody>
+        <tr><td>축</td><td>x = FPR, y = TPR(재현율)</td><td>x = 재현율, y = 정밀도</td></tr>
+        <tr><td>무작위 기준선</td><td>대각선, AUC = 0.5</td><td>수평선 y = 유병률, AP ≈ 유병률</td></tr>
+        <tr><td>유병률 변화에</td><td>불변</td><td>민감 (정밀도가 유병률에 의존)</td></tr>
+        <tr><td>해석</td><td>양성을 음성보다 위에 둘 확률</td><td>양성을 찾아가며 경보의 순도가 어떻게 변하나</td></tr>
+        <tr><td>언제</td><td>클래스가 대략 균형, 유병률이 상황마다 다를 때 모델 비교</td><td>양성이 드물고 양성 쪽 성능이 관심일 때 (사기, 희귀 질환, 검색)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "AUC 0.95면 실전에서도 잘 맞힌다"</strong>
+      <p>AUC는 순위 능력일 뿐, 실제로 쓸 임계값에서의 정밀도를 말해 주지 않는다. 유병률 0.1%에서는 AUC 0.95 모델도 정밀도가 한 자릿수 %일 수 있다. 또 AUC는 확률이 얼마나 <em>맞는 값</em>인지(보정, calibration)도 말해 주지 않는다. 점수를 모두 절반으로 줄여도 순위가 같으니 AUC는 같다. 실전 배포 전에는 반드시 실제 유병률에서, 실제로 쓸 임계값의 혼동 행렬을 확인하자.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="regression-metrics">
+    <h2>회귀 지표: MAE, MSE, RMSE, R²</h2>
+    <p>회귀는 오차 \(e_i = y_i - \hat y_i\)의 크기를 요약한다.</p>
+    <div class="formula">$$\text{MAE}=\frac1n\sum|e_i|\qquad \text{MSE}=\frac1n\sum e_i^2\qquad \text{RMSE}=\sqrt{\text{MSE}}\qquad R^2 = 1-\frac{\sum e_i^2}{\sum (y_i-\bar y)^2}$$</div>
+    <p><strong>계산 예</strong>: 실제값 \(y\) = (3, 5, 7, 9, 11), 예측 \(\hat y\) = (2.5, 5.5, 7, 8, 13). 오차 \(e\) = (0.5, −0.5, 0, 1, −2). MAE = (0.5+0.5+0+1+2)/5 = <strong>0.8</strong>, MSE = (0.25+0.25+0+1+4)/5 = <strong>1.1</strong>, RMSE ≈ <strong>1.049</strong>. \(\bar y=7\)이고 \(\sum(y_i-\bar y)^2 = 16+4+0+4+16=40\), \(\sum e_i^2 = 5.5\)이므로 R² = 1 − 5.5/40 = <strong>0.8625</strong>. 이제 마지막 예측만 크게 틀려 오차가 −10이 되면 MAE = 2.4(3배)지만 MSE = 20.3, RMSE ≈ 4.51(4.3배)로 더 크게 뛴다. 제곱이 큰 오차를 키우기 때문이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>지표</th><th>단위</th><th>이상치에</th><th>해석</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr><td>MAE</td><td>타깃과 같음</td><td>둔감</td><td>평균적으로 몇 만큼 틀리나</td><td>중앙값 예측이 최적</td></tr>
+        <tr><td>MSE</td><td>타깃의 제곱</td><td>민감</td><td>직관적 단위 아님</td><td>평균 예측이 최적, 학습 손실로 흔함 (<a href="training.html#tr-loss">3장</a>)</td></tr>
+        <tr><td>RMSE</td><td>타깃과 같음</td><td>민감</td><td>큰 오차에 가중한 '전형적 오차'</td><td>항상 RMSE ≥ MAE</td></tr>
+        <tr><td>R²</td><td>없음</td><td>민감</td><td>평균만 쓰는 기준선 대비 설명한 분산 비율</td><td>1이 완벽, 0 = 평균 예측과 같음, <strong>음수 가능</strong></td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "R²는 0과 1 사이다"</strong>
+      <p>학습 데이터에서 절편이 있는 선형 회귀를 최소제곱으로 맞추면 그렇지만, 검증·테스트 데이터에서는 모델이 "항상 평균을 말하는 것"보다 못하면 R² &lt; 0이 된다. 과적합한 고차 다항식의 검증 R²가 음수인 것은 흔한 일이다. 또 R²가 높다고 오차가 작은 것도 아니다. 타깃의 분산이 크면 RMSE가 커도 R²는 높을 수 있다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 13 -->
+  <section id="baseline">
+    <h2>기준선 모델부터</h2>
+    <p>"정확도 92%"가 좋은지 나쁜지는 <strong>비교 대상</strong>이 있어야 판단할 수 있다. 본격적인 모델을 만들기 전에 가능한 가장 단순한 <span class="term">기준선</span><span class="en">(Baseline)</span>을 먼저 계산하자.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>문제</th><th>기준선</th><th>기준선 점수의 예</th></tr></thead>
+      <tbody>
+        <tr><td>분류</td><td>항상 최빈 클래스</td><td>유병률 1% → 정확도 99%, 재현율 0</td></tr>
+        <tr><td>회귀</td><td>항상 학습 데이터 평균(또는 중앙값)</td><td>R² ≈ 0 (정의상)</td></tr>
+        <tr><td>시계열 예측</td><td>"내일 = 오늘" (지속성 예측), 작년 같은 날</td><td>날씨·수요 예측에서 의외로 강함</td></tr>
+        <tr><td>텍스트 분류</td><td>단어 빈도 + 로지스틱 회귀</td><td>작은 데이터에서 대형 모델과 차이가 작을 때가 있음</td></tr>
+        <tr><td>LLM 애플리케이션</td><td>단순 프롬프트, 키워드 검색(BM25)</td><td>복잡한 에이전트·RAG 파이프라인의 이득을 재는 출발점</td></tr>
+      </tbody>
+    </table></div>
+    <p>기준선은 세 가지 일을 한다. ① <strong>버그 탐지</strong>: 복잡한 모델이 기준선과 비슷하면 학습이 실제로 안 되고 있을 가능성이 크다. ② <strong>누수 탐지</strong>: 단순한 모델이 비현실적으로 높으면 특성에 답이 새고 있다. ③ <strong>가치 판단</strong>: 기준선 대비 1%p 개선에 GPU 수천 시간과 유지보수 비용을 들일 가치가 있는가? 예를 들어 양성 비율 70%인 이진 분류 벤치마크에서 "정확도 72%"를 달성했다면, 무조건 다수 클래스만 답하는 기준선(70%)보다 겨우 2%p 낫다.</p>
+  </section>
+
+  <!-- ============================================================ 14 -->
+  <section id="ml-workflow">
+    <h2>머신러닝 프로젝트의 전체 흐름</h2>
+    <p>실무에서 모델 학습은 전체 일의 일부에 불과하다. 전형적인 흐름은 다음과 같고, 실제로는 여러 번 앞 단계로 되돌아간다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 480 320" class="ml-narrow" role="img" aria-label="문제 정의, 데이터, 특성과 학습, 평가, 배포, 모니터링이 순환하고 드리프트가 감지되면 재학습하는 ML 프로젝트 흐름">
+        <defs><marker id="ml-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker></defs>
+        <rect x="16" y="16" width="190" height="66" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="111" y="44" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">① 문제 정의</text>
+        <text x="111" y="66" text-anchor="middle" class="t-dim" style="font-size:12.5px">지표·기준선·오류 비용</text>
+        <rect x="274" y="16" width="190" height="66" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="369" y="44" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">② 데이터</text>
+        <text x="369" y="66" text-anchor="middle" class="t-dim" style="font-size:12.5px">수집·라벨·분할</text>
+        <rect x="274" y="122" width="190" height="66" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="369" y="150" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">③ 특성·학습</text>
+        <text x="369" y="172" text-anchor="middle" class="t-dim" style="font-size:12.5px">파이프라인·튜닝(CV)</text>
+        <rect x="274" y="228" width="190" height="66" rx="10" class="f-elev" style="stroke:var(--border)"/>
+        <text x="369" y="256" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">④ 평가</text>
+        <text x="369" y="278" text-anchor="middle" class="t-dim" style="font-size:12.5px">검증 → 테스트 1회</text>
+        <rect x="16" y="228" width="190" height="66" rx="10" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="111" y="256" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">⑤ 배포</text>
+        <text x="111" y="278" text-anchor="middle" class="t-dim" style="font-size:12.5px">A/B 테스트·지연 시간</text>
+        <rect x="16" y="122" width="190" height="66" rx="10" class="f-warn-soft" style="stroke:var(--warn)"/>
+        <text x="111" y="150" text-anchor="middle" class="t" style="font-weight:700;font-size:15px">⑥ 모니터링</text>
+        <text x="111" y="172" text-anchor="middle" class="t-dim" style="font-size:12.5px">드리프트·성능·비용</text>
+        <path d="M206,49 L270,49" style="fill:none;stroke:var(--text-dim);stroke-width:1.6" marker-end="url(#ml-arr)"/>
+        <path d="M369,82 L369,118" style="fill:none;stroke:var(--text-dim);stroke-width:1.6" marker-end="url(#ml-arr)"/>
+        <path d="M369,188 L369,224" style="fill:none;stroke:var(--text-dim);stroke-width:1.6" marker-end="url(#ml-arr)"/>
+        <path d="M274,261 L210,261" style="fill:none;stroke:var(--text-dim);stroke-width:1.6" marker-end="url(#ml-arr)"/>
+        <path d="M111,228 L111,192" style="fill:none;stroke:var(--text-dim);stroke-width:1.6" marker-end="url(#ml-arr)"/>
+        <path d="M206,140 Q240,140 270,74" style="fill:none;stroke:var(--warn);stroke-width:1.8;stroke-dasharray:5 4" marker-end="url(#ml-arr)"/>
+        <text x="240" y="160" text-anchor="middle" class="t" style="fill:var(--warn);font-size:12px">재학습</text>
+        <path d="M464,252 Q478,205 464,166" style="fill:none;stroke:var(--text-faint);stroke-width:1.3;stroke-dasharray:3 4" marker-end="url(#ml-arr)"/>
+        <text x="458" y="210" text-anchor="end" class="t-dim" style="font-size:11px">반복</text>
+      </svg>
+      <figcaption><b>그림 0-3.</b> ML 프로젝트의 수명 주기. 배포는 끝이 아니라 모니터링과 재학습이 도는 순환의 시작이다.</figcaption>
+    </figure>
+    <ol>
+      <li><strong>문제 정의</strong>: 예측할 것, 예측 시점, 오류 종류별 비용, 성공 지표, 기준선을 정한다. "이탈 예측"이라면 '언제 기준으로 몇 일 안의 이탈'인지까지 정해야 시간 누수를 피할 수 있다.</li>
+      <li><strong>데이터</strong>: 수집, 라벨링, 품질 점검, 그리고 <strong>가장 먼저 분할</strong>.</li>
+      <li><strong>특성과 학습</strong>: 전처리를 파이프라인으로 묶고, 교차 검증으로 모델·하이퍼파라미터를 고른다.</li>
+      <li><strong>평가</strong>: 실제 유병률·실제 임계값에서의 지표, 하위 그룹별 성능, 오류 사례 분석. 테스트 세트는 마지막에 한 번.</li>
+      <li><strong>배포</strong>: 지연 시간·비용 제약 안에서 서빙하고, 가능하면 일부 사용자에게만 먼저 적용해(A/B 테스트) 실제 효과를 측정한다.</li>
+      <li><strong>모니터링</strong>: 세상은 변하고 모델은 학습 시점에 멈춰 있다.</li>
+    </ol>
+
+    <h3 id="data-drift">데이터 드리프트</h3>
+    <p>배포 후 입력이나 정답의 분포가 학습 때와 달라지는 것을 <span class="term">드리프트</span><span class="en">(drift)</span> 또는 분포 이동이라 한다. 성능 저하의 가장 흔한 원인이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종류</th><th>무엇이 바뀌나</th><th>예</th><th>탐지</th></tr></thead>
+      <tbody>
+        <tr><td>공변량 이동 <span class="en">(covariate shift)</span></td><td>\(p(x)\): 입력 분포</td><td>새 카메라로 바뀐 의료 영상, 신규 연령대 사용자 유입</td><td>라벨 없이도 입력 통계 비교로 감지 가능</td></tr>
+        <tr><td>라벨 이동 <span class="en">(label/prior shift)</span></td><td>\(p(y)\): 클래스 비율</td><td>독감 유행기에 양성 비율 급증</td><td>예측 양성 비율의 변화</td></tr>
+        <tr><td>개념 이동 <span class="en">(concept drift)</span></td><td>\(p(y\mid x)\): 입력과 답의 관계</td><td>새 스팸 수법, 팬데믹 이후 소비 패턴</td><td>지연되어 도착하는 실제 라벨로 성능 추적</td></tr>
+      </tbody>
+    </table></div>
+    <p>라벨 이동은 앞의 <a href="#accuracy-trap">정확도 함정</a>과 직결된다. 유병률이 바뀌면 같은 모델·같은 임계값이라도 정밀도가 달라진다. LLM도 예외가 아니다. 학습 데이터의 시점 이후에 생긴 사실은 모르고(지식 컷오프), 사용자가 묻는 질문의 분포도 계속 바뀐다. RAG(<a href="rag.html">10장</a>)는 모델을 다시 학습하지 않고 최신 정보를 넣어 주는 방법 중 하나다.</p>
+  </section>
+
+  <!-- ============================================================ 요약 -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>AI ⊃ ML ⊃ DL. 머신러닝은 규칙을 사람이 쓰는 대신 데이터에서 배우고, 딥러닝은 그중 다층 신경망을 쓰는 방법이다. 생성 모델은 \(p(x)\)를 배우는 다른 축의 분류이며 LLM은 딥러닝 ∩ 생성 모델에 속한다.</li>
+      <li>학습 신호로 나누면 지도(정답 라벨), 비지도(구조), 강화(지연된 스칼라 보상), 자기지도(데이터에서 만든 라벨)다. LLM 사전학습은 다음 토큰을 정답으로 쓰는 자기지도학습이다.</li>
+      <li>분류는 범주, 회귀는 연속값, 군집화는 라벨 없는 묶음을 출력한다. k-means는 할당과 평균 갱신을 반복하며 WCSS를 단조 감소시키지만 지역 최적에 빠질 수 있다.</li>
+      <li>학습 세트는 파라미터, 검증 세트는 선택, 테스트 세트는 최종 보고에 쓴다. 테스트는 한 번만 열어야 하며, 선택에 쓰인 점수는 낙관적으로 편향된다.</li>
+      <li>과소적합은 학습·검증 오차가 둘 다 높고, 과적합은 격차가 크다. 학습 곡선으로 "데이터를 더 모으면 나아질까?"를 판단한다.</li>
+      <li>기대 테스트 오차 = 편향² + 분산 + σ². 복잡도를 올리면 편향이 줄고 분산이 늘며, 데이터를 늘리면 분산이 준다. σ²는 어떤 모델로도 줄일 수 없다.</li>
+      <li>데이터 누수(타깃·전처리·시간·그룹)는 검증 점수를 부풀려 평가로는 잡히지 않는다. 분할을 먼저 하고 모든 학습 가능한 전처리를 학습 분할에서만 fit한다.</li>
+      <li>특성 공학(스케일링, 원핫, 로그, 교차 특성, 결측 처리)은 표 데이터에서 여전히 중요하고, 딥러닝은 특성 자체를 학습한다(임베딩).</li>
+      <li>교차 검증은 데이터 구조에 맞춰 고른다. 불균형 → 층화, 시간 → 시계열 분할, 개체별 다중 샘플 → 그룹 k-fold.</li>
+      <li>정밀도 = TP/(TP+FP), 재현율 = TP/(TP+FN), F1은 조화 평균. 둘 다 임계값에 따라 바뀌고, 정밀도는 유병률에도 의존한다. 불균형 데이터에서 정확도는 "모두 음성" 기준선과 비교해야 의미가 있다.</li>
+      <li>ROC-AUC는 양성을 음성보다 위에 둘 확률로 유병률에 불변이다. 양성이 드물면 PR 곡선·AP가 실제 경보의 순도를 더 정직하게 보여 준다.</li>
+      <li>회귀는 MAE(강건), RMSE(큰 오차에 민감), R²(평균 기준선 대비, 음수 가능)로 평가한다. 어떤 문제든 기준선부터 계산하고, 배포 후에는 드리프트를 모니터링한다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ 퀴즈 -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 양성 비율 2%인 데이터 5,000개에서 항상 "음성"이라고 답하는 모델의 정확도와 재현율은?</p><div class="opts">
+        <button class="opt">정확도 2%, 재현율 100%</button><button class="opt" data-correct>정확도 98%, 재현율 0%</button><button class="opt">정확도 98%, 재현율 98%</button><button class="opt">정확도 50%, 재현율 0%</button>
+      </div><div class="quiz-exp">양성 100개, 음성 4,900개. 모두 음성으로 답하면 TN = 4,900, FN = 100, TP = FP = 0. 정확도 = 4,900/5,000 = 98%, 재현율 = 0/100 = 0%. 불균형 데이터에서 높은 정확도는 아무 의미가 없을 수 있다.</div></div>
+
+      <div class="quiz-q"><p>2. TP = 40, FP = 10, FN = 60, TN = 890일 때 F1 점수에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">0.93</button><button class="opt">0.80</button><button class="opt">0.60</button><button class="opt" data-correct>0.53</button>
+      </div><div class="quiz-exp">정밀도 = 40/50 = 0.8, 재현율 = 40/100 = 0.4. F1 = 2·0.8·0.4/(0.8+0.4) = 0.64/1.2 ≈ 0.533 (= 2TP/(2TP+FP+FN) = 80/150). 0.93은 정확도 (40+890)/1000이다.</div></div>
+
+      <div class="quiz-q"><p>3. 다음 중 자기지도학습의 예로 가장 적절한 것은?</p><div class="opts">
+        <button class="opt" data-correct>웹 문서에서 앞부분을 입력, 바로 다음 토큰을 정답으로 삼아 언어 모델을 학습</button><button class="opt">전문의가 판독한 X선 사진으로 폐렴 분류기를 학습</button><button class="opt">게임 점수를 보상으로 받아 행동 정책을 학습</button><button class="opt">고객 구매 기록을 k-means로 5개 군집으로 묶기</button>
+      </div><div class="quiz-exp">정답이 데이터 자체에서 만들어지므로 자기지도학습이다. 두 번째는 사람이 붙인 라벨을 쓰는 지도학습, 세 번째는 강화학습, 네 번째는 비지도 군집화다.</div></div>
+
+      <div class="quiz-q"><p>4. 학습 MSE 0.02, 검증 MSE 0.45, 노이즈 분산 σ² ≈ 0.04인 회귀 모델에 가장 적절한 처방은?</p><div class="opts">
+        <button class="opt">더 큰 모델로 바꾼다</button><button class="opt">규제를 약하게 한다</button><button class="opt" data-correct>학습 데이터를 늘리거나 규제를 강하게 한다</button><button class="opt">아무것도 하지 않는다. 학습 오차가 σ²보다 낮으니 최적이다</button>
+      </div><div class="quiz-exp">학습 오차가 σ²보다도 낮고 검증 오차와의 격차가 매우 크다. 노이즈까지 외운 과적합(높은 분산)이다. 분산을 줄이는 처방(데이터 추가, 규제, 단순한 모델, 앙상블)이 맞다.</div></div>
+
+      <div class="quiz-q"><p>5. 다음 중 데이터 누수가 <strong>아닌</strong> 것은?</p><div class="opts">
+        <button class="opt">전체 데이터로 평균·표준편차를 구해 정규화한 뒤 학습/테스트로 분할</button><button class="opt" data-correct>학습 분할로만 결측 대체값을 계산해 검증 분할에 같은 값으로 채움</button><button class="opt">같은 환자의 CT 슬라이스를 무작위로 학습과 테스트에 나눔</button><button class="opt">다음 달 매출 예측에 '그달 말 기준 고객 등급'을 특성으로 씀</button>
+      </div><div class="quiz-exp">학습 분할에서 fit하고 검증에는 transform만 하는 것이 올바른 절차다. 나머지는 각각 전처리 누수, 그룹 누수, 시간(타깃) 누수다.</div></div>
+
+      <div class="quiz-q"><p>6. 양성 점수 {0.8, 0.4}, 음성 점수 {0.5, 0.3}일 때 ROC-AUC는?</p><div class="opts">
+        <button class="opt">0.50</button><button class="opt">0.60</button><button class="opt">1.00</button><button class="opt" data-correct>0.75</button>
+      </div><div class="quiz-exp">양성-음성 쌍 4개: (0.8, 0.5) 승, (0.8, 0.3) 승, (0.4, 0.5) 패, (0.4, 0.3) 승. 3/4 = 0.75. AUC = 무작위 양성이 무작위 음성보다 높은 점수를 받을 확률이다.</div></div>
+
+      <div class="quiz-q"><p>7. 2020~2024년 일별 전력 수요로 다음 날 수요를 예측하는 모델을 튜닝할 때 알맞은 교차 검증은?</p><div class="opts">
+        <button class="opt">층화 k-fold</button><button class="opt">무작위로 섞은 10-fold</button><button class="opt" data-correct>과거 구간으로 학습하고 바로 뒤 구간으로 검증하는 시계열 분할</button><button class="opt">LOOCV</button>
+      </div><div class="quiz-exp">무작위 분할은 미래 데이터로 과거를 맞히게 되어 시간 누수가 생기고 점수가 부풀려진다. 실제 사용 상황(과거 → 미래)을 흉내 내는 시계열 분할을 쓴다.</div></div>
+
+      <div class="quiz-q"><p>8. 오차가 (1, −1, 2, −2)인 회귀 모델의 MAE와 RMSE는?</p><div class="opts">
+        <button class="opt" data-correct>MAE = 1.5, RMSE ≈ 1.58</button><button class="opt">MAE = 0, RMSE = 0</button><button class="opt">MAE = 1.5, RMSE = 2.5</button><button class="opt">MAE = 1.58, RMSE = 1.5</button>
+      </div><div class="quiz-exp">MAE = (1+1+2+2)/4 = 1.5. MSE = (1+1+4+4)/4 = 2.5, RMSE = √2.5 ≈ 1.58. 오차 합이 0이라고 오차가 없는 것이 아니다. 2.5는 MSE이고, 항상 RMSE ≥ MAE다.</div></div>
+
+      <div class="quiz-q"><p>9. 거래 100만 건 중 사기가 0.1%다. 어떤 모델이 임계값에서 TPR 80%, FPR 1%라면 정밀도는 약?</p><div class="opts">
+        <button class="opt">99%</button><button class="opt" data-correct>7%</button><button class="opt">80%</button><button class="opt">50%</button>
+      </div><div class="quiz-exp">사기 1,000건 중 TP = 800, 정상 999,000건 중 FP = 9,990. 정밀도 = 800/10,790 ≈ 7.4%. ROC에서는 훌륭해 보이는 점도 양성이 드물면 경보 대부분이 헛경보다. 이런 경우 PR 곡선을 본다.</div></div>
+
+      <div class="quiz-q"><p>10. 연구자가 모델 50개를 학습시키고 <strong>테스트 세트</strong> 점수가 가장 높은 모델을 골라 그 테스트 점수를 최종 성능으로 보고했다. 이 보고값은?</p><div class="opts">
+        <button class="opt">편향이 없는 정확한 추정이다</button><button class="opt">실제 성능보다 비관적이다</button><button class="opt" data-correct>선택에 쓰였으므로 실제 성능보다 낙관적일 가능성이 높다</button><button class="opt">테스트 세트가 크면 선택 편향이 커진다</button>
+      </div><div class="quiz-exp">테스트 세트를 선택에 쓰면 그 세트에 우연히 잘 맞는 모델이 뽑혀 점수가 위로 편향된다(무작위 분류기 100개 중 최고가 약 62.5%가 되는 예). 선택은 검증 세트나 CV로 하고, 테스트는 마지막에 한 번만 쓴다. 테스트 세트가 클수록 점수의 잡음이 줄어 편향은 작아진다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ======================================================== 공통 헬퍼 */
+  function safe(name, fn) { try { fn(); } catch (e) { console.error("[" + name + "]", e); } }
+  function ptr(cv, e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  function dragger(cv, h) {
+    var active = false;
+    cv.style.touchAction = "none";
+    cv.addEventListener("pointerdown", function (e) {
+      var p = ptr(cv, e);
+      if (h.down(p, e) === false) return;
+      active = true; try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    cv.addEventListener("pointermove", function (e) {
+      var p = ptr(cv, e);
+      if (active) { h.move && h.move(p, e); e.preventDefault(); }
+      else if (h.hover) cv.style.cursor = h.hover(p) || "";
+    });
+    function end(e) { if (!active) return; active = false; h.up && h.up(ptr(cv, e), e); }
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  }
+  function font(ctx, px, mono, bold) { ctx.font = (bold ? "600 " : "") + px + "px " + (mono ? "JetBrains Mono, ui-monospace, monospace" : getComputedStyle(document.body).getPropertyValue("--font")); }
+  function dot(ctx, x, y, r, fill, stroke, lw) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1.5; ctx.stroke(); } }
+  function pct(x, d) { return (x * 100).toFixed(d == null ? 1 : d) + "%"; }
+  function fx(x, d) { if (!isFinite(x)) return "—"; var a = Math.abs(x); if (a !== 0 && (a < 1e-3 || a >= 1e4)) return x.toExponential(2); return x.toFixed(d == null ? 4 : d); }
+  function chartBox(W, H) { return { x: 54, y: 30, w: Math.max(40, W - 54 - 14), h: Math.max(40, H - 30 - 44) }; }
+  function legend(ctx, box, items) {
+    var P = AB.palette(); font(ctx, 11.5); var w = 0;
+    items.forEach(function (L) { w = Math.max(w, ctx.measureText(L[0]).width); });
+    var x1 = box.x + box.w - 4, y0 = box.y + 2;
+    ctx.fillStyle = AB.alpha(P.bg, 0.82); ctx.fillRect(x1 - w - 8, y0 - 2, w + 10, items.length * 15 + 4);
+    ctx.textAlign = "right"; ctx.textBaseline = "top";
+    items.forEach(function (L, i) { ctx.fillStyle = L[1]; ctx.fillText(L[0], x1, y0 + i * 15); });
+  }
+  function shuffle(a, r) { for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(r() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+
+  // ---- 르장드르 다항식 기저 최소제곱 (x ∈ [-1,1]) ----
+  function legendre(x, d, out) {
+    out[0] = 1; if (d >= 1) out[1] = x;
+    for (var k = 1; k < d; k++) out[k + 1] = ((2 * k + 1) * x * out[k] - k * out[k - 1]) / (k + 1);
+    return out;
+  }
+  function solve(A, b) {
+    var n = b.length, M = A.map(function (r, i) { return r.concat([b[i]]); });
+    for (var c = 0; c < n; c++) {
+      var piv = c; for (var r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+      var tmp = M[c]; M[c] = M[piv]; M[piv] = tmp;
+      var dv = M[c][c]; if (Math.abs(dv) < 1e-300) dv = 1e-300;
+      for (var r2 = c + 1; r2 < n; r2++) { var f = M[r2][c] / dv; if (!f) continue; for (var k = c; k <= n; k++) M[r2][k] -= f * M[c][k]; }
+    }
+    var x = new Array(n).fill(0);
+    for (var i = n - 1; i >= 0; i--) { var s = M[i][n]; for (var j = i + 1; j < n; j++) s -= M[i][j] * x[j]; x[i] = s / (Math.abs(M[i][i]) < 1e-300 ? 1e-300 : M[i][i]); }
+    return x;
+  }
+  function polyfit(xs, ys, d, lam) {
+    var m = d + 1, G = [], b = new Array(m).fill(0), phi = new Array(m), i, j, k;
+    for (i = 0; i < m; i++) G.push(new Array(m).fill(0));
+    for (k = 0; k < xs.length; k++) {
+      legendre(xs[k], d, phi);
+      for (i = 0; i < m; i++) { b[i] += phi[i] * ys[k]; for (j = i; j < m; j++) G[i][j] += phi[i] * phi[j]; }
+    }
+    var reg = (lam == null ? 1e-8 : lam) * Math.max(1, xs.length);
+    for (i = 0; i < m; i++) { G[i][i] += reg; for (j = 0; j < i; j++) G[i][j] = G[j][i]; }
+    return solve(G, b);
+  }
+  function polyval(c, x) { var phi = legendre(x, c.length - 1, new Array(c.length)), s = 0; for (var i = 0; i < c.length; i++) s += c[i] * phi[i]; return s; }
+  function mse(c, xs, ys, cap) { var s = 0; for (var i = 0; i < xs.length; i++) { var e = ys[i] - polyval(c, xs[i]); s += Math.min(e * e, cap || 1e6); } return s / xs.length; }
+  function ftrue(x) { return Math.sin(2.5 * x) + 0.3 * x * x; }
+
+  /* ======================================================== SIM 1: k-means */
+  safe("kmeans", function () {
+    var el = document.getElementById("ml-cv-km");
+    var pts = [], cents = [], asg = [], phase = "assign", iter = 0, conv = false, lastChanged = -1, initSeed = 1, V = { ox: 0, oy: 0, s: 1 }, drag = null;
+    var kGet = AB.range("ml-km-k", function (v) { return String(v); }, function () { initCents(); cv.redraw(); });
+    function gen(kind) {
+      var r = AB.rng(kind === "blobs" ? 21 : kind === "uneven" ? 22 : 23); pts = [];
+      function blob(cx, cy, sd, n) { for (var i = 0; i < n; i++) pts.push({ x: cx + r.n() * sd, y: cy + r.n() * sd }); }
+      if (kind === "blobs") { blob(-0.5, 0.45, 0.15, 22); blob(0.55, 0.4, 0.15, 22); blob(0.0, -0.5, 0.15, 22); }
+      else if (kind === "uneven") { blob(-0.3, 0.05, 0.3, 50); blob(0.7, 0.6, 0.07, 8); blob(0.7, -0.6, 0.07, 8); }
+      else {
+        for (var i = 0; i < 30; i++) { var a = r() * 2 * Math.PI, rr = 0.22 * Math.sqrt(r()); pts.push({ x: rr * Math.cos(a), y: rr * Math.sin(a) }); }
+        for (var j = 0; j < 56; j++) { var b = r() * 2 * Math.PI, r2 = 0.8 + r.n() * 0.04; pts.push({ x: r2 * Math.cos(b), y: r2 * Math.sin(b) }); }
+      }
+      pts.forEach(function (p) { p.x = AB.clamp(p.x, -1.1, 1.1); p.y = AB.clamp(p.y, -1.1, 1.1); });
+      initCents();
+    }
+    function initCents() {
+      var r = AB.rng(1000 + initSeed), k = Math.min(kGet(), pts.length), idx = [];
+      for (var i = 0; i < pts.length; i++) idx.push(i);
+      shuffle(idx, r);
+      cents = idx.slice(0, k).map(function (i) { return { x: pts[i].x, y: pts[i].y }; });
+      asg = pts.map(function () { return -1; }); phase = "assign"; iter = 0; conv = false; lastChanged = -1;
+    }
+    function nearest(p) { var best = 0, bd = Infinity; for (var j = 0; j < cents.length; j++) { var d = (p.x - cents[j].x) * (p.x - cents[j].x) + (p.y - cents[j].y) * (p.y - cents[j].y); if (d < bd - 1e-12) { bd = d; best = j; } } return best; }
+    function assignStep() {
+      var ch = 0;
+      pts.forEach(function (p, i) { var j = nearest(p); if (asg[i] !== j) { asg[i] = j; ch++; } });
+      lastChanged = ch; phase = "update";
+      if (ch === 0 && iter > 0) conv = true;
+      return ch;
+    }
+    function updateStep() {
+      for (var j = 0; j < cents.length; j++) {
+        var sx = 0, sy = 0, n = 0;
+        pts.forEach(function (p, i) { if (asg[i] === j) { sx += p.x; sy += p.y; n++; } });
+        if (n) { cents[j].x = sx / n; cents[j].y = sy / n; }
+      }
+      iter++; phase = "assign";
+    }
+    function J() {
+      var s = 0;
+      pts.forEach(function (p, i) { var j = asg[i] >= 0 ? asg[i] : nearest(p), c = cents[j]; s += (p.x - c.x) * (p.x - c.x) + (p.y - c.y) * (p.y - c.y); });
+      return s;
+    }
+    function W2S(x, y) { return [V.ox + x * V.s, V.oy - y * V.s]; }
+    function S2W(p) { return [(p.x - V.ox) / V.s, (V.oy - p.y) / V.s]; }
+    var cv = AB.canvas(el, function (ctx, W, H) {
+      var P = AB.palette(), cols = P.series;
+      V.ox = W / 2; V.oy = H / 2; V.s = Math.min(W, H) / 2.4;
+      // 보로노이 영역(현재 중심 기준)
+      var cell = 12;
+      for (var sx = 0; sx < W; sx += cell) for (var sy = 0; sy < H; sy += cell) {
+        var w = S2W({ x: sx + cell / 2, y: sy + cell / 2 }), j = nearest({ x: w[0], y: w[1] });
+        ctx.fillStyle = AB.alpha(cols[j % cols.length], 0.07); ctx.fillRect(sx, sy, cell, cell);
+      }
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      for (var g = -2; g <= 2; g++) { var gs = W2S(g * 0.5, g * 0.5); ctx.beginPath(); ctx.moveTo(gs[0], 0); ctx.lineTo(gs[0], H); ctx.moveTo(0, gs[1]); ctx.lineTo(W, gs[1]); ctx.stroke(); }
+      pts.forEach(function (p, i) {
+        var s = W2S(p.x, p.y), c = asg[i] >= 0 ? cols[asg[i] % cols.length] : P.faint;
+        if (asg[i] >= 0 && phase === "update") { var cc = W2S(cents[asg[i]].x, cents[asg[i]].y); ctx.strokeStyle = AB.alpha(c, 0.25); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(cc[0], cc[1]); ctx.stroke(); }
+        dot(ctx, s[0], s[1], 5, c, P.bg, 1.2);
+      });
+      cents.forEach(function (c, j) {
+        var s = W2S(c.x, c.y), r = 10;
+        ctx.beginPath(); ctx.moveTo(s[0], s[1] - r); ctx.lineTo(s[0] + r, s[1]); ctx.lineTo(s[0], s[1] + r); ctx.lineTo(s[0] - r, s[1]); ctx.closePath();
+        ctx.fillStyle = cols[j % cols.length]; ctx.fill(); ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.stroke();
+        font(ctx, 11, true, true); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("μ" + (j + 1), s[0] + 11, s[1] - 6);
+      });
+      AB.stat("ml-km-j", J().toFixed(3));
+      AB.stat("ml-km-it", iter);
+      AB.stat("ml-km-next", phase === "assign" ? "① 할당" : "② 중심 갱신");
+      AB.stat("ml-km-st", conv ? '<span style="color:var(--ok)">수렴 (할당 변화 0)</span>' : lastChanged >= 0 ? "직전 할당 변경 " + lastChanged + "개" : "초기 중심 배치됨");
+    }, { aspect: 0.8, maxHeight: 460, minHeight: 280 });
+    document.getElementById("ml-km-assign").addEventListener("click", function () { assignStep(); cv.redraw(); });
+    document.getElementById("ml-km-update").addEventListener("click", function () { if (asg.some(function (a) { return a < 0; })) assignStep(); updateStep(); cv.redraw(); });
+    document.getElementById("ml-km-run").addEventListener("click", function () {
+      for (var t = 0; t < 200; t++) { if (phase === "update") updateStep(); var ch = assignStep(); if (ch === 0 && iter > 0) break; updateStep(); }
+      conv = true; cv.redraw();
+    });
+    document.getElementById("ml-km-init").addEventListener("click", function () { initSeed++; initCents(); cv.redraw(); });
+    document.querySelectorAll("[data-mlkm]").forEach(function (b) { b.addEventListener("click", function () { gen(b.dataset.mlkm); cv.redraw(); }); });
+    function hit(p) {
+      for (var j = 0; j < cents.length; j++) { var s = W2S(cents[j].x, cents[j].y); if (Math.hypot(p.x - s[0], p.y - s[1]) < 15) return { t: "c", i: j }; }
+      for (var i = 0; i < pts.length; i++) { var q = W2S(pts[i].x, pts[i].y); if (Math.hypot(p.x - q[0], p.y - q[1]) < 10) return { t: "p", i: i }; }
+      return null;
+    }
+    dragger(el, {
+      down: function (p) {
+        drag = hit(p);
+        if (!drag) { var w = S2W(p); pts.push({ x: AB.clamp(w[0], -1.2, 1.2), y: AB.clamp(w[1], -1.2, 1.2) }); asg.push(-1); phase = "assign"; conv = false; drag = { t: "p", i: pts.length - 1 }; }
+        cv.redraw();
+      },
+      move: function (p) {
+        if (!drag) return; var w = S2W(p), o = drag.t === "c" ? cents[drag.i] : pts[drag.i];
+        o.x = AB.clamp(w[0], -1.25, 1.25); o.y = AB.clamp(w[1], -1.25, 1.25); conv = false; phase = "assign"; cv.redraw();
+      },
+      up: function () { drag = null; },
+      hover: function (p) { return hit(p) ? "grab" : "crosshair"; }
+    });
+    gen("blobs"); cv.redraw();
+  });
+
+  /* ======================================================== SIM 2: 복잡도 곡선 · 학습 곡선 */
+  safe("fit", function () {
+    var seed = 5, XT = [], ET = [], XV = [], YV = [], lcCache = {}, mode = "cx";
+    var dGet = AB.range("ml-fit-d", function (v) { return String(v); }, upd);
+    var nGet = AB.range("ml-fit-n", function (v) { return String(v); }, upd);
+    var sGet = AB.range("ml-fit-s", function (v) { return v.toFixed(2); }, function () { makeVal(); upd(); });
+    AB.seg("ml-fit-mode", function (v) { mode = v; upd(); });
+    var VE = [];
+    function make() {
+      var r = AB.rng(seed); XT = []; ET = []; XV = []; VE = [];
+      for (var i = 0; i < 200; i++) { XT.push(r() * 2 - 1); ET.push(r.n()); }
+      for (var j = 0; j < 200; j++) { XV.push(r() * 2 - 1); VE.push(r.n()); }
+      makeVal(); lcCache = {};
+    }
+    function makeVal() { var s = sGet(); YV = XV.map(function (x, i) { return ftrue(x) + s * VE[i]; }); }
+    function train() { var n = nGet(), s = sGet(), xs = XT.slice(0, n); return { xs: xs, ys: xs.map(function (x, i) { return ftrue(x) + s * ET[i]; }) }; }
+    var st = {};
+    function compute() {
+      var D = train(), d = dGet(); st.D = D;
+      st.c = polyfit(D.xs, D.ys, d);
+      st.tr = mse(st.c, D.xs, D.ys); st.va = mse(st.c, XV, YV, 1e3);
+      st.cx = []; var best = 0, bv = Infinity;
+      for (var k = 0; k <= 15; k++) { var c = polyfit(D.xs, D.ys, k), t = mse(c, D.xs, D.ys), v = mse(c, XV, YV, 1e3); st.cx.push([k, t, v]); if (v < bv) { bv = v; best = k; } }
+      st.best = best;
+      if (mode === "lc") {
+        var key = d + "|" + sGet() + "|" + seed;
+        if (!lcCache[key]) {
+          var sizes = [8, 10, 13, 16, 20, 25, 32, 40, 50, 63, 80, 100, 126, 160, 200], r = AB.rng(seed * 31 + d), s = sGet(), out = [];
+          sizes.forEach(function (n) {
+            var at = 0, av = 0, R = 25;
+            for (var rep = 0; rep < R; rep++) {
+              var xs = [], ys = [];
+              for (var i = 0; i < n; i++) { var x = r() * 2 - 1; xs.push(x); ys.push(ftrue(x) + s * r.n()); }
+              var c = polyfit(xs, ys, d); at += mse(c, xs, ys); av += mse(c, XV, YV, 1e3);
+            }
+            out.push([n, at / R, av / R]);
+          });
+          lcCache[key] = out;
+        }
+        st.lc = lcCache[key];
+      }
+    }
+    var cvL = AB.canvas(document.getElementById("ml-cv-fit"), function (ctx, W, H) {
+      if (!st.c) return;
+      var P = AB.palette(), box = chartBox(W, H);
+      var ch = AB.chart(ctx, box, { x: [-1, 1], y: [-2.2, 2.4], xLabel: "x", yLabel: "y" });
+      var tr = [], fit = [];
+      for (var i = 0; i <= 200; i++) { var x = -1 + i / 100; tr.push([x, ftrue(x)]); fit.push([x, polyval(st.c, x)]); }
+      AB.chart(ctx, box, { x: [-1, 1], y: [-2.2, 2.4], xTicks: [], yTicks: [], series: [{ data: tr, color: P.dim, width: 1.6, dash: [5, 4] }, { data: fit, color: P.accent, width: 2.4 }] });
+      st.D.xs.forEach(function (x, i) { dot(ctx, ch.X(x), ch.Y(st.D.ys[i]), 3.6, P.accent2, P.bg, 1); });
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 240 });
+    var cvR = AB.canvas(document.getElementById("ml-cv-fit-e"), function (ctx, W, H) {
+      if (!st.c) return;
+      var P = AB.palette(), s2 = sGet() * sGet(), box = chartBox(W, H);
+      var data = mode === "lc" ? st.lc : st.cx; if (!data) return;
+      var lo = Infinity, hi = 0;
+      data.forEach(function (r) { lo = Math.min(lo, r[1], r[2]); hi = Math.max(hi, r[1], r[2]); });
+      lo = Math.max(1e-4, Math.min(lo, s2) * 0.6); hi = Math.min(1e3, Math.max(hi, s2) * 1.6);
+      var y0 = Math.pow(10, Math.floor(Math.log10(lo))), y1 = Math.pow(10, Math.ceil(Math.log10(hi)));
+      var opt = {
+        x: mode === "lc" ? [8, 200] : [0, 15], logX: mode === "lc", y: [y0, y1], logY: true,
+        xLabel: mode === "lc" ? "학습 데이터 수 n (로그)" : "다항식 차수 d", yLabel: "MSE (로그)",
+        xTicks: mode === "lc" ? [10, 20, 50, 100, 200] : null,
+        xFmt: function (v) { return String(Math.round(v)); },
+        series: [{ data: data.map(function (r) { return [r[0], r[1]]; }), color: P.accent, width: 2.2 }, { data: data.map(function (r) { return [r[0], r[2]]; }), color: P.warn, width: 2.2, dash: [6, 4] }],
+        hlines: [{ y: s2, color: P.dim, label: "σ²" }],
+        vlines: [{ x: mode === "lc" ? nGet() : dGet(), color: P.text, dash: [2, 3] }]
+      };
+      var ch = AB.chart(ctx, box, opt);
+      data.forEach(function (r) { dot(ctx, ch.X(r[0]), ch.Y(Math.max(y0, r[1])), 2.6, P.accent); dot(ctx, ch.X(r[0]), ch.Y(Math.min(y1, Math.max(y0, r[2]))), 2.6, P.warn); });
+      legend(ctx, box, [["— 학습", P.accent], ["- - 검증", P.warn]]);
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 240 });
+    function upd() {
+      compute();
+      var s2 = sGet() * sGet();
+      AB.stat("ml-fit-tr", fx(st.tr)); AB.stat("ml-fit-va", fx(st.va)); AB.stat("ml-fit-s2", fx(s2)); AB.stat("ml-fit-best", "d = " + st.best);
+      var dx;
+      if (st.tr > 1.5 * s2) dx = '<span style="color:var(--warn)">과소적합 (높은 편향)</span>';
+      else if (st.va > 1.5 * st.tr) dx = '<span style="color:var(--bad)">과적합 (높은 분산)</span>';
+      else dx = '<span style="color:var(--ok)">적정</span>';
+      AB.stat("ml-fit-dx", dx);
+      document.getElementById("ml-fit-cap").textContent = mode === "lc" ? "학습 곡선 (d = " + dGet() + ", 25회 평균)" : "차수별 MSE (현재 학습 세트)";
+      cvL.redraw(); cvR.redraw();
+    }
+    document.getElementById("ml-fit-new").addEventListener("click", function () { seed++; make(); upd(); });
+    make(); upd();
+  });
+
+  /* ======================================================== SIM 3: 편향-분산 */
+  safe("biasvar", function () {
+    var B = 40, G = 101, NT = 400, seed = 3, mode = "fresh", cache = null, cacheKey = "";
+    var GX = []; for (var g = 0; g < G; g++) GX.push(-1 + 2 * g / (G - 1));
+    var dGet = AB.range("ml-bv-d", function (v) { return String(v); }, upd);
+    var nGet = AB.range("ml-bv-n", function (v) { return String(v); }, upd);
+    var sGet = AB.range("ml-bv-s", function (v) { return v.toFixed(2); }, upd);
+    AB.seg("ml-bv-mode", function (v) { mode = v; upd(); });
+    function build() {
+      var n = nGet(), s = sGet(), r = AB.rng(seed * 101 + n), sets = [];
+      if (mode === "fresh") {
+        for (var b = 0; b < B; b++) { var xs = [], ys = []; for (var i = 0; i < n; i++) { var x = r() * 2 - 1; xs.push(x); ys.push(ftrue(x) + s * r.n()); } sets.push({ xs: xs, ys: ys }); }
+      } else {
+        var bx = [], by = []; for (var i2 = 0; i2 < n; i2++) { var x2 = r() * 2 - 1; bx.push(x2); by.push(ftrue(x2) + s * r.n()); }
+        for (var b2 = 0; b2 < B; b2++) { var xs2 = [], ys2 = []; for (var k = 0; k < n; k++) { var j = Math.floor(r() * n); xs2.push(bx[j]); ys2.push(by[j]); } sets.push({ xs: xs2, ys: ys2 }); }
+        sets.base = { xs: bx, ys: by };
+      }
+      var rt = AB.rng(seed * 7 + 1), TX = [], TY = [];
+      for (var t = 0; t < NT; t++) { var xt = rt() * 2 - 1; TX.push(xt); TY.push(ftrue(xt) + s * rt.n()); }
+      var perD = [];
+      for (var d = 0; d <= 12; d++) {
+        var preds = [], fbar = new Array(G).fill(0), tp = [], tbar = new Array(NT).fill(0), emp = 0;
+        sets.forEach(function (S) {
+          var c = polyfit(S.xs, S.ys, d), pr = GX.map(function (x) { return polyval(c, x); }), pt = TX.map(function (x) { return polyval(c, x); });
+          preds.push(pr); tp.push(pt);
+          for (var g2 = 0; g2 < G; g2++) fbar[g2] += pr[g2] / B;
+          for (var q = 0; q < NT; q++) { tbar[q] += pt[q] / B; var er = TY[q] - pt[q]; emp += er * er / (B * NT); }
+        });
+        // 분해는 테스트 점 x들(균등 분포 표본) 위에서 평균
+        var b2s = 0, v = 0;
+        for (var g3 = 0; g3 < NT; g3++) {
+          var e = tbar[g3] - ftrue(TX[g3]); b2s += e * e / NT;
+          for (var bb = 0; bb < B; bb++) { var dv = tp[bb][g3] - tbar[g3]; v += dv * dv / (NT * B); }
+        }
+        perD.push({ d: d, preds: preds, fbar: fbar, b2: b2s, v: v, emp: emp });
+      }
+      return { sets: sets, perD: perD };
+    }
+    var cvL = AB.canvas(document.getElementById("ml-cv-bv"), function (ctx, W, H) {
+      if (!cache) return;
+      var P = AB.palette(), box = chartBox(W, H), R = cache.perD[dGet()];
+      var ch = AB.chart(ctx, box, { x: [-1, 1], y: [-2.4, 2.6], xLabel: "x", yLabel: "y" });
+      var opts = { x: [-1, 1], y: [-2.4, 2.6], xTicks: [], yTicks: [], series: [] };
+      R.preds.forEach(function (pr) { opts.series.push({ data: pr.map(function (y, g) { return [GX[g], y]; }), color: AB.alpha(P.accent2, 0.28), width: 1.1 }); });
+      opts.series.push({ data: GX.map(function (x) { return [x, ftrue(x)]; }), color: P.text, width: 1.8, dash: [5, 4] });
+      opts.series.push({ data: R.fbar.map(function (y, g) { return [GX[g], y]; }), color: P.accent, width: 3 });
+      AB.chart(ctx, box, opts);
+      var base = cache.sets.base || cache.sets[0];
+      base.xs.forEach(function (x, i) { dot(ctx, ch.X(x), ch.Y(base.ys[i]), 2.4, AB.alpha(P.dim, 0.7)); });
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 240 });
+    var cvR = AB.canvas(document.getElementById("ml-cv-bv-e"), function (ctx, W, H) {
+      if (!cache) return;
+      var P = AB.palette(), box = chartBox(W, H), s2 = sGet() * sGet(), lo = s2, hi = s2;
+      cache.perD.forEach(function (r) { lo = Math.min(lo, r.b2, r.v); hi = Math.max(hi, r.b2 + r.v + s2); });
+      lo = Math.max(1e-5, lo * 0.6); hi = Math.min(1e3, hi * 1.6);
+      var y0 = Math.pow(10, Math.floor(Math.log10(lo))), y1 = Math.pow(10, Math.ceil(Math.log10(hi)));
+      var ch = AB.chart(ctx, box, {
+        x: [0, 12], y: [y0, y1], logY: true, xLabel: "다항식 차수 d", yLabel: "오차 (로그)", xFmt: function (v) { return String(Math.round(v)); },
+        series: [
+          { data: cache.perD.map(function (r) { return [r.d, Math.max(y0, r.b2)]; }), color: P.accent, width: 2.2 },
+          { data: cache.perD.map(function (r) { return [r.d, Math.max(y0, r.v)]; }), color: P.accent2, width: 2.2 },
+          { data: cache.perD.map(function (r) { return [r.d, r.b2 + r.v + s2]; }), color: P.text, width: 2.6 },
+          { data: cache.perD.map(function (r) { return [r.d, r.emp]; }), color: P.warn, width: 1.4, dash: [3, 3] }
+        ],
+        hlines: [{ y: s2, color: P.dim, label: "σ²" }], vlines: [{ x: dGet(), color: P.text, dash: [2, 3] }]
+      });
+      legend(ctx, box, [["편향²", P.accent], ["분산", P.accent2], ["합 = 편향²+분산+σ²", P.text], ["실측 MSE", P.warn]]);
+      var R = cache.perD[dGet()]; dot(ctx, ch.X(R.d), ch.Y(R.b2 + R.v + s2), 4, P.text);
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 240 });
+    function upd() {
+      var key = [nGet(), sGet(), mode, seed].join("|");
+      if (key !== cacheKey) { cache = build(); cacheKey = key; }
+      var R = cache.perD[dGet()], s2 = sGet() * sGet();
+      AB.stat("ml-bv-b2", fx(R.b2)); AB.stat("ml-bv-var", fx(R.v)); AB.stat("ml-bv-n2", fx(s2)); AB.stat("ml-bv-sum", fx(R.b2 + R.v + s2)); AB.stat("ml-bv-emp", fx(R.emp));
+      cvL.redraw(); cvR.redraw();
+    }
+    document.getElementById("ml-bv-new").addEventListener("click", function () { seed++; upd(); });
+    upd();
+  });
+
+  /* ======================================================== SIM 4: 특성 선택 누수 */
+  safe("leak", function () {
+    var NMAX = 200, PMAX = 2000, K = 5, seed = 17, X = null, Y = [], perm = [], res = null;
+    var nGet = AB.range("ml-lk-n", function (v) { return String(v); }, run);
+    var pGet = AB.range("ml-lk-p", function (v) { return String(v); }, run);
+    var mGet = AB.range("ml-lk-m", function (v) { return String(v); }, run);
+    var sigEl = document.getElementById("ml-lk-sig"); sigEl.addEventListener("change", run);
+    var SIGF = 5, SHIFT = 0.5;
+    function make() {
+      var r = AB.rng(seed); X = new Float64Array(NMAX * PMAX);
+      for (var i = 0; i < X.length; i++) X[i] = r.n();
+      var yy = []; for (var k = 0; k < NMAX; k++) yy.push(k % 2);
+      Y = shuffle(yy, r); perm = shuffle(Array.from({ length: NMAX }, function (_, i) { return i; }), r);
+    }
+    function val(i, j) { var v = X[i * PMAX + j]; if (sigEl.checked && j < SIGF) v += (Y[i] ? SHIFT : -SHIFT); return v; }
+    function select(idx, p, m) {
+      var sc = [];
+      for (var j = 0; j < p; j++) {
+        var s1 = 0, n1 = 0, s0 = 0, n0 = 0;
+        for (var t = 0; t < idx.length; t++) { var i = idx[t], v = val(i, j); if (Y[i]) { s1 += v; n1++; } else { s0 += v; n0++; } }
+        sc.push([Math.abs(s1 / Math.max(1, n1) - s0 / Math.max(1, n0)), j]);
+      }
+      sc.sort(function (a, b) { return b[0] - a[0]; });
+      return sc.slice(0, m).map(function (a) { return a[1]; });
+    }
+    function centroids(idx, sel) {
+      var c = [new Array(sel.length).fill(0), new Array(sel.length).fill(0)], n = [0, 0];
+      idx.forEach(function (i) { n[Y[i]]++; sel.forEach(function (j, q) { c[Y[i]][q] += val(i, j); }); });
+      [0, 1].forEach(function (k) { for (var q = 0; q < sel.length; q++) c[k][q] /= Math.max(1, n[k]); });
+      return c;
+    }
+    function predict(c, vec) { var d0 = 0, d1 = 0; for (var q = 0; q < vec.length; q++) { d0 += (vec[q] - c[0][q]) * (vec[q] - c[0][q]); d1 += (vec[q] - c[1][q]) * (vec[q] - c[1][q]); } return d1 < d0 ? 1 : 0; }
+    function accOn(c, sel, idx) { var ok = 0; idx.forEach(function (i) { var v = sel.map(function (j) { return val(i, j); }); if (predict(c, v) === Y[i]) ok++; }); return ok / idx.length; }
+    function run() {
+      var n = nGet(), p = pGet(), m = Math.min(mGet(), p);
+      var ids = perm.filter(function (i) { return i < n; });
+      var folds = []; for (var f = 0; f < K; f++) folds.push([]);
+      ids.forEach(function (i, t) { folds[t % K].push(i); });
+      var all = ids.slice(), selAll = select(all, p, m), bad = [], good = [];
+      for (var f2 = 0; f2 < K; f2++) {
+        var va = folds[f2], tr = []; folds.forEach(function (F, g) { if (g !== f2) tr = tr.concat(F); });
+        bad.push(accOn(centroids(tr, selAll), selAll, va));
+        var selF = select(tr, p, m); good.push(accOn(centroids(tr, selF), selF, va));
+      }
+      // 새 데이터: 전체로 고른 특성으로 학습한 모델을 독립 표본 2000개로 평가
+      var cAll = centroids(all, selAll), rt = AB.rng(seed * 13 + 5), ok = 0, NT = 2000;
+      for (var t = 0; t < NT; t++) {
+        var yt = t % 2, vec = selAll.map(function (j) { var v = rt.n(); if (sigEl.checked && j < SIGF) v += (yt ? SHIFT : -SHIFT); return v; });
+        if (predict(cAll, vec) === yt) ok++;
+      }
+      function mean(a) { return a.reduce(function (s, x) { return s + x; }, 0) / a.length; }
+      res = { bad: bad, good: good, mb: mean(bad), mg: mean(good), tru: ok / NT };
+      AB.stat("ml-lk-bad", pct(res.mb)); AB.stat("ml-lk-good", pct(res.mg)); AB.stat("ml-lk-true", pct(res.tru));
+      AB.stat("ml-lk-gap", "+" + ((res.mb - res.tru) * 100).toFixed(1) + "%p");
+      cv.redraw();
+    }
+    var cv = AB.canvas(document.getElementById("ml-cv-leak"), function (ctx, W, H) {
+      if (!res) return;
+      var P = AB.palette(), box = { x: 48, y: 18, w: W - 48 - 12, h: H - 18 - 52 };
+      var Yp = function (a) { return box.y + box.h * (1 - a); };
+      font(ctx, 11, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      [0, 0.25, 0.5, 0.75, 1].forEach(function (a) { ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(box.x, Yp(a)); ctx.lineTo(box.x + box.w, Yp(a)); ctx.stroke(); ctx.fillStyle = P.dim; ctx.fillText((a * 100) + "%", box.x - 6, Yp(a)); });
+      var narrow = box.w < 420, groups = [[narrow ? "누수 CV" : "누수 CV (전체로 특성 선택)", res.bad, res.mb, P.bad], [narrow ? "올바른 CV" : "올바른 CV (fold 안에서 선택)", res.good, res.mg, P.ok]];
+      var gw = box.w / 2;
+      groups.forEach(function (G, gi) {
+        var gx = box.x + gi * gw, bw = Math.min(34, (gw - 40) / K);
+        var startX = gx + (gw - bw * K - 6 * (K - 1)) / 2;
+        G[1].forEach(function (a, k) { var x = startX + k * (bw + 6); ctx.fillStyle = AB.alpha(G[3], 0.55); ctx.fillRect(x, Yp(a), bw, Yp(0) - Yp(a)); });
+        ctx.strokeStyle = G[3]; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(startX - 4, Yp(G[2])); ctx.lineTo(startX + K * (bw + 6) - 2, Yp(G[2])); ctx.stroke();
+        font(ctx, 12, false, true); ctx.fillStyle = G[3]; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText("평균 " + pct(G[2]), gx + gw / 2, Yp(G[2]) - 4);
+        font(ctx, 11.5); ctx.fillStyle = P.text; ctx.textBaseline = "top"; ctx.fillText(G[0], gx + gw / 2, box.y + box.h + 8);
+        font(ctx, 10.5, true); ctx.fillStyle = P.dim; ctx.fillText("fold 1 … " + K, gx + gw / 2, box.y + box.h + 26);
+      });
+      ctx.setLineDash([6, 4]); ctx.strokeStyle = P.accent; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.moveTo(box.x, Yp(res.tru)); ctx.lineTo(box.x + box.w, Yp(res.tru)); ctx.stroke(); ctx.setLineDash([]);
+      font(ctx, 11.5); ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("새 데이터 실제 " + pct(res.tru), box.x + 4, Yp(res.tru) - 3);
+    }, { aspect: 0.42, maxHeight: 320, minHeight: 250 });
+    document.getElementById("ml-lk-new").addEventListener("click", function () { seed++; make(); run(); });
+    make(); run();
+  });
+
+  /* ======================================================== SIM 5: 교차 검증 분할 */
+  safe("cv", function () {
+    var NG = 20, PER = 3, N = NG * PER, data = [], fresh = [], shufSeed = 1, mode = "kfold", kNN = 1, out = null;
+    var kGet = AB.range("ml-cv-k", function (v) { return String(v); }, run);
+    AB.seg("ml-cv-mode", function (v) { mode = v; run(); });
+    AB.seg("ml-cv-clf", function (v) { kNN = +v; run(); });
+    function genGroups(r, ng, gidBase) {
+      var out = [];
+      for (var g = 0; g < ng; g++) {
+        var cx = r.n(), cy = r.n(), lat = cx + 0.5 * cy + r.n() * 0.9, y = lat > 0.8 ? 1 : 0;
+        for (var k = 0; k < PER; k++) out.push({ x: cx + r.n() * 0.12, y2: cy + r.n() * 0.12, lab: y, g: gidBase + g, t: r() });
+      }
+      return out;
+    }
+    (function () { var r = AB.rng(20); data = genGroups(r, NG, 0); data.sort(function (a, b) { return a.t - b.t; }); fresh = genGroups(AB.rng(1020), 200, 100); })();
+    function knn(train, q) {
+      var ds = train.map(function (s) { return [(s.x - q.x) * (s.x - q.x) + (s.y2 - q.y2) * (s.y2 - q.y2), s.lab]; });
+      ds.sort(function (a, b) { return a[0] - b[0]; });
+      var k = Math.min(kNN, ds.length), v = 0; for (var i = 0; i < k; i++) v += ds[i][1];
+      return v * 2 > k ? 1 : 0;
+    }
+    function folds(K) {
+      var r = AB.rng(500 + shufSeed), f = new Array(N).fill(-1), i;
+      if (mode === "kfold") { var p = shuffle(Array.from({ length: N }, function (_, i) { return i; }), r); p.forEach(function (idx, pos) { f[idx] = Math.floor(pos * K / N); }); return { val: f }; }
+      if (mode === "strat") {
+        var pos = shuffle(data.map(function (s, i) { return i; }).filter(function (i) { return data[i].lab; }), r), neg = shuffle(data.map(function (s, i) { return i; }).filter(function (i) { return !data[i].lab; }), r);
+        pos.concat(neg).forEach(function (idx, t) { f[idx] = t % K; }); return { val: f };
+      }
+      if (mode === "group") {
+        var gs = shuffle(Array.from({ length: NG }, function (_, i) { return i; }), r), gf = {};
+        gs.forEach(function (g, t) { gf[g] = t % K; }); for (i = 0; i < N; i++) f[i] = gf[data[i].g]; return { val: f };
+      }
+      // 시계열: 확장 창. fold j는 [0, (j+1)b)로 학습, 다음 블록으로 검증
+      var b = Math.floor(N / (K + 1)), rows = [];
+      for (var j = 0; j < K; j++) { var tr0 = (j + 1) * b, va1 = j === K - 1 ? N : (j + 2) * b; rows.push({ tr: [0, tr0], va: [tr0, va1] }); }
+      return { time: rows };
+    }
+    function role(F, row, i) {
+      if (F.time) { var R = F.time[row]; return i < R.tr[1] ? "tr" : i < R.va[1] ? "va" : "no"; }
+      return F.val[i] === row ? "va" : "tr";
+    }
+    function run() {
+      var K = kGet(), F = folds(K), scores = [], posr = [], wrong = {};
+      for (var row = 0; row < K; row++) {
+        var tr = [], va = [];
+        for (var i = 0; i < N; i++) { var ro = role(F, row, i); if (ro === "tr") tr.push(data[i]); else if (ro === "va") va.push(i); }
+        var ok = 0, np = 0;
+        va.forEach(function (i) { var pr = knn(tr, data[i]); if (pr === data[i].lab) ok++; else wrong[row + ":" + i] = 1; np += data[i].lab; });
+        scores.push(va.length ? ok / va.length : NaN); posr.push(va.length ? np / va.length : NaN);
+      }
+      var m = scores.reduce(function (s, x) { return s + x; }, 0) / K, sd = Math.sqrt(scores.reduce(function (s, x) { return s + (x - m) * (x - m); }, 0) / Math.max(1, K - 1));
+      var tOk = 0; fresh.forEach(function (q) { if (knn(data, q) === q.lab) tOk++; });
+      out = { F: F, K: K, scores: scores, wrong: wrong };
+      AB.stat("ml-cv-mean", pct(m)); AB.stat("ml-cv-sd", (sd * 100).toFixed(1) + "%p");
+      AB.stat("ml-cv-pos", pct(Math.min.apply(null, posr), 0) + " ~ " + pct(Math.max.apply(null, posr), 0));
+      AB.stat("ml-cv-true", pct(tOk / fresh.length));
+      document.getElementById("ml-cv-scores").textContent = scores.map(function (s, i) { return "fold " + (i + 1) + ": " + pct(s, 0); }).join(" · ") + "  |  전체 양성 비율 " + pct(data.filter(function (s) { return s.lab; }).length / N, 0);
+      cv.redraw();
+    }
+    var cv = AB.canvas(document.getElementById("ml-cv-cv"), function (ctx, W, H) {
+      if (!out) return;
+      var P = AB.palette(), L = 52, Rm = 44, top = 30, cw = (W - L - Rm) / N, K = out.K;
+      var rh = Math.min(22, (H - top - 34 - 30) / K);
+      var gcol = function (g) { var base = P.series[g % 5]; return AB.mix(base, P.bg, [0, 0.35, 0.6][Math.floor(g / 5) % 3]); };
+      font(ctx, 10.5); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText("환자", L - 6, top + 5); ctx.fillText("라벨", L - 6, top + 17);
+      for (var i = 0; i < N; i++) {
+        var x = L + i * cw;
+        ctx.fillStyle = gcol(data[i].g); ctx.fillRect(x + 0.3, top, cw - 0.6, 10);
+        ctx.fillStyle = data[i].lab ? P.text : P.surface; ctx.fillRect(x + 0.3, top + 12, cw - 0.6, 10);
+      }
+      var y0 = top + 30;
+      for (var row = 0; row < K; row++) {
+        var y = y0 + row * rh;
+        font(ctx, 10.5, true); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.fillText("fold " + (row + 1), L - 6, y + rh / 2);
+        for (var j = 0; j < N; j++) {
+          var ro = role(out.F, row, j), xx = L + j * cw;
+          if (ro === "va") ctx.fillStyle = P.accent; else if (ro === "tr") ctx.fillStyle = AB.alpha(P.accent, 0.2); else ctx.fillStyle = "transparent";
+          if (ro !== "no") ctx.fillRect(xx + 0.3, y + 1.5, cw - 0.6, rh - 3);
+          else { ctx.strokeStyle = P.grid; ctx.lineWidth = 0.6; ctx.strokeRect(xx + 0.6, y + 2, cw - 1.2, rh - 4); }
+          if (out.wrong[row + ":" + j]) dot(ctx, xx + cw / 2, y + rh / 2, Math.max(1.6, Math.min(3.2, cw / 2.6)), P.bad);
+        }
+        ctx.textAlign = "left"; ctx.fillStyle = P.text; ctx.fillText(isFinite(out.scores[row]) ? pct(out.scores[row], 0) : "—", W - Rm + 6, y + rh / 2);
+      }
+      var ly = y0 + K * rh + 14;
+      font(ctx, 11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = P.accent; ctx.fillRect(L, ly - 5, 12, 10); ctx.fillStyle = P.dim; ctx.fillText("검증", L + 16, ly);
+      ctx.fillStyle = AB.alpha(P.accent, 0.2); ctx.fillRect(L + 52, ly - 5, 12, 10); ctx.fillStyle = P.dim; ctx.fillText("학습", L + 68, ly);
+      dot(ctx, L + 110, ly, 3, P.bad); ctx.fillStyle = P.dim; ctx.fillText("오답", L + 117, ly);
+      ctx.textAlign = "right"; ctx.fillText("시간 →", W - 8, ly);
+    }, { height: 300 });
+    document.getElementById("ml-cv-shuf").addEventListener("click", function () { shufSeed++; run(); });
+    run();
+  });
+
+  /* ======================================================== SIM 6: 임계값 · 혼동 행렬 · ROC/PR */
+  safe("thr", function () {
+    var N = 10000, ZN = [], ZP = [], S = null, yMode = "dens", curve = "roc";
+    (function () { var r = AB.rng(11); for (var i = 0; i < N; i++) { ZN.push(r.n()); ZP.push(r.n()); } })();
+    var tGet = AB.range("ml-thr-t", function (v) { return v.toFixed(2); }, function () { stats(); draw(); });
+    var dGet = AB.range("ml-thr-d", function (v) { return v.toFixed(2); }, function () { build(); stats(); draw(); });
+    var pGet = AB.range("ml-thr-p", function (v) { var p = Math.pow(10, v) * 100; return (p < 1 ? p.toFixed(2) : p.toFixed(1)) + "%"; }, function () { build(); stats(); draw(); });
+    AB.seg("ml-thr-y", function (v) { yMode = v; draw(); });
+    AB.seg("ml-thr-curve", function (v) { curve = v; draw(); });
+    function lowerBound(a, t) { var lo = 0, hi = a.length; while (lo < hi) { var m = (lo + hi) >> 1; if (a[m] < t) lo = m + 1; else hi = m; } return lo; }
+    function build() {
+      var prev = Math.pow(10, pGet()), nP = Math.max(1, Math.round(N * prev)), nN = N - nP, d = dGet();
+      var pos = ZP.slice(0, nP).map(function (z) { return z + d; }).sort(function (a, b) { return a - b; });
+      var neg = ZN.slice(0, nN).sort(function (a, b) { return a - b; });
+      // 내림차순 스윕: ROC·PR 점, 사다리꼴 AUC, AP, F1 최대
+      var all = pos.map(function (s) { return [s, 1]; }).concat(neg.map(function (s) { return [s, 0]; })).sort(function (a, b) { return b[0] - a[0]; });
+      var tp = 0, fp = 0, roc = [[0, 0]], pr = [], auc = 0, ap = 0, prevR = 0, bestF = -1, bestT = 0;
+      for (var i = 0; i < all.length; i++) {
+        if (all[i][1]) tp++; else fp++;
+        if (i + 1 < all.length && all[i + 1][0] === all[i][0]) continue;
+        var tpr = tp / nP, fpr = fp / nN, prec = tp / (tp + fp), last = roc[roc.length - 1];
+        auc += (fpr - last[0]) * (tpr + last[1]) / 2;
+        if (tpr > prevR) { ap += (tpr - prevR) * prec; prevR = tpr; }
+        roc.push([fpr, tpr]); pr.push([tpr, prec]);
+        var f1 = 2 * tp / (2 * tp + fp + (nP - tp)); if (f1 > bestF) { bestF = f1; bestT = all[i][0]; }
+      }
+      S = { pos: pos, neg: neg, nP: nP, nN: nN, prev: nP / N, d: d, roc: roc, pr: pr, auc: auc, ap: ap, bestT: bestT };
+    }
+    function counts(t) { var TP = S.nP - lowerBound(S.pos, t), FP = S.nN - lowerBound(S.neg, t); return { TP: TP, FN: S.nP - TP, FP: FP, TN: S.nN - FP }; }
+    function stats() {
+      var c = counts(tGet()), acc = (c.TP + c.TN) / N, prec = c.TP + c.FP ? c.TP / (c.TP + c.FP) : NaN, rec = c.TP / S.nP, fpr = c.FP / S.nN, f1 = 2 * c.TP / (2 * c.TP + c.FP + c.FN);
+      S.cur = { c: c, rec: rec, fpr: fpr, prec: prec };
+      AB.stat("ml-thr-acc", pct(acc, 2)); AB.stat("ml-thr-base", pct(S.nN / N, 2));
+      AB.stat("ml-thr-prec", isFinite(prec) ? pct(prec) : "— (양성 판정 0)"); AB.stat("ml-thr-rec", pct(rec)); AB.stat("ml-thr-fpr", pct(fpr, 2)); AB.stat("ml-thr-f1v", f1.toFixed(3));
+      var th = 0.5 * (1 + erf(S.d / 2));
+      AB.stat("ml-thr-auc", S.auc.toFixed(3) + ' <small>이론 ' + th.toFixed(3) + "</small>");
+      AB.stat("ml-thr-ap", S.ap.toFixed(3) + ' <small>무작위 ' + S.prev.toFixed(3) + "</small>");
+      renderCM(c);
+    }
+    function erf(x) { var t = 1 / (1 + 0.3275911 * Math.abs(x)), y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return x >= 0 ? y : -y; }
+    function renderCM(c) {
+      var P = AB.palette(), good = AB.alpha(P.ok, 0.16), bad = AB.alpha(P.bad, 0.16);
+      function cell(v, lab, bg) { return '<td style="background:' + bg + '">' + v.toLocaleString() + "<small>" + lab + "</small></td>"; }
+      document.getElementById("ml-thr-cm").innerHTML =
+        "<thead><tr><th>N = " + N.toLocaleString() + "</th><th>예측 양성</th><th>예측 음성</th><th>합</th></tr></thead><tbody>" +
+        "<tr><th>실제 양성</th>" + cell(c.TP, "TP", good) + cell(c.FN, "FN 놓침", bad) + "<td>" + S.nP.toLocaleString() + "</td></tr>" +
+        "<tr><th>실제 음성</th>" + cell(c.FP, "FP 헛경보", bad) + cell(c.TN, "TN", good) + "<td>" + S.nN.toLocaleString() + "</td></tr></tbody>";
+    }
+    var XR = [-3.5, 7.5], boxL = null;
+    var cvL = AB.canvas(document.getElementById("ml-cv-thr"), function (ctx, W, H) {
+      if (!S) return;
+      var P = AB.palette(), box = chartBox(W, H), d = S.d, t = tGet(), bw = 0.25;
+      boxL = box;
+      var phi = function (x) { return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI); };
+      var sN = yMode === "count" ? S.nN * bw : 1, sP = yMode === "count" ? S.nP * bw : 1;
+      var ymax = Math.max(phi(0) * sN, phi(0) * sP) * 1.15;
+      var ch = AB.chart(ctx, box, { x: XR, y: [0, ymax], xLabel: "모델 점수", yLabel: yMode === "count" ? "개수 / 0.25 구간" : "밀도", yFmt: function (v) { return yMode === "count" ? String(Math.round(v)) : v.toFixed(1); } });
+      // 실제 샘플 히스토그램
+      function hist(arr, scale, col) {
+        var nb = Math.round((XR[1] - XR[0]) / bw), h = new Array(nb).fill(0);
+        arr.forEach(function (s) { var b = Math.floor((s - XR[0]) / bw); if (b >= 0 && b < nb) h[b]++; });
+        ctx.fillStyle = col;
+        h.forEach(function (c, b) { if (!c) return; var v = yMode === "count" ? c : c / (arr.length * bw); var x0 = ch.X(XR[0] + b * bw), x1 = ch.X(XR[0] + (b + 1) * bw); ctx.fillRect(x0, ch.Y(Math.min(v, ymax)), x1 - x0 - 0.5, ch.Y(0) - ch.Y(Math.min(v, ymax))); });
+      }
+      hist(S.neg, sN, AB.alpha(P.accent2, 0.18)); hist(S.pos, sP, AB.alpha(P.accent, 0.18));
+      // 오류 영역 칠하기 (이론 곡선 기준)
+      function area(mu, sc, from, to, col) {
+        ctx.beginPath(); ctx.moveTo(ch.X(from), ch.Y(0));
+        for (var x = from; x <= to + 1e-9; x += 0.02) ctx.lineTo(ch.X(x), ch.Y(phi(x - mu) * sc));
+        ctx.lineTo(ch.X(to), ch.Y(0)); ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+      }
+      area(0, sN, Math.max(t, XR[0]), XR[1], AB.alpha(P.warn, 0.35));
+      area(d, sP, XR[0], Math.min(t, XR[1]), AB.alpha(P.bad, 0.35));
+      var nC = [], pC = []; for (var x = XR[0]; x <= XR[1] + 1e-9; x += 0.05) { nC.push([x, phi(x) * sN]); pC.push([x, phi(x - d) * sP]); }
+      AB.chart(ctx, box, { x: XR, y: [0, ymax], xTicks: [], yTicks: [], series: [{ data: nC, color: P.accent2, width: 2 }, { data: pC, color: P.accent, width: 2 }], vlines: [{ x: t, color: P.text, dash: [], width: 2 }] });
+      dot(ctx, ch.X(t), box.y + 6, 6, P.bg, P.text, 2);
+      legend(ctx, box, [["음성 (" + S.nN.toLocaleString() + ")", P.accent2], ["양성 (" + S.nP.toLocaleString() + ")", P.accent], ["FP 영역", P.warn], ["FN 영역", P.bad]]);
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 250 });
+    var cvR = AB.canvas(document.getElementById("ml-cv-roc"), function (ctx, W, H) {
+      if (!S || !S.cur) return;
+      var P = AB.palette(), side = Math.min(W - 70, H - 74), box = { x: 54 + Math.max(0, (W - 68 - side) / 2), y: 30, w: side, h: side };
+      var roc = curve === "roc", data = roc ? S.roc : S.pr;
+      var step = Math.max(1, Math.floor(data.length / 1500)), thin = data.filter(function (_, i) { return i % step === 0 || i === data.length - 1; });
+      var ch = AB.chart(ctx, box, {
+        x: [0, 1], y: [0, 1], xLabel: roc ? "FPR (거짓 양성률)" : "재현율", yLabel: roc ? "TPR (재현율)" : "정밀도",
+        series: [{ data: roc ? [[0, 0], [1, 1]] : [[0, S.prev], [1, S.prev]], color: P.faint, width: 1.4, dash: [5, 4] }, { data: thin, color: P.accent, width: 2.4, fill: AB.alpha(P.accent, 0.1) }]
+      });
+      var cx = roc ? S.cur.fpr : S.cur.rec, cy = roc ? S.cur.rec : (isFinite(S.cur.prec) ? S.cur.prec : 1);
+      dot(ctx, ch.X(cx), ch.Y(cy), 6.5, P.warn, P.bg, 2);
+      font(ctx, 11.5); ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillText(roc ? "AUC = " + S.auc.toFixed(3) : "AP = " + S.ap.toFixed(3), box.x + box.w - 6, box.y + box.h - 6);
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = roc ? "top" : "bottom";
+      ctx.fillText(roc ? "무작위 (대각선)" : "무작위 = 유병률", ch.X(roc ? 0.5 : 0.02), roc ? ch.Y(0.5) + 6 : ch.Y(S.prev) - 3);
+      document.getElementById("ml-roc-cap").textContent = roc ? "ROC 곡선 · ● 현재 임계값" : "PR 곡선 · ● 현재 임계값";
+    }, { aspect: 0.75, maxHeight: 340, minHeight: 250 });
+    function draw() { cvL.redraw(); cvR.redraw(); }
+    AB.onTheme(function () { if (S && S.cur) renderCM(S.cur.c); });
+    function setT(x) { tGet.set(Math.round(AB.clamp(x, -3, 6) * 100) / 100); }
+    dragger(document.getElementById("ml-cv-thr"), {
+      down: function (p) { if (!boxL) return false; setT(XR[0] + (p.x - boxL.x) / boxL.w * (XR[1] - XR[0])); },
+      move: function (p) { setT(XR[0] + (p.x - boxL.x) / boxL.w * (XR[1] - XR[0])); },
+      hover: function () { return "ew-resize"; }
+    });
+    document.getElementById("ml-thr-cancer").addEventListener("click", function () { pGet.set(-2); dGet.set(2.62); setT(1.34); });
+    document.getElementById("ml-thr-bal").addEventListener("click", function () { pGet.set(-0.301); dGet.set(2); setT(1); });
+    document.getElementById("ml-thr-f1").addEventListener("click", function () { setT(S.bestT); });
+    build(); stats(); draw();
+  });
+})();
+</script>
+</body>
+</html>

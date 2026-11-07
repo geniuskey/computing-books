@@ -1,0 +1,2237 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>토큰과 임베딩 · AIBook</title>
+<meta name="description" content="텍스트를 숫자로 바꾸는 토큰화(BPE)와 임베딩. 원-핫에서 밀집 벡터로, 분포 가설과 PPMI, 3D 임베딩 공간 탐색, 벡터 유추, 단어를 끌어 임베딩을 직접 고치기, 브라우저에서 돌리는 word2vec, LLM 기반 임베딩·대조 학습·Matryoshka 차원 자르기와 임베딩 양자화까지.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  .em-pad { padding: 14px 16px; display: grid; gap: 12px; align-content: start; }
+  .em-cap { font-size: 12.5px; color: var(--text-dim); font-weight: 600; letter-spacing: .02em; margin-bottom: 4px; display: block; }
+  .em-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .em-btns .btn { padding: 6px 11px; font-size: 13px; }
+  .tok.em-click { cursor: pointer; font: inherit; font-family: var(--mono); font-size: 13px; }
+  .tok.em-click:hover { border-color: var(--accent); }
+  .tok.em-on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .tok.em-top { box-shadow: 0 0 0 2px var(--accent-2); }
+  .tok.em-unk { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: var(--warn); }
+  .tok.em-new { background: var(--accent-2-soft); border-color: var(--accent-2); }
+  .tok small { color: var(--text-dim); font-size: 11px; margin-left: 4px; }
+  .tok.em-on small { color: inherit; opacity: .8; }
+  .em-words { font-size: 13px; line-height: 1.9; max-height: 168px; overflow-y: auto; }
+  .em-words .em-w { display: inline-block; margin-right: 10px; white-space: nowrap; }
+  .em-words .em-w i { font-style: normal; color: var(--text-faint); font-size: 11px; margin-left: 2px; }
+  .em-log { margin: 0; padding-left: 1.6em !important; font-size: 13px; max-height: 150px; overflow-y: auto; font-family: var(--mono); color: var(--text-dim); }
+  .em-log li { margin: 1px 0 !important; }
+  .em-log li:last-child { color: var(--accent); font-weight: 600; }
+  .em-mat td { min-width: 40px; }
+  .em-mat td.em-drag { cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .em-mat tr.em-hl td.em-drag, .em-mat td.em-hl { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .em-mat th.em-rowlab { text-align: right; font-family: var(--font); }
+  .em-eqline { font-family: var(--mono); font-size: 13px; color: var(--text-dim); overflow-x: auto; white-space: nowrap; }
+  .em-flex { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .em-flex > div { min-width: 0; }
+  .em-scroll { overflow-x: auto; max-width: 100%; }
+  .em-nb { display: grid; gap: 4px; font-size: 13.5px; }
+  .em-nb button { all: unset; cursor: pointer; display: grid; grid-template-columns: 1.4em 1fr auto; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px; }
+  .em-nb button:hover { background: var(--surface); }
+  .em-nb .bar { height: 5px; border-radius: 3px; background: var(--accent); display: block; margin-top: 2px; }
+  .em-nb .num { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  .em-nb .rk { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .em-cats { display: flex; flex-wrap: wrap; gap: 5px; }
+  .em-cats button { font: inherit; font-size: 12.5px; padding: 3px 9px 3px 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .em-cats button i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .em-cats button.off { opacity: .4; text-decoration: line-through; }
+  .em-selrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .em-selrow select, .em-sel { font: inherit; font-size: 13.5px; padding: 6px 6px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 0; width: 100%; }
+  .em-ops { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr); gap: 4px; align-items: center; font-family: var(--mono); font-weight: 700; color: var(--text-dim); }
+  .em-ops select { font-weight: 400; font-family: var(--font); }
+  .overlay-label.em-lab { font-size: 10.5px; font-weight: 600; padding: 0 5px; line-height: 1.5; transform: translate(-50%, -135%); border-left-width: 3px; border-radius: 4px; }
+  .overlay-label.em-lab.em-lsel { font-size: 13px; z-index: 3; background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .overlay-label.em-lab.em-nbr { font-size: 12px; z-index: 2; box-shadow: 0 0 0 1.5px var(--accent); }
+  .overlay-label.em-lab.em-dim { opacity: .55; }
+  .overlay-label.em-axl { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: transparent; border: 0; }
+  .em-grid2 { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 720px) { .em-grid2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .em-grid2 canvas { display: block; width: 100%; touch-action: none; }
+  .em-canvas-touch { touch-action: none; }
+  .em-docs { display: grid; gap: 6px; }
+  .em-doc { display: grid; grid-template-columns: 2.2em minmax(0, 1fr) 4.2em; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elev); font-size: 13.5px; }
+  .em-doc.top { border-color: var(--accent); background: var(--accent-soft); }
+  .em-doc .rk { font-family: var(--mono); color: var(--text-faint); font-size: 12px; }
+  .em-doc .sc { font-family: var(--mono); font-size: 12.5px; text-align: right; }
+  .em-doc .sb { grid-column: 2 / 4; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+  .em-doc .sb b { display: block; height: 100%; background: var(--accent); }
+  .em-doc .toks .tok { font-size: 12px; margin: 1px; }
+  .em-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--text-dim); padding: 8px 16px 0; }
+  .em-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .em-msg { font-size: 13px; color: var(--text-dim); min-height: 1.4em; }
+  textarea.ab-input.em-small { min-height: 64px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="embedding">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 04</div>
+    <h1>토큰과 임베딩</h1>
+    <p class="lead">신경망은 숫자만 먹는다. 그런데 우리가 모델에게 주는 것은 "고양이가 귀엽다" 같은 글자다. 이 장은 글자를 숫자로 바꾸는 두 단계, 즉 텍스트를 조각내는 <strong>토큰화</strong>와 조각마다 벡터를 붙이는 <strong>임베딩</strong>을 다룬다. 그리고 이 책에서 가장 손이 많이 가는 실험실을 연다. 임베딩 공간을 3D로 돌려 보고, 벡터를 더하고 빼서 유추를 풀고, 단어를 손가락으로 끌어 옮겨 그 단어의 "의미"를 직접 바꿔 본다. 마지막에는 브라우저 안에서 word2vec을 처음부터 학습시켜, 아무 의미도 없던 점들이 스스로 뭉치는 과정을 지켜본다.</p>
+    <ul class="objectives">
+      <li>문자·단어·서브워드 단위 토큰화의 장단점과 어휘 크기의 트레이드오프를 설명할 수 있다.</li>
+      <li>BPE가 가장 빈번한 쌍을 반복 병합해 어휘를 만드는 과정을 손으로 따라가고, 한국어가 토큰을 더 많이 쓰는 이유를 안다.</li>
+      <li>원-핫 벡터와 임베딩 테이블 \(E \in \mathbb{R}^{V\times d}\)의 관계(원-핫 × E = 행 선택)와 실제 모델의 임베딩 파라미터 수를 계산할 수 있다.</li>
+      <li>분포 가설에서 출발해 동시출현 행렬·PPMI·SVD로 단어 벡터를 만드는 원리를 이해한다.</li>
+      <li>코사인 유사도, PCA 투영, 벡터 산술(유추)로 임베딩 공간을 읽고, 그 한계를 정직하게 평가한다.</li>
+      <li>word2vec(skip-gram + negative sampling)의 목적 함수와 학습 과정을 직접 돌려 보고, 문맥 임베딩·문장 임베딩으로 이어지는 흐름을 안다.</li>
+      <li>LLM 기반 임베딩 모델, 대조 학습(InfoNCE), Matryoshka 차원 축소와 임베딩 양자화가 검색 품질·비용을 어떻게 바꾸는지 실험으로 확인한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="units">
+    <h2>텍스트를 숫자로: 무엇을 한 단위로 볼까</h2>
+    <p><a href="neuron.html">2장</a>의 신경망은 입력으로 실수 벡터를 받는다. 이미지라면 픽셀 밝기가 이미 숫자이니 문제가 없다. 하지만 텍스트는 기호의 나열이다. "고양이"라는 글자 세 개에는 크기도, 방향도, 거리도 없다. 그래서 언어 모델의 맨 앞에는 항상 두 단계가 붙는다.</p>
+    <ol>
+      <li><strong>토큰화</strong><span class="en">(tokenization)</span> — 문자열을 미리 정해 둔 어휘<span class="en">(vocabulary)</span>의 조각, 즉 <span class="term">토큰</span>들로 자르고 각 토큰을 정수 ID로 바꾼다.</li>
+      <li><strong>임베딩</strong><span class="en">(embedding)</span> — 정수 ID마다 학습 가능한 \(d\)차원 실수 벡터를 하나씩 붙인다. 이 벡터들이 신경망이 실제로 보는 입력이다.</li>
+    </ol>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="텍스트에서 토큰, ID, 임베딩 벡터로 가는 파이프라인">
+        <defs>
+          <marker id="em-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="80" y="24" text-anchor="middle" class="t-acc">① 텍스트</text>
+        <text x="258" y="24" text-anchor="middle" class="t-acc">② 토큰</text>
+        <text x="418" y="24" text-anchor="middle" class="t-acc">③ 정수 ID</text>
+        <text x="584" y="24" text-anchor="middle" class="t-acc">④ 임베딩 벡터 (d차원)</text>
+        <text x="740" y="24" text-anchor="middle" class="t-acc">⑤ 모델</text>
+        <rect x="14" y="98" width="132" height="44" rx="8" class="f-elev"/>
+        <text x="80" y="125" text-anchor="middle" class="t">고양이가 귀엽다</text>
+        <path d="M150 120 L186 120" class="s-line" marker-end="url(#em-ar)"/>
+        <text x="168" y="110" text-anchor="middle" class="t-mono">자르기</text>
+        <g>
+          <rect x="196" y="46" width="124" height="30" rx="6" class="f-acc-soft"/><text x="258" y="66" text-anchor="middle" class="t-mono" style="fill:var(--text)">▁고양이</text>
+          <rect x="196" y="88" width="124" height="30" rx="6" class="f-acc-soft"/><text x="258" y="108" text-anchor="middle" class="t-mono" style="fill:var(--text)">가</text>
+          <rect x="196" y="130" width="124" height="30" rx="6" class="f-acc-soft"/><text x="258" y="150" text-anchor="middle" class="t-mono" style="fill:var(--text)">▁귀엽</text>
+          <rect x="196" y="172" width="124" height="30" rx="6" class="f-acc-soft"/><text x="258" y="192" text-anchor="middle" class="t-mono" style="fill:var(--text)">다</text>
+        </g>
+        <g class="s-line">
+          <path d="M324 61 L366 61" marker-end="url(#em-ar)"/><path d="M324 103 L366 103" marker-end="url(#em-ar)"/>
+          <path d="M324 145 L366 145" marker-end="url(#em-ar)"/><path d="M324 187 L366 187" marker-end="url(#em-ar)"/>
+        </g>
+        <g>
+          <rect x="374" y="46" width="88" height="30" rx="6" class="f-surface"/><text x="418" y="66" text-anchor="middle" class="t-mono" style="fill:var(--text)">9012</text>
+          <rect x="374" y="88" width="88" height="30" rx="6" class="f-surface"/><text x="418" y="108" text-anchor="middle" class="t-mono" style="fill:var(--text)">118</text>
+          <rect x="374" y="130" width="88" height="30" rx="6" class="f-surface"/><text x="418" y="150" text-anchor="middle" class="t-mono" style="fill:var(--text)">20577</text>
+          <rect x="374" y="172" width="88" height="30" rx="6" class="f-surface"/><text x="418" y="192" text-anchor="middle" class="t-mono" style="fill:var(--text)">342</text>
+        </g>
+        <g class="s-line">
+          <path d="M466 61 L500 61" marker-end="url(#em-ar)"/><path d="M466 103 L500 103" marker-end="url(#em-ar)"/>
+          <path d="M466 145 L500 145" marker-end="url(#em-ar)"/><path d="M466 187 L500 187" marker-end="url(#em-ar)"/>
+        </g>
+        <g>
+          <rect x="508" y="48" width="18" height="26" style="fill:var(--accent);opacity:.85"/><rect x="528" y="48" width="18" height="26" style="fill:var(--accent);opacity:.25"/><rect x="548" y="48" width="18" height="26" style="fill:var(--accent-2);opacity:.6"/><rect x="568" y="48" width="18" height="26" style="fill:var(--accent);opacity:.5"/><rect x="588" y="48" width="18" height="26" style="fill:var(--accent-2);opacity:.2"/><text x="622" y="66" class="t-mono">…</text><rect x="640" y="48" width="18" height="26" style="fill:var(--accent);opacity:.4"/>
+          <rect x="508" y="90" width="18" height="26" style="fill:var(--accent-2);opacity:.3"/><rect x="528" y="90" width="18" height="26" style="fill:var(--accent);opacity:.7"/><rect x="548" y="90" width="18" height="26" style="fill:var(--accent);opacity:.15"/><rect x="568" y="90" width="18" height="26" style="fill:var(--accent-2);opacity:.75"/><rect x="588" y="90" width="18" height="26" style="fill:var(--accent);opacity:.45"/><text x="622" y="108" class="t-mono">…</text><rect x="640" y="90" width="18" height="26" style="fill:var(--accent-2);opacity:.5"/>
+          <rect x="508" y="132" width="18" height="26" style="fill:var(--accent);opacity:.55"/><rect x="528" y="132" width="18" height="26" style="fill:var(--accent-2);opacity:.45"/><rect x="548" y="132" width="18" height="26" style="fill:var(--accent);opacity:.9"/><rect x="568" y="132" width="18" height="26" style="fill:var(--accent);opacity:.2"/><rect x="588" y="132" width="18" height="26" style="fill:var(--accent-2);opacity:.65"/><text x="622" y="150" class="t-mono">…</text><rect x="640" y="132" width="18" height="26" style="fill:var(--accent);opacity:.3"/>
+          <rect x="508" y="174" width="18" height="26" style="fill:var(--accent-2);opacity:.55"/><rect x="528" y="174" width="18" height="26" style="fill:var(--accent);opacity:.35"/><rect x="548" y="174" width="18" height="26" style="fill:var(--accent-2);opacity:.2"/><rect x="568" y="174" width="18" height="26" style="fill:var(--accent);opacity:.8"/><rect x="588" y="174" width="18" height="26" style="fill:var(--accent);opacity:.5"/><text x="622" y="192" class="t-mono">…</text><rect x="640" y="174" width="18" height="26" style="fill:var(--accent-2);opacity:.4"/>
+        </g>
+        <path d="M664 124 L690 124" class="s-line" marker-end="url(#em-ar)"/>
+        <rect x="696" y="70" width="92" height="108" rx="10" class="f-acc2-soft"/>
+        <text x="742" y="118" text-anchor="middle" class="t">트랜스포머</text>
+        <text x="742" y="138" text-anchor="middle" class="t-dim">5~6장</text>
+        <text x="258" y="230" text-anchor="middle" class="t-dim">어휘(V개) 중 하나씩</text>
+        <text x="418" y="230" text-anchor="middle" class="t-dim">0 … V−1</text>
+        <text x="584" y="230" text-anchor="middle" class="t-dim">테이블 E의 해당 행</text>
+      </svg>
+      <figcaption><b>그림 4-1.</b> 언어 모델 입력 파이프라인. 텍스트는 토큰으로 잘리고(②), 각 토큰은 어휘 안의 번호(③)가 된 뒤, 임베딩 테이블에서 그 번호의 행(④)을 꺼내 모델에 들어간다. 토큰 분할과 ID 값은 설명을 위한 예시다. ▁는 "단어의 시작(앞에 공백이 있었음)"을 표시하는 관례 기호다.</figcaption>
+    </figure>
+    <p>첫 번째 질문은 "무엇을 한 단위로 볼 것인가"다. 가장 단순한 선택지는 세 가지다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>단위</th><th>"고양이가 귀엽다"</th><th>어휘 크기</th><th>장점</th><th>단점</th></tr></thead>
+      <tbody>
+        <tr><td><strong>문자</strong></td><td><span class="tok">고</span><span class="tok">양</span><span class="tok">이</span><span class="tok">가</span><span class="tok"> </span><span class="tok">귀</span><span class="tok">엽</span><span class="tok">다</span></td><td>작다 (영어 ~100, 한글 완성형 11,172)</td><td>모르는 단어가 없다</td><td>시퀀스가 길다. 한 토큰이 담는 의미가 적어 모델이 조합을 처음부터 배워야 한다</td></tr>
+        <tr><td><strong>단어</strong></td><td><span class="tok">고양이가</span><span class="tok">귀엽다</span></td><td>매우 크다 (수십만~수백만)</td><td>토큰 하나가 의미 단위</td><td>"고양이가/고양이를/고양이는"이 모두 별개. 처음 보는 단어는 [UNK]. 한국어처럼 활용이 많은 언어에서 폭발</td></tr>
+        <tr><td><strong>서브워드</strong></td><td><span class="tok">▁고양이</span><span class="tok">가</span><span class="tok">▁귀엽</span><span class="tok">다</span></td><td>적당 (3만~26만)</td><td>자주 쓰는 단어는 통째로, 드문 단어는 조각으로</td><td>분할이 언어학적 형태소와 꼭 일치하지는 않는다</td></tr>
+      </tbody>
+    </table></div>
+    <p>어휘 크기 \(V\)는 두 비용 사이의 줄다리기다. \(V\)를 키우면 같은 문장이 더 적은 토큰으로 표현되어 시퀀스가 짧아진다. <a href="attention.html">5장</a>에서 볼 어텐션의 비용은 시퀀스 길이 \(n\)의 제곱에 비례하므로, 그리고 <a href="generation.html">8장</a>의 생성은 토큰 하나씩 진행되므로 짧은 시퀀스는 곧 빠르고 싼 추론이다. 반대로 \(V\)가 커지면 임베딩 테이블과 출력층이 \(V\)에 비례해 커지고, 드문 토큰은 학습 데이터에서 몇 번 나오지 않아 벡터가 제대로 학습되지 않는다. 현대 LLM은 대부분 <strong>서브워드</strong>를 택하고, \(V\)는 3만(Llama 2)에서 12.8만(Llama 3), 25만 이상(다국어 모델)까지 다양하다.</p>
+    <div class="callout">
+      <strong>압축률이라는 관점</strong>
+      <p>토크나이저는 일종의 압축기다. 같은 텍스트를 몇 개의 토큰으로 표현하느냐(토큰당 평균 글자 수, 또는 바이트 수)가 그 토크나이저의 "효율"이다. 영어 텍스트에서 GPT 계열 토크나이저는 대략 토큰 하나에 영어 4글자, 단어 0.75개 정도를 담는다. 이 비율은 언어마다 크게 다르고, 이것이 3절에서 볼 "한국어 세금"의 정체다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="bpe">
+    <h2>토큰화와 BPE: 가장 흔한 쌍부터 붙인다</h2>
+    <p>서브워드 어휘를 어떻게 정할까? 가장 널리 쓰이는 방법은 <span class="term">BPE</span><span class="en">(Byte Pair Encoding)</span>다. 원래 1994년의 데이터 압축 기법이었고, 2016년 Sennrich 등이 신경망 기계 번역에 도입한 뒤 GPT-2, GPT-4, Llama 3 같은 모델의 기본 토크나이저가 되었다. 아이디어는 놀랄 만큼 단순하다.</p>
+    <ol>
+      <li>코퍼스의 모든 단어를 문자 단위로 쪼갠다. 단어 시작에는 경계 표시 ▁를 붙인다. 처음 어휘 = 등장한 모든 문자.</li>
+      <li>코퍼스 전체에서 <strong>인접한 두 토큰 쌍</strong>의 빈도를 센다(단어 빈도로 가중).</li>
+      <li>가장 빈번한 쌍 (a, b)를 새 토큰 ab로 <strong>병합</strong>하고, 코퍼스의 모든 a b를 ab로 바꾼다. 이 병합 규칙을 기록한다.</li>
+      <li>원하는 어휘 크기(= 기본 문자 수 + 병합 횟수)가 될 때까지 2~3을 반복한다.</li>
+    </ol>
+    <p>새 텍스트를 토큰화할 때는 같은 문자 분해에서 출발해 <strong>학습할 때 기록한 순서대로</strong> 병합 규칙을 적용한다. 그래서 학습 코퍼스에 자주 나온 문자열일수록 큰 토큰 하나로 묶이고, 드문 문자열은 작은 조각 여러 개로 남는다. 아래 시뮬레이터는 이 알고리즘을 그대로 구현했다. 코퍼스를 고쳐 쓰면 처음부터 다시 학습한다.</p>
+
+    <div class="sim" id="sim-bpe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>BPE 단계별 학습</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view em-pad">
+          <div>
+            <span class="em-cap">학습 코퍼스 (띄어쓰기로 단어 구분, 직접 고쳐 써도 된다)</span>
+            <textarea class="ab-input em-small" id="em-bpe-corpus" rows="3" spellcheck="false"></textarea>
+            <div class="em-btns" style="margin-top:6px"><button class="btn" data-preset="ko">한국어 예시</button><button class="btn" data-preset="en">영어 예시 (Sennrich)</button></div>
+          </div>
+          <div>
+            <span class="em-cap">이번 단계의 후보 쌍 — 맨 앞(분홍 테두리)이 최빈 쌍. 다른 쌍을 눌러 직접 병합할 수도 있다</span>
+            <div class="toks" id="em-bpe-pairs"></div>
+          </div>
+          <div>
+            <span class="em-cap">코퍼스의 현재 분할 (×빈도)</span>
+            <div class="em-words" id="em-bpe-words"></div>
+          </div>
+          <div>
+            <span class="em-cap">어휘 (회색 = 기본 문자, 보라 = 병합으로 생긴 토큰, 분홍 = 방금 생긴 토큰)</span>
+            <div class="toks" id="em-bpe-vocab"></div>
+          </div>
+        </div>
+        <div class="sim-controls">
+          <div class="em-btns"><button class="btn primary" id="em-bpe-step">병합 1단계</button><button class="btn" id="em-bpe-auto">자동</button><button class="btn" id="em-bpe-reset">리셋</button></div>
+          <div>
+            <span class="em-cap">병합 기록</span>
+            <ol class="em-log" id="em-bpe-log"></ol>
+          </div>
+          <label class="ctrl"><span>테스트에 적용할 병합 수 <output id="em-bpe-k-out"></output></span><input type="range" id="em-bpe-k" min="0" max="0" step="1" value="0"></label>
+          <label class="ctrl"><span>테스트 문장</span><input class="ab-input" id="em-bpe-test" value="학생들이 학교에서 공부했다" spellcheck="false"></label>
+          <div class="toks" id="em-bpe-out"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">어휘 크기</span><span class="v" id="em-bpe-o-v">—</span></div>
+        <div class="stat"><span class="k">병합 횟수</span><span class="v" id="em-bpe-o-m">—</span></div>
+        <div class="stat"><span class="k">코퍼스 토큰 수</span><span class="v" id="em-bpe-o-c">—</span></div>
+        <div class="stat"><span class="k">테스트 토큰 수</span><span class="v" id="em-bpe-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① "병합 1단계"를 몇 번 눌러 ▁학 → ▁학교, ▁공 → ▁공부처럼 자주 나오는 음절 묶음이 먼저 토큰이 되는 것을 보자. 매 단계 코퍼스 토큰 수가 그 쌍의 빈도만큼 줄어든다. ② "자동"으로 끝까지 돌린 뒤 슬라이더를 0에서 오른쪽으로 끌면, 테스트 문장이 문자 단위에서 점점 큰 조각으로 합쳐진다. ③ 테스트 문장에 코퍼스에 없는 글자(예: "고양이")를 넣으면 노란 [UNK]가 생긴다. 이것이 문자 단위 BPE의 약점이고, 아래 콜아웃의 바이트 수준 BPE가 이를 해결한다. ④ 후보 쌍 중 최빈이 아닌 것을 눌러 병합하면 같은 어휘 크기에서 토큰 수가 더 많아진다 — 탐욕적 최빈 병합이 압축에 유리한 이유다.</div>
+    </div>
+
+    <div class="callout deep">
+      <strong>바이트 수준 BPE와 한국어</strong>
+      <p>위 시뮬레이터는 이해를 돕기 위해 <strong>음절(유니코드 문자) 단위</strong>에서 출발했다. 그러면 처음 보는 글자가 나올 때 [UNK]를 피할 수 없다. 한글 완성형 음절만 11,172개, 유니코드 전체는 15만 자가 넘는다. GPT-2 이후 대부분의 LLM은 텍스트를 UTF-8 <strong>바이트</strong>로 바꾼 뒤 BPE를 돌린다. 기본 어휘가 256개 바이트이므로 어떤 문자열이든 표현할 수 있고 [UNK]가 원천적으로 사라진다. GPT-2의 어휘 50,257 = 바이트 256 + 병합 50,000 + 특수 토큰 1이다. 대가도 있다. 한글 음절 하나는 UTF-8로 <strong>3바이트</strong>(예: "고" = <span class="bits">EA B3 A0</span>)이므로, 그 음절 조합이 병합 규칙으로 학습되지 않았다면 한 글자가 토큰 2~3개로 쪼개진다. SentencePiece(Llama 2 등)는 문자 단위 BPE를 쓰되 모르는 문자만 바이트로 떨어뜨리는 <em>byte fallback</em>으로 같은 문제를 푼다.</p>
+    </div>
+    <p>BPE만 있는 것은 아니다. BERT는 빈도 대신 "병합했을 때 코퍼스 우도가 얼마나 오르나"로 쌍을 고르는 <span class="term">WordPiece</span>(어휘 30,522)를, T5와 많은 다국어 모델은 큰 후보 어휘에서 출발해 덜 중요한 토큰을 깎아 내는 <span class="term">Unigram LM</span>(SentencePiece)을 쓴다. 원리는 다르지만 "자주 나오는 문자열을 한 토큰으로"라는 결과는 비슷하다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="real-tok">
+    <h2>실제 토크나이저의 디테일</h2>
+    <p>교과서용 BPE와 실제 LLM 토크나이저 사이에는 몇 가지 중요한 공학적 결정이 더 있다. 이 결정들이 모델의 이상한 행동(철자 세기 실패, 산수 실수 등)의 원인이 되기도 한다.</p>
+    <h3>공백, 대소문자, 숫자</h3>
+    <ul>
+      <li><strong>공백은 토큰의 일부다.</strong> GPT-2 계열은 공백을 다음 단어에 붙여 " hello"와 "hello"를 다른 토큰으로 만든다(어휘 파일에서는 공백이 Ġ로 보인다). SentencePiece는 공백을 ▁로 바꿔 같은 일을 한다. 그래서 문장 맨 앞 단어와 중간 단어의 토큰이 다를 수 있다.</li>
+      <li><strong>대소문자는 다른 토큰이다.</strong> "Apple", "apple", "APPLE"은 서로 다른 ID이고, 모델은 이들이 관련 있다는 사실을 데이터로부터 따로 배워야 한다.</li>
+      <li><strong>숫자 분할은 산수 능력에 영향을 준다.</strong> GPT-2는 숫자를 빈도대로 병합해 "1234"가 "12"+"34"가 되기도 하고 "123"+"4"가 되기도 한다. 자릿수 정렬이 깨지니 덧셈이 어렵다. Llama 1·2는 숫자를 <strong>한 자리씩</strong> 쪼개고, GPT-4(cl100k)와 Llama 3는 사전 분할 정규식으로 숫자를 <strong>최대 3자리</strong> 묶음으로 자른다.</li>
+      <li><strong>사전 분할(pre-tokenization).</strong> BPE를 돌리기 전에 정규식으로 텍스트를 단어·숫자·구두점 덩어리로 먼저 나눈다. 병합은 덩어리 경계를 넘지 않으므로 "dog."과 "dog!"가 각각 별개 토큰으로 학습되는 낭비를 막는다.</li>
+    </ul>
+    <h3>한국어가 토큰을 더 많이 쓰는 이유</h3>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="영어 cat과 한국어 고양이의 UTF-8 바이트와 토큰 비교">
+        <text x="20" y="34" class="t-acc">영어 "cat"</text>
+        <text x="20" y="54" class="t-dim">문자 3개 → UTF-8 3바이트</text>
+        <g>
+          <rect x="250" y="20" width="56" height="34" rx="6" class="f-surface"/><text x="278" y="42" text-anchor="middle" class="t-mono" style="fill:var(--text)">63</text>
+          <rect x="310" y="20" width="56" height="34" rx="6" class="f-surface"/><text x="338" y="42" text-anchor="middle" class="t-mono" style="fill:var(--text)">61</text>
+          <rect x="370" y="20" width="56" height="34" rx="6" class="f-surface"/><text x="398" y="42" text-anchor="middle" class="t-mono" style="fill:var(--text)">74</text>
+          <text x="278" y="72" text-anchor="middle" class="t-mono">c</text><text x="338" y="72" text-anchor="middle" class="t-mono">a</text><text x="398" y="72" text-anchor="middle" class="t-mono">t</text>
+          <path d="M250 84 H426" class="s-acc"/><path d="M250 80 V88 M426 80 V88" class="s-acc"/>
+          <text x="338" y="104" text-anchor="middle" class="t-acc">토큰 1개 (" cat"은 흔해서 병합됨)</text>
+        </g>
+        <text x="20" y="150" class="t-acc">한국어 "고양이"</text>
+        <text x="20" y="170" class="t-dim">음절 3개 → UTF-8 9바이트</text>
+        <g>
+          <rect x="190" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="218" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">EA</text>
+          <rect x="250" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="278" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">B3</text>
+          <rect x="310" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="338" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">A0</text>
+          <rect x="384" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="412" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">EC</text>
+          <rect x="444" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="472" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">96</text>
+          <rect x="504" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="532" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">91</text>
+          <rect x="578" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="606" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">EC</text>
+          <rect x="638" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="666" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">9D</text>
+          <rect x="698" y="136" width="56" height="34" rx="6" class="f-surface"/><text x="726" y="158" text-anchor="middle" class="t-mono" style="fill:var(--text)">B4</text>
+          <text x="278" y="188" text-anchor="middle" class="t-mono">고</text><text x="472" y="188" text-anchor="middle" class="t-mono">양</text><text x="666" y="188" text-anchor="middle" class="t-mono">이</text>
+          <path d="M190 200 H366" class="s-acc2"/><path d="M190 196 V204 M366 196 V204" class="s-acc2"/>
+          <path d="M384 200 H560" class="s-acc2"/><path d="M384 196 V204 M560 196 V204" class="s-acc2"/>
+          <path d="M578 200 H754" class="s-acc2"/><path d="M578 196 V204 M754 196 V204" class="s-acc2"/>
+          <text x="472" y="226" text-anchor="middle" class="t" style="fill:var(--accent-2);font-weight:700">학습 데이터에 한국어가 적으면: 음절마다 1~3토큰 → 합계 3~9토큰</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-2.</b> 바이트 수준 BPE에서 영어와 한국어의 출발점 차이. 영어 알파벳은 1바이트, 한글 음절은 3바이트다. 병합 규칙은 학습 코퍼스에서 자주 나온 바이트 열로만 만들어지므로, 토크나이저 학습 데이터에서 한국어 비중이 작으면 한국어 텍스트는 잘게 쪼개진다(토큰 수는 토크나이저마다 다르다).</figcaption>
+    </figure>
+    <p>원인은 두 가지가 겹친다. 첫째, <strong>출발점</strong>이 다르다. 그림 4-2처럼 같은 "세 글자"라도 한국어는 바이트가 세 배다. 둘째, <strong>병합 예산의 배분</strong>이 다르다. BPE는 코퍼스에서 빈도가 높은 쌍에 병합을 쓰는데, 토크나이저 학습 코퍼스의 대부분이 영어와 코드라면 한국어 바이트 열에 돌아갈 병합이 적다. 결과적으로 같은 내용을 표현하는 데 한국어가 영어보다 토큰을 대략 1.5~3배 쓰는 일이 흔하다(토크나이저와 문체에 따라 크게 다르다). 토큰 수는 곧 API 비용, 컨텍스트 창 소모, 생성 시간이다. 어휘를 128K로 늘리고 다국어 데이터를 더 넣은 Llama 3 토크나이저가 Llama 2(32K)보다 한국어를 더 짧게 표현하는 것도, 국내 기업들이 한국어 비중을 높인 자체 토크나이저를 만드는 것도 이 때문이다. 다국어 사용이 늘면서 어휘는 계속 커지는 추세다. 2025~26년의 주요 오픈 모델은 Qwen 계열 약 15만, gpt-oss 약 20만 토큰처럼 32K였던 Llama 2 시절보다 4~6배 큰 어휘를 쓴다(아래 표). 어휘가 커지면 같은 문장의 토큰 수는 줄지만, 다음 절에서 계산할 임베딩·출력층 파라미터 \(V\times d\)는 그만큼 커진다.</p>
+    <h3>어휘 크기와 특수 토큰</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th>방식</th><th class="num">어휘 크기</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>BERT-base</td><td>WordPiece</td><td class="num">30,522</td><td>[CLS] [SEP] [MASK] [PAD] [UNK]</td></tr>
+        <tr><td>GPT-2</td><td>바이트 수준 BPE</td><td class="num">50,257</td><td>256 바이트 + 50,000 병합 + &lt;|endoftext|&gt;</td></tr>
+        <tr><td>Llama 2</td><td>SentencePiece BPE + byte fallback</td><td class="num">32,000</td><td>숫자 한 자리씩</td></tr>
+        <tr><td>GPT-4 (cl100k)</td><td>바이트 수준 BPE</td><td class="num">~100,000</td><td>숫자 최대 3자리 묶음</td></tr>
+        <tr><td>Llama 3</td><td>바이트 수준 BPE (tiktoken 계열)</td><td class="num">128,256</td><td>일반 128,000 + 특수 256</td></tr>
+        <tr><td>Qwen2.5 / Qwen3</td><td>바이트 수준 BPE</td><td class="num">~151.6K</td><td>일반 151,643 + 특수 토큰. 임베딩 행렬은 151,936행으로 패딩</td></tr>
+        <tr><td>gpt-oss (o200k_harmony, 2025)</td><td>바이트 수준 BPE (tiktoken)</td><td class="num">201,088</td><td>GPT-4o의 o200k 계열 + 대화 형식(harmony)용 특수 토큰</td></tr>
+      </tbody>
+    </table></div>
+    <p><span class="term">특수 토큰</span><span class="en">(special tokens)</span>은 텍스트에서 나오지 않고 사람이 정해 넣는 토큰이다. 문서의 시작과 끝(<code>&lt;|begin_of_text|&gt;</code>, <code>&lt;|endoftext|&gt;</code>), 대화의 역할 구분(<code>&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;</code>, <code>&lt;|eot_id|&gt;</code>), 패딩, 마스크 등이 여기에 속한다. <a href="llm.html">7장</a>의 채팅 템플릿과 <a href="generation.html">8장</a>의 "생성 멈춤" 조건이 모두 이 특수 토큰으로 구현된다. 사용자 입력에 특수 토큰 문자열이 그대로 들어오면 역할 구분이 깨질 수 있어서, 실제 서비스는 일반 텍스트 안의 특수 토큰 문자열을 따로 이스케이프한다.</p>
+    <div class="callout warn">
+      <strong>토큰이 만드는 착시</strong>
+      <p>"strawberry에 r이 몇 개인가?" 같은 질문에 LLM이 자주 틀리는 이유 중 하나는 모델이 글자를 보지 못하기 때문이다. 모델 입력은 "str", "aw", "berry" 같은 토큰 ID일 뿐이고, 각 토큰 안에 어떤 글자가 들어 있는지는 학습으로 간접적으로만 알 수 있다. 숫자 계산, 운율, 철자 뒤집기도 같은 이유로 어렵다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="lookup">
+    <h2>원-핫의 한계와 임베딩 룩업 테이블</h2>
+    <p>토큰 ID는 정수지만, 정수 그대로 신경망에 넣으면 곤란하다. ID 118("가")과 ID 119가 수치상 가깝다고 의미가 가까운 것은 아니기 때문이다. 순서 없는 범주를 숫자로 바꾸는 고전적 방법은 <span class="term">원-핫 벡터</span><span class="en">(one-hot)</span>다. 어휘 크기 \(V\)짜리 벡터에서 자기 자리만 1, 나머지는 0.</p>
+    <div class="formula">$$\mathbf{x}_{\text{고양이}} = (0, 0, 0, 1, 0, \dots, 0) \in \{0,1\}^{V}, \qquad \mathbf{x}_i \cdot \mathbf{x}_j = \begin{cases}1 & i=j\\ 0 & i\ne j\end{cases}$$
+      <div class="where">서로 다른 두 단어의 내적은 언제나 0, 거리는 언제나 \(\sqrt{2}\)다.</div></div>
+    <p>원-핫에는 두 가지 치명적 한계가 있다. 첫째, <strong>모든 단어가 서로 똑같이 멀다.</strong> "고양이"와 "강아지"의 거리가 "고양이"와 "민주주의"의 거리와 같다. 둘째, <strong>너무 크고 희소하다.</strong> \(V = 128{,}256\)이면 벡터 하나가 12만 차원인데 그중 1이 하나뿐이다. 해결책은 각 토큰에 작은 \(d\)차원 <strong>밀집 벡터</strong>를 하나씩 배정하고, 그 값을 학습으로 정하는 것이다. 이 벡터들을 쌓은 행렬이 <span class="term">임베딩 테이블</span> \(E\)다.</p>
+    <div class="formula">$$E \in \mathbb{R}^{V \times d}, \qquad \mathbf{h}_i = \mathbf{x}_i^{\top} E = E_{i,:} \quad (\text{i번째 행})$$
+      <div class="where">원-핫 행벡터에 \(E\)를 곱하면 \(i\)번째 행 하나만 살아남는다. 그래서 실제 구현은 곱셈 없이 <code>E[i]</code>로 행을 꺼내는 <strong>룩업(lookup)</strong>이다. PyTorch의 <code>nn.Embedding</code>이 바로 이것이다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="원-핫 벡터와 임베딩 행렬의 곱이 한 행을 선택함">
+        <text x="110" y="24" text-anchor="middle" class="t-acc">원-핫 x (1×V)</text>
+        <g>
+          <rect x="20" y="118" width="22" height="26" class="f-surface"/><rect x="42" y="118" width="22" height="26" class="f-surface"/><rect x="64" y="118" width="22" height="26" class="f-surface"/>
+          <rect x="86" y="118" width="22" height="26" class="f-acc"/><rect x="108" y="118" width="22" height="26" class="f-surface"/><rect x="130" y="118" width="22" height="26" class="f-surface"/>
+          <rect x="152" y="118" width="22" height="26" class="f-surface"/><rect x="174" y="118" width="22" height="26" class="f-surface"/>
+          <text x="31" y="136" text-anchor="middle" class="t-mono">0</text><text x="53" y="136" text-anchor="middle" class="t-mono">0</text><text x="75" y="136" text-anchor="middle" class="t-mono">0</text>
+          <text x="97" y="136" text-anchor="middle" class="t-mono" style="fill:var(--on-accent);font-weight:700">1</text>
+          <text x="119" y="136" text-anchor="middle" class="t-mono">0</text><text x="141" y="136" text-anchor="middle" class="t-mono">0</text><text x="163" y="136" text-anchor="middle" class="t-mono">0</text><text x="185" y="136" text-anchor="middle" class="t-mono">0</text>
+          <text x="97" y="164" text-anchor="middle" class="t-dim">i = 3</text>
+        </g>
+        <text x="222" y="137" text-anchor="middle" class="t" style="font-size:22px">×</text>
+        <text x="350" y="24" text-anchor="middle" class="t-acc">임베딩 테이블 E (V×d)</text>
+        <g>
+          <rect x="260" y="40" width="180" height="208" rx="4" class="f-elev"/>
+          <rect x="260" y="118" width="180" height="26" class="f-acc-soft"/>
+          <g class="t-mono">
+            <text x="250" y="57" text-anchor="end" class="t-mono">0</text><text x="250" y="83" text-anchor="end" class="t-mono">1</text><text x="250" y="109" text-anchor="end" class="t-mono">2</text>
+            <text x="250" y="135" text-anchor="end" class="t-acc" style="font-family:var(--mono);font-size:11px">3</text><text x="250" y="161" text-anchor="end" class="t-mono">4</text><text x="250" y="187" text-anchor="end" class="t-mono">5</text><text x="250" y="213" text-anchor="end" class="t-mono">6</text><text x="250" y="239" text-anchor="end" class="t-mono">7</text>
+          </g>
+          <path d="M260 66 H440 M260 92 H440 M260 118 H440 M260 144 H440 M260 170 H440 M260 196 H440 M260 222 H440" style="stroke:var(--border)"/>
+          <path d="M305 40 V248 M350 40 V248 M395 40 V248" style="stroke:var(--border)"/>
+          <text x="282" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.21</text><text x="327" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">−.84</text><text x="372" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.33</text><text x="417" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.07</text>
+        </g>
+        <text x="476" y="137" text-anchor="middle" class="t" style="font-size:22px">=</text>
+        <text x="610" y="96" text-anchor="middle" class="t-acc">E의 3번째 행 (1×d)</text>
+        <g>
+          <rect x="520" y="118" width="45" height="26" class="f-acc-soft"/><rect x="565" y="118" width="45" height="26" class="f-acc-soft"/><rect x="610" y="118" width="45" height="26" class="f-acc-soft"/><rect x="655" y="118" width="45" height="26" class="f-acc-soft"/>
+          <text x="542" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.21</text><text x="587" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">−.84</text><text x="632" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.33</text><text x="677" y="135" text-anchor="middle" class="t-mono" style="fill:var(--text)">.07</text>
+        </g>
+        <text x="610" y="178" text-anchor="middle" class="t-dim">곱셈 V·d번 중 0이 아닌 항은 d개뿐</text>
+        <text x="610" y="198" text-anchor="middle" class="t-dim">→ 실제로는 E[3]으로 바로 꺼낸다</text>
+      </svg>
+      <figcaption><b>그림 4-3.</b> 원-핫 벡터 × 임베딩 테이블 = 행 선택. 수학적으로는 행렬곱이지만 계산적으로는 배열 인덱싱이다. 행렬곱으로 보는 관점은 "임베딩도 다른 층과 똑같이 역전파로 학습되는 가중치"임을 알려 준다. 선택된 행에만 기울기가 흐른다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-lookup">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>임베딩 룩업: 원-핫 × E = 행 선택</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view em-pad">
+          <div><span class="em-cap">입력 토큰 (클릭해서 하나 고르기)</span><div class="toks" id="em-lk-toks"></div></div>
+          <div class="em-scroll"><span class="em-cap">원-핫 x (1×8)</span><table class="mat" id="em-lk-x" style="margin:0"></table></div>
+          <div class="em-scroll"><span class="em-cap">임베딩 테이블 E (8×4) — 칸을 위아래로 끌어 값을 바꿀 수 있다</span><table class="mat em-mat" id="em-lk-E" style="margin:0"></table></div>
+          <div><span class="em-cap">x · E (1×4) — 행렬곱을 실제로 계산한 결과</span><table class="mat" id="em-lk-y" style="margin:0"></table><div class="em-eqline" id="em-lk-eq" style="margin-top:6px"></div></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>실제 모델 규모</span><div class="seg" id="em-lk-preset"><button data-value="gpt2" class="on">GPT-2 small</button><button data-value="llama3">Llama 3 8B</button><button data-value="custom">직접</button></div></div>
+          <label class="ctrl"><span>어휘 크기 V <output id="em-lk-v-out"></output></span><input type="range" id="em-lk-v" min="10" max="18" step="0.01" value="15.6"></label>
+          <label class="ctrl"><span>임베딩 차원 d <output id="em-lk-d-out"></output></span><input type="range" id="em-lk-d" min="64" max="8192" step="64" value="768"></label>
+          <label class="check"><input type="checkbox" id="em-lk-tie" checked> 입력·출력 가중치 공유 (weight tying)</label>
+          <div class="ctrl"><span>저장 형식</span><div class="seg" id="em-lk-dt"><button data-value="4" class="on">FP32 (4 B)</button><button data-value="2">BF16 (2 B)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선택 토큰 → ID</span><span class="v" id="em-lk-o-id">—</span></div>
+        <div class="stat"><span class="k">입력 임베딩 V×d</span><span class="v" id="em-lk-o-p">—</span></div>
+        <div class="stat"><span class="k">입력+출력층 합계</span><span class="v" id="em-lk-o-p2">—</span></div>
+        <div class="stat"><span class="k">메모리</span><span class="v" id="em-lk-o-mem">—</span></div>
+        <div class="stat"><span class="k">모델 전체 대비</span><span class="v" id="em-lk-o-r">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 토큰을 바꿔 누르면 원-핫의 1이 움직이고, x·E의 결과가 늘 E의 그 행과 정확히 같다(아래 식에서 0이 곱해진 항이 모두 사라지는 것을 확인). ② 선택된 행의 칸을 위아래로 끌면 출력이 바로 바뀌지만, 다른 행을 바꾸면 출력은 그대로다 — 학습 때 기울기도 선택된 행에만 흐른다. ③ GPT-2 small(50,257 × 768 ≈ 38.6M, 전체 124M의 약 31%)과 Llama 3 8B(128,256 × 4,096 ≈ 525M)를 비교해 보자. Llama 3는 가중치 공유를 하지 않아 출력층까지 합치면 약 1.05B, 전체 8.03B의 13%다. 작은 모델일수록 임베딩 비중이 커서 가중치 공유의 이득이 크다.</div>
+    </div>
+    <p>시뮬레이터 오른쪽의 <span class="term">가중치 공유</span><span class="en">(weight tying)</span>는 모델 맨 끝의 출력층과 관련이 있다. <a href="llm.html">7장</a>에서 보겠지만 LLM의 마지막 층은 \(d\)차원 은닉 벡터를 \(V\)개 토큰의 점수(로짓)로 바꾸는 \(d\times V\) 행렬이다. 이것은 임베딩 테이블의 전치와 모양이 같다. 그래서 GPT-2처럼 두 행렬을 <strong>같은 파라미터</strong>로 쓰면 \(V\times d\)만큼 절약된다. "입력에서 토큰을 벡터로 바꾸는 사전"과 "출력에서 벡터를 토큰 점수로 바꾸는 사전"을 하나로 쓰는 셈이다. 모델이 커지면 임베딩 비중이 작아지므로 Llama 3 8B처럼 공유하지 않는 경우도 많다(작은 Llama 3.2 1B·3B는 공유한다).</p>
+    <div class="callout tip">
+      <strong>임베딩 차원 d는 얼마나 클까</strong>
+      <p>LLM에서는 임베딩 차원이 곧 모델 전체의 은닉 차원 \(d_{\text{model}}\)이다. GPT-2 small 768, GPT-2 XL 1,600, Llama 3 8B 4,096, Llama 3 70B 8,192. 어휘가 12만 개인데 4,096차원이면 충분할까? 고차원에서는 서로 "거의 직교"인 방향을 차원 수보다 훨씬 많이 만들 수 있다(<a href="vector.html">1장</a>의 고차원 직관). 그래서 수만 개 토큰이 수천 차원 안에 겹치지 않고 들어간다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="distrib">
+    <h2>분포 가설: 단어는 이웃으로 알 수 있다</h2>
+    <p>임베딩 테이블 \(E\)의 값은 처음엔 무작위다. 그렇다면 무엇을 기준으로 "고양이"와 "강아지"의 벡터를 가깝게 만들어야 할까? 사람이 의미를 일일이 적어 줄 수는 없다. 1950년대 언어학자들이 답을 남겨 두었다.</p>
+    <div class="callout">
+      <strong>분포 가설 (Distributional Hypothesis)</strong>
+      <p>"You shall know a word by the company it keeps." — J. R. Firth (1957). 비슷한 문맥에 나타나는 단어는 비슷한 의미를 가진다(Z. Harris, 1954). "차가운 ___ 를 마신다"의 빈칸에 들어갈 수 있는 단어(우유, 주스, 물)는 서로 비슷하고, "___ 를 키운다"에 들어갈 단어(고양이, 강아지)는 또 서로 비슷하다.</p>
+    </div>
+    <p>이 가설을 숫자로 옮기는 가장 직접적인 방법은 <span class="term">동시출현 행렬</span><span class="en">(co-occurrence matrix)</span>이다. 코퍼스를 훑으며 단어 \(w\)의 앞뒤 \(k\)칸(윈도우) 안에 단어 \(c\)가 몇 번 나왔는지 \(\#(w,c)\)를 센다. 그러면 각 단어의 행이 곧 그 단어의 "문맥 프로필" 벡터가 된다. 그런데 원시 횟수에는 문제가 있다. "를", "에" 같은 조사는 어떤 단어 옆에나 나오므로 모든 행에서 큰 값을 차지해, 의미와 상관없이 모든 단어를 비슷하게 만든다. 그래서 "우연히 기대되는 것보다 얼마나 자주 함께 나오나"를 재는 <span class="term">PMI</span><span class="en">(Pointwise Mutual Information)</span>를 쓴다.</p>
+    <div class="formula">$$\mathrm{PMI}(w,c) = \log_2 \frac{P(w,c)}{P(w)\,P(c)}, \qquad \mathrm{PPMI}(w,c) = \max\bigl(0,\ \mathrm{PMI}(w,c)\bigr)$$
+      <div class="where">\(P(w,c) = \#(w,c)/N\), \(P(w)\), \(P(c)\)는 주변 확률. 독립이면 PMI = 0이다. 음수 PMI는 작은 코퍼스에서 잡음이 크므로 0으로 자른 것이 PPMI다.</div></div>
+    <p>PPMI 행렬의 행은 \(V\)차원으로 여전히 크고 희소하다. 이것을 <strong>특이값 분해</strong><span class="en">(SVD)</span>로 상위 몇 개 방향만 남기면 짧고 밀집된 단어 벡터가 된다. 1990년대의 LSA(잠재 의미 분석)가 이 방법이고, 놀랍게도 9절의 word2vec이 학습하는 것도 본질적으로는 (이동된) PMI 행렬의 분해다. 아래 시뮬레이터는 교육용으로 만든 24문장짜리 코퍼스로 이 과정을 실제로 계산한다. 각 단어의 PPMI 행을 길이 1로 정규화하고, 중심화한 뒤 SVD로 상위 2개 방향(= PCA 평면)에 투영했다.</p>
+
+    <div class="sim" id="sim-cooc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>동시출현 행렬 → PPMI → 2D 단어 벡터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view">
+          <canvas id="em-co-heat" class="em-canvas-touch"></canvas>
+          <canvas id="em-co-sc" class="em-canvas-touch" style="border-top:1px solid var(--border)"></canvas>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>윈도우 크기 k (앞뒤 k칸) <output id="em-co-win-out"></output></span><input type="range" id="em-co-win" min="1" max="5" step="1" value="2"></label>
+          <div class="ctrl"><span>히트맵에 표시할 값</span><div class="seg" id="em-co-mode"><button data-value="count">횟수</button><button data-value="ppmi" class="on">PPMI</button></div></div>
+          <div class="ctrl"><span>2D 좌표에 쓸 행렬</span><div class="seg" id="em-co-src"><button data-value="count">횟수</button><button data-value="ppmi" class="on">PPMI</button></div></div>
+          <div class="em-msg" id="em-co-info">히트맵 칸이나 산점도의 단어를 눌러 보자.</div>
+          <label class="ctrl"><span>코퍼스 (한 줄 = 한 문장, 띄어쓰기 = 토큰)</span><textarea class="ab-input" id="em-co-corpus" rows="7" spellcheck="false"></textarea></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">어휘 / 목표 단어</span><span class="v" id="em-co-o-v">—</span></div>
+        <div class="stat"><span class="k">같은 그룹 평균 cos</span><span class="v" id="em-co-o-in">—</span></div>
+        <div class="stat"><span class="k">다른 그룹 평균 cos</span><span class="v" id="em-co-o-out">—</span></div>
+        <div class="stat"><span class="k">2D 설명 분산</span><span class="v" id="em-co-o-ev">—</span></div>
+      </div>
+      <div class="sim-note">위 히트맵의 행은 목표 단어 12개(동물·음료·탈것 각 4개), 열은 나머지 문맥 단어다. 해볼 것: ① 히트맵 값을 "횟수"로 바꾸면 "를", "에" 열이 모든 행에서 밝다. PPMI로 바꾸면 그 열이 어두워지고 "키운다", "마신다", "탄다" 같은 의미 있는 문맥이 살아난다. ② 2D 좌표를 "횟수"로 만들면 그룹이 덜 깔끔하게 갈리고 그룹 내·외 cos 차이가 줄어든다. ③ 윈도우를 1로 줄이면 바로 옆 단어만 보게 되어 그룹 구분이 흐려지고, 2~3이면 세 무리가 뚜렷하다. ④ 코퍼스에 "귀여운 버스 를 키운다"를 몇 줄 추가하면 버스가 동물 쪽으로 끌려간다 — 의미는 오로지 문맥에서 온다.</div>
+    </div>
+    <p>여기까지가 <strong>세는 방법</strong><span class="en">(count-based)</span>이다. 행렬을 만들고 분해한다. 2013년의 word2vec은 같은 목표를 <strong>예측하는 방법</strong><span class="en">(prediction-based)</span>으로 바꿨다. 행렬을 통째로 만들지 않고, 문장을 하나씩 읽으며 "이 단어 주변에 저 단어가 나올까?"를 맞히도록 벡터를 조금씩 고친다. 수십억 단어 코퍼스에서도 메모리 걱정 없이 학습할 수 있다는 것이 결정적 장점이었다. 이 방법은 9절에서 직접 돌려 보고, 먼저 "잘 학습된 임베딩 공간"이 어떻게 생겼는지 탐험해 보자.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="space">
+    <h2>임베딩 공간 탐험: 의미의 지도를 3D로 돌려 보기</h2>
+    <p>실제 word2vec이나 LLM의 임베딩은 수백~수천 차원이고, 각 축은 사람이 해석할 수 있는 의미를 갖지 않는다. 그래서 여기서는 원리를 눈으로 보기 위해 <strong>교육용으로 손수 설계한 작은 임베딩</strong>을 쓴다. 단어 76개(사람, 동물, 음식, 나라·도시, 동작, 색, 수)에 대해 12개의 해석 가능한 축 — 왕족, 성별, 나이, 생물, 크기, 음식, 장소, 동서(지역), 동작, 과거, 색, 수 — 의 값을 직접 정하고, 표준편차 0.05의 작은 잡음을 더했다. 예를 들어 "왕"은 왕족 1, 성별 +1, 나이 0.6, 생물 1이고 나머지는 거의 0이다. 실제 모델의 공간도 이런 "의미 방향"을 어느 정도 품고 있지만, 그 방향들이 좌표축과 나란하지 않고 서로 비스듬히 섞여 있다는 점이 다르다.</p>
+    <p>두 단어가 얼마나 비슷한지는 보통 <span class="term">코사인 유사도</span>로 잰다. 벡터의 길이는 빈도 같은 부수적 요인의 영향을 많이 받으므로 방향만 비교한다.</p>
+    <div class="formula">$$\cos(\mathbf{u},\mathbf{v}) = \frac{\mathbf{u}\cdot\mathbf{v}}{\lVert\mathbf{u}\rVert\,\lVert\mathbf{v}\rVert} \in [-1, 1]$$</div>
+    <p>12차원은 볼 수 없으므로 3차원으로 줄여야 한다. 가장 정보를 많이 남기는 선형 투영은 <span class="term">주성분 분석</span><span class="en">(PCA)</span>이다. 데이터의 공분산 행렬을 고유분해해서 분산이 가장 큰 방향 세 개를 고른다.</p>
+    <div class="formula">$$C = \frac{1}{n-1}\sum_{i=1}^{n} (\mathbf{x}_i-\boldsymbol{\mu})(\mathbf{x}_i-\boldsymbol{\mu})^{\top}, \qquad C\,\mathbf{u}_k = \lambda_k \mathbf{u}_k, \qquad \mathbf{z}_i = \bigl[(\mathbf{x}_i-\boldsymbol{\mu})\cdot\mathbf{u}_1,\ \dots,\ (\mathbf{x}_i-\boldsymbol{\mu})\cdot\mathbf{u}_3\bigr]$$
+      <div class="where">\(\lambda_1 \ge \lambda_2 \ge \lambda_3\)는 각 방향이 설명하는 분산. 3D가 보존하는 비율은 \((\lambda_1+\lambda_2+\lambda_3)/\sum_k \lambda_k\)다. 아래 시뮬레이터는 12×12 공분산 행렬을 Jacobi 회전으로 실제 고유분해한다.</div></div>
+
+    <div class="sim" id="sim-space">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>임베딩 공간 탐색기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="em-v3d"><span class="hint">드래그 회전 · 휠/핀치 확대 · 탭하면 선택</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>단어 찾기</span><div style="display:flex;gap:6px"><input class="ab-input" id="em-sp-q" list="em-dl-words" placeholder="예: 여왕, 도쿄, 고래" autocomplete="off"><button class="btn" id="em-sp-go">찾기</button></div></div>
+          <div class="ctrl"><span>투영 축</span><div class="seg" id="em-sp-proj"><button data-value="pca" class="on">PCA 1-2-3</button><button data-value="axes">의미 축 3개</button></div></div>
+          <div class="em-selrow" id="em-sp-axes"><select id="em-sp-ax0" aria-label="x축"></select><select id="em-sp-ax1" aria-label="y축"></select><select id="em-sp-ax2" aria-label="z축"></select></div>
+          <div class="ctrl"><span>라벨</span><div class="seg" id="em-sp-lab"><button data-value="all" class="on">전체</button><button data-value="near">선택 주변</button><button data-value="none">끄기</button></div></div>
+          <div class="ctrl"><span>범주 (눌러서 숨기기)</span><div class="em-cats" id="em-sp-cats"></div></div>
+          <label class="check"><input type="checkbox" id="em-sp-rot"> 자동 회전</label>
+          <div><span class="em-cap" id="em-sp-nbt">최근접 이웃 (12차원 코사인)</span><div class="em-nb" id="em-sp-nb"></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선택 단어</span><span class="v" id="em-sp-o-w">—</span></div>
+        <div class="stat"><span class="k">1위 이웃 (cos)</span><span class="v" id="em-sp-o-nn">—</span></div>
+        <div class="stat"><span class="k">3D가 보존한 분산</span><span class="v" id="em-sp-o-ev">—</span></div>
+        <div class="stat"><span class="k">12D top-5 중 3D top-5와 겹침</span><span class="v" id="em-sp-o-ov">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 공간을 돌려 범주별 무리를 찾아보자. PCA는 범주 정보를 주지 않았는데도 사람·동물·음식·장소가 따로 모인다. ② "왕"을 눌러 이웃을 보면 아버지·왕자·남자·할아버지가 나온다. 각각 성별·왕족·나이 중 일부를 공유한다. ③ "의미 축 3개"로 바꾸고 x=성별, y=왕족, z=나이를 고르면 왕/여왕/왕자/공주가 정육면체의 꼭짓점처럼 정렬된다. x=동서, y=크기, z=장소로 두면 나라와 수도가 두 줄로 나란히 선다. ④ 오른쪽 아래 "겹침" 수치를 보자. 3D에서 가까워 보여도 12차원에서는 아닐 수 있다 — 투영은 항상 정보를 버린다. 3D 보존 분산이 60%도 안 된다는 점을 기억하자.</div>
+    </div>
+    <p>무리 짓기보다 더 흥미로운 것은 무리 <strong>사이의 방향</strong>이다. 시뮬레이터에서 남자 → 여자로 가는 화살표와 왕 → 여왕, 소년 → 소녀로 가는 화살표가 거의 같은 방향, 같은 길이라는 점에 주목하자. 임베딩 공간에서 "성별"은 하나의 <strong>방향</strong>이다. 이 관찰이 다음 절의 벡터 산술로 이어진다.</p>
+    <div class="callout warn">
+      <strong>2D·3D 그림을 너무 믿지 말 것</strong>
+      <p>논문과 블로그의 임베딩 그림은 대부분 PCA나 t-SNE, UMAP으로 수백 차원을 2차원으로 누른 것이다. PCA는 전체 구조(큰 분산)를 보존하는 대신 국소 이웃을 뭉개고, t-SNE·UMAP은 국소 이웃을 보존하는 대신 무리 사이의 거리와 크기를 왜곡한다. 실제 판단(최근접 이웃, 검색, 유추)은 언제나 <strong>원래 차원에서</strong> 계산해야 한다. 위 시뮬레이터의 이웃 목록이 3D 좌표가 아니라 12차원 코사인으로 계산되는 이유다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="analogy">
+    <h2>벡터 산술과 유추: 왕 − 남자 + 여자 = ?</h2>
+    <p>2013년 Mikolov 등이 word2vec을 발표하며 세상을 놀라게 한 장면이 이것이다. 학습된 벡터로 \(\mathbf{v}_{\text{king}} - \mathbf{v}_{\text{man}} + \mathbf{v}_{\text{woman}}\)을 계산하고 가장 가까운 단어를 찾으면 queen이 나온다. 아무도 "성별"이나 "왕족"을 가르쳐 주지 않았는데 말이다. 원리는 그림 4-4와 같다. "남자 → 왕"의 차이 벡터가 "여자 → 여왕"의 차이 벡터와 같다면, 네 점은 <strong>평행사변형</strong>을 이룬다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 280" role="img" aria-label="유추의 평행사변형">
+        <defs>
+          <marker id="em-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="em-ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <text x="200" y="24" text-anchor="middle" class="t-acc">성별 · 왕족</text>
+        <path d="M60 250 H360 M60 250 V40" class="s-axis"/>
+        <text x="360" y="268" text-anchor="end" class="t-mono">← 여성 · 성별 · 남성 →</text>
+        <text x="48" y="45" class="t-mono" transform="rotate(-90 48 45)" text-anchor="end">왕족 →</text>
+        <circle cx="300" cy="210" r="6" class="f-acc"/><text x="312" y="215" class="t">남자</text>
+        <circle cx="120" cy="210" r="6" class="f-acc"/><text x="108" y="215" text-anchor="end" class="t">여자</text>
+        <circle cx="300" cy="80" r="6" class="f-acc"/><text x="312" y="85" class="t">왕</text>
+        <circle cx="120" cy="80" r="6" class="f-acc"/><text x="108" y="85" text-anchor="end" class="t">여왕</text>
+        <path d="M300 202 L300 92" class="s-acc" marker-end="url(#em-ar2)"/>
+        <path d="M120 202 L120 92" class="s-acc" marker-end="url(#em-ar2)"/>
+        <path d="M292 210 L132 210" class="s-acc2" marker-end="url(#em-ar3)"/>
+        <path d="M292 80 L132 80" class="s-acc2" marker-end="url(#em-ar3)" style="stroke-dasharray:5 4"/>
+        <text x="306" y="150" class="t-mono" style="fill:var(--accent)">+ 왕족</text>
+        <text x="210" y="232" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">여자 − 남자</text>
+        <text x="210" y="70" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">왕 − 남자 + 여자 → 여왕</text>
+        <text x="600" y="24" text-anchor="middle" class="t-acc">나라 · 수도</text>
+        <path d="M460 250 H760 M460 250 V40" class="s-axis"/>
+        <text x="760" y="268" text-anchor="end" class="t-mono">동서(지역) →</text>
+        <text x="448" y="45" class="t-mono" transform="rotate(-90 448 45)" text-anchor="end">규모 →</text>
+        <circle cx="560" cy="90" r="6" style="fill:var(--blue)"/><text x="548" y="85" text-anchor="end" class="t">한국</text>
+        <circle cx="700" cy="90" r="6" style="fill:var(--blue)"/><text x="712" y="85" class="t">일본</text>
+        <circle cx="560" cy="200" r="6" style="fill:var(--blue)"/><text x="548" y="205" text-anchor="end" class="t">서울</text>
+        <circle cx="700" cy="200" r="6" style="fill:var(--blue)"/><text x="712" y="205" class="t">도쿄</text>
+        <path d="M560 98 L560 188" class="s-acc" marker-end="url(#em-ar2)"/>
+        <path d="M700 98 L700 188" class="s-acc" marker-end="url(#em-ar2)" style="stroke-dasharray:5 4"/>
+        <text x="566" y="150" class="t-mono" style="fill:var(--accent)">수도 = 나라 + (서울−한국)</text>
+      </svg>
+      <figcaption><b>그림 4-4.</b> 유추의 평행사변형. 왼쪽: "남자→왕"과 "여자→여왕"이 같은 왕족 방향(보라)이고, "남자→여자"와 "왕→여왕"이 같은 성별 방향(분홍)이다. 오른쪽: "나라 → 그 나라의 수도"도 공통 방향이다. 점선이 산술로 찾는 마지막 변이다.</figcaption>
+    </figure>
+    <p>정식으로 쓰면 "a가 b에 대한 관계는 ?가 c에 대한 관계와 같다"(b : a = c : ?)를 다음처럼 푼다. 입력 단어 세 개를 후보에서 빼는 것이 중요하다. 빼지 않으면 대개 a 자신(예: 왕)이 1등이 된다.</p>
+    <div class="formula">$$d^{*} = \underset{w \notin \{a,b,c\}}{\arg\max}\ \cos\bigl(\mathbf{v}_w,\ \mathbf{v}_a - \mathbf{v}_b + \mathbf{v}_c\bigr)$$
+      <div class="where">예: a = 왕, b = 남자, c = 여자 → \(\mathbf{v}_{\text{왕}} - \mathbf{v}_{\text{남자}} + \mathbf{v}_{\text{여자}}\)에 가장 가까운 단어.</div></div>
+
+    <div class="sim" id="sim-analogy">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>벡터 산술 &amp; 유추</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="em-an-cv" class="em-canvas-touch"></canvas><span class="hint">빈 점을 탭하면 그 단어가 선택한 자리에 들어간다</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>프리셋</span><div class="em-btns" id="em-an-pre"></div></div>
+          <div class="ctrl"><span>a − b + c</span>
+            <div class="em-ops"><select id="em-an-a" class="em-sel" aria-label="a"></select><span>−</span><select id="em-an-b" class="em-sel" aria-label="b"></select><span>+</span><select id="em-an-c" class="em-sel" aria-label="c"></select></div></div>
+          <div class="ctrl"><span>캔버스에서 탭하면 바꿀 자리</span><div class="seg" id="em-an-role"><button data-value="a">a</button><button data-value="b">b</button><button data-value="c" class="on">c</button></div></div>
+          <div class="ctrl"><span>보기 평면</span><div class="seg" id="em-an-plane"><button data-value="ana" class="on">유추 평면</button><button data-value="pca">PCA 평면</button></div></div>
+          <label class="check"><input type="checkbox" id="em-an-ex" checked> 입력 단어 a, b, c 제외</label>
+          <label class="ctrl"><span>잡음 σ (임베딩 품질 ↓) <output id="em-an-sig-out"></output></span><input type="range" id="em-an-sig" min="0" max="0.5" step="0.01" value="0.05"></label>
+          <div><span class="em-cap">결과 top-5 (12차원 코사인)</span><div class="em-nb" id="em-an-res"></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">결과 1위</span><span class="v" id="em-an-o-1">—</span></div>
+        <div class="stat"><span class="k">기대 답의 순위</span><span class="v" id="em-an-o-r">—</span></div>
+        <div class="stat"><span class="k">제외 안 할 때 1위</span><span class="v" id="em-an-o-n">—</span></div>
+        <div class="stat"><span class="k">프리셋 8개 정답률</span><span class="v" id="em-an-o-acc">—</span></div>
+      </div>
+      <div class="sim-note">"유추 평면"은 b를 원점으로 a − b와 c − b가 펼치는 평면이다. 결과 벡터 a − b + c(★)는 정확히 이 평면 위에 있고, 다른 단어들은 평면에서 멀수록 흐리게 그렸다. 해볼 것: ① 프리셋을 차례로 눌러 평행사변형을 확인하자. 서울 − 한국 + 일본, 김치 − 한국 + 일본도 된다. ② "입력 단어 제외"를 끄면 김치 − 한국 + 일본의 답이 김치 자신으로 바뀐다. 실제 word2vec에서도 흔한 일이다. ③ 잡음 σ를 0.15 → 0.3으로 올려 보자. 8개 프리셋 정답률이 급격히 떨어진다. 차이 벡터(예: 여자 − 남자)는 두 벡터의 잡음을 모두 품으므로 잡음에 특히 약하다. ④ c 자리에 아무 단어나 탭해서 넣어 보자. 왕 − 남자 + 고양이 같은 엉뚱한 조합에도 산술은 언제나 "무언가"를 돌려준다 — 결과를 믿을지는 cos 값과 상식으로 판단해야 한다.</div>
+    </div>
+    <div class="callout warn">
+      <strong>정직한 주석: 실제 임베딩에서 유추는 생각만큼 깔끔하지 않다</strong>
+      <p>위 시뮬레이터는 의미 방향이 깨끗하도록 설계한 벡터라서 잘 된다. 실제 word2vec(Google News, 300차원)에서 "king − man + woman = queen"은 정말로 성립하지만, 유추 벤치마크 전체의 정답률은 70% 안팎이고 관계 종류에 따라 편차가 크다. 문법적 관계(시제, 복수형)는 잘 되고 백과사전적 관계는 덜 된다. 또 입력 단어를 제외하는 규칙이 결과를 상당 부분 "만들어 낸다"는 지적이 있다(제외하지 않으면 많은 문제에서 b나 a가 1위다). 더 나아가 현대 LLM의 입력 임베딩은 여러 층을 거치며 문맥과 섞이기 전의 출발점일 뿐이어서, 단어 산술이 LLM의 추론 방식을 설명하는 것도 아니다. 유추는 "임베딩 공간에 선형 구조가 생긴다"는 사실을 보여 주는 멋진 시연이지, 만능의 추론 도구가 아니다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="edit">
+    <h2>임베딩을 손으로 바꾸기: 의미는 상대적 위치다</h2>
+    <p>지금까지는 주어진 벡터를 관찰만 했다. 이번에는 직접 바꿔 보자. 임베딩은 결국 숫자 목록이고, 학습이란 이 숫자들을 조금씩 옮기는 일이다. 아래 평면에서 단어를 끌어 옮기면 그 단어의 12차원 벡터가 실제로 수정된다. 평면이 PCA 평면(선택한 8개 단어의 주성분)이면 두 주성분 방향 \(\mathbf{u}_1, \mathbf{u}_2\)로만, 의미 축 평면이면 선택한 두 축으로만 바뀐다.</p>
+    <div class="formula">$$\mathbf{v}_w \leftarrow \mathbf{v}_w + \Delta x\,\mathbf{u}_1 + \Delta y\,\mathbf{u}_2$$
+      <div class="where">\(\Delta x, \Delta y\)는 화면에서 끈 거리(평면 좌표). 평면에 수직인 나머지 10개 성분은 그대로다. 아래 막대에서는 12개 성분을 하나씩 직접 고칠 수도 있다.</div></div>
+
+    <div class="sim" id="sim-edit">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>임베딩을 손으로 바꾸기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="em-ed-cv" class="em-canvas-touch"></canvas><span class="hint">라벨 붙은 점을 끌어 옮기기</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>단어 묶음 (8개)</span><div class="seg" id="em-ed-set"><button data-value="royal" class="on">왕족·가족</button><button data-value="geo">나라·수도</button><button data-value="mix">동물·음식</button><button data-value="verb">동작</button></div></div>
+          <div class="ctrl"><span>편집 평면</span><div class="seg" id="em-ed-plane"><button data-value="pca" class="on">PCA 평면</button><button data-value="axes">의미 축 2개</button></div></div>
+          <div class="em-selrow" style="grid-template-columns:1fr 1fr"><select id="em-ed-x" aria-label="가로축"></select><select id="em-ed-y" aria-label="세로축"></select></div>
+          <div class="ctrl"><span>실시간 유추 확인</span><select id="em-ed-an" class="em-sel"></select></div>
+          <div class="em-btns"><button class="btn" id="em-ed-reset">모두 원래대로</button><button class="btn" id="em-ed-repca">PCA 다시 계산</button></div>
+          <div><span class="em-cap" id="em-ed-nbt">선택 단어의 최근접 이웃</span><div class="em-nb" id="em-ed-nb"></div></div>
+        </div>
+      </div>
+      <div class="sim-panel">
+        <div class="em-grid2">
+          <div><span class="em-cap" id="em-ed-bart">선택 단어의 벡터 (막대를 좌우로 끌어 편집)</span><canvas id="em-ed-bars"></canvas></div>
+          <div><span class="em-cap">8개 단어의 코사인 유사도 행렬</span><canvas id="em-ed-sim"></canvas></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선택 단어</span><span class="v" id="em-ed-o-w">—</span></div>
+        <div class="stat"><span class="k">최근접 1위</span><span class="v" id="em-ed-o-nn">—</span></div>
+        <div class="stat"><span class="k">유추 결과</span><span class="v" id="em-ed-o-an">—</span></div>
+        <div class="stat"><span class="k">원래 벡터에서 ‖Δ‖</span><span class="v" id="em-ed-o-d">—</span></div>
+      </div>
+      <div class="sim-note">흐린 점은 나머지 68개 단어(이웃 계산에 포함), 점선 고리는 원래 위치다. 해볼 것: ① "왕족·가족"에서 <b>여왕</b>을 끌어 남자 쪽으로 옮기자. 유사도 행렬의 여왕 행이 바뀌고, 오른쪽 "왕 − 남자 + 여자" 결과가 여왕에서 다른 단어로 넘어가는 순간이 온다. ② "의미 축 2개"에서 x=성별, y=나이로 두고 <b>소년</b>을 위로 끌어 올리면 이웃이 아들 → 남자 → 아버지 → 할아버지로 바뀐다. 나이 축 값이 막대에서도 함께 움직인다. ③ "동물·음식"에서 <b>돼지</b>를 음식 쪽으로 끌면, 최근접 이웃이 동물에서 음식으로 넘어간다. 막대에서 "음식" 성분을 직접 올려도 같다. ④ 모든 단어를 같은 방향으로 똑같이 옮기면(원점 회전·이동) 이웃 관계는 변하지 않는다는 점을 생각해 보자 — 의미는 좌표값이 아니라 <b>단어들 사이의 상대적 위치</b>에 있다.</div>
+    </div>
+    <p>이 실험에서 체감해야 할 핵심은 두 가지다. 첫째, 단어 하나의 "의미"는 그 벡터 자체보다 <strong>다른 벡터들과의 관계</strong>로 정해진다. 여왕을 남자 옆으로 옮기면, 숫자 12개가 바뀌었을 뿐인데 모델 입장에서 여왕은 "남자 같은 것"이 된다. 둘째, 공간 전체를 회전시키면 모든 내적과 코사인이 그대로이므로 모델의 행동도 그대로다. 그래서 실제 학습된 임베딩의 좌표축 하나하나에는 의미가 없다. 의미 있는 것은 방향과 거리, 그리고 그것들이 이루는 기하 구조다. 학습은 손가락 대신 기울기가 이 끌어 옮기기를 수십억 번 하는 과정이다. 정확히 어떤 힘으로 끄는지 다음 절에서 보자.</p>
+    <div class="callout deep">
+      <strong>회전 불변성과 해석 가능성</strong>
+      <p>임의의 직교 행렬 \(Q\)에 대해 \(E' = EQ\)로 모든 임베딩을 돌리고 다음 층 가중치를 \(Q^{\top}\)로 보정하면 모델 출력은 완전히 같다. 이 대칭성 때문에 학습된 임베딩의 개별 차원은 해석이 어렵다. 그럼에도 성별·시제·국가 같은 개념은 공간 안의 특정 <strong>방향</strong>으로 나타나는 경향이 있는데, 이를 "선형 표현 가설"이라 부른다. 희소 오토인코더(SAE) 같은 해석 가능성 연구는 LLM 내부에서 이런 방향을 대규모로 찾아내는 작업이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="word2vec">
+    <h2>word2vec: 주변 단어를 맞히며 배우는 임베딩</h2>
+    <p>word2vec의 <span class="term">skip-gram</span> 모델은 단순한 예측 문제를 푼다. 문장의 각 위치에서 중심 단어 \(c\)를 보고, 윈도우 안의 주변 단어 \(o\)가 무엇인지 맞힌다. 단어마다 벡터가 <strong>두 개</strong> 있다. 중심 단어로 쓰일 때의 \(\mathbf{v}_c\)(입력 임베딩)와 주변 단어로 쓰일 때의 \(\mathbf{u}_o\)(출력 임베딩)다. 원래 정의는 \(V\)개 단어 전체에 소프트맥스를 하는 것이지만 \(V\)가 크면 너무 비싸다. 그래서 실제로는 <span class="term">음성 샘플링</span><span class="en">(negative sampling, SGNS)</span>으로 바꾼다. "진짜 주변 단어 쌍인가?"를 맞히는 이진 분류다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="skip-gram 윈도우와 양성 음성 쌍">
+        <text x="400" y="24" text-anchor="middle" class="t-acc">중심 단어 "고양이", 윈도우 k = 2</text>
+        <g>
+          <rect x="90" y="44" width="110" height="36" rx="7" class="f-surface"/><text x="145" y="67" text-anchor="middle" class="t">귀여운</text>
+          <rect x="210" y="44" width="110" height="36" rx="7" class="f-acc"/><text x="265" y="67" text-anchor="middle" class="t" style="fill:var(--on-accent);font-weight:700">고양이</text>
+          <rect x="330" y="44" width="110" height="36" rx="7" class="f-surface"/><text x="385" y="67" text-anchor="middle" class="t">를</text>
+          <rect x="450" y="44" width="110" height="36" rx="7" class="f-surface"/><text x="505" y="67" text-anchor="middle" class="t">키운다</text>
+          <rect x="570" y="44" width="110" height="36" rx="7" class="f-elev" style="stroke-dasharray:4 3"/><text x="625" y="67" text-anchor="middle" class="t-dim">(문장 끝)</text>
+          <path d="M84 88 H566" class="s-acc"/><path d="M84 84 V92 M566 84 V92" class="s-acc"/>
+          <text x="325" y="106" text-anchor="middle" class="t-mono" style="fill:var(--accent)">윈도우: 중심에서 앞뒤 2칸</text>
+        </g>
+        <text x="40" y="146" class="t-acc">양성 쌍 (label 1)</text>
+        <g>
+          <rect x="40" y="158" width="180" height="30" rx="6" class="f-ok-soft"/><text x="130" y="178" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 귀여운)</text>
+          <rect x="40" y="194" width="180" height="30" rx="6" class="f-ok-soft"/><text x="130" y="214" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 를)</text>
+          <rect x="40" y="230" width="180" height="30" rx="6" class="f-ok-soft"/><text x="130" y="250" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 키운다)</text>
+        </g>
+        <text x="260" y="146" class="t-acc">음성 쌍 (label 0, 무작위 k개)</text>
+        <g>
+          <rect x="260" y="158" width="180" height="30" rx="6" class="f-bad-soft"/><text x="350" y="178" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 기차)</text>
+          <rect x="260" y="194" width="180" height="30" rx="6" class="f-bad-soft"/><text x="350" y="214" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 커피)</text>
+          <rect x="260" y="230" width="180" height="30" rx="6" class="f-bad-soft"/><text x="350" y="250" text-anchor="middle" class="t-mono" style="fill:var(--text)">(고양이, 역)</text>
+        </g>
+        <g>
+          <rect x="480" y="150" width="300" height="112" rx="10" class="f-elev"/>
+          <text x="630" y="176" text-anchor="middle" class="t">점수 = σ(u<tspan baseline-shift="sub" style="font-size:9px">o</tspan> · v<tspan baseline-shift="sub" style="font-size:9px">c</tspan>)</text>
+          <text x="630" y="204" text-anchor="middle" class="t-dim" style="fill:var(--ok)">양성: 점수 → 1, 두 벡터를 가깝게</text>
+          <text x="630" y="228" text-anchor="middle" class="t-dim" style="fill:var(--bad)">음성: 점수 → 0, 두 벡터를 멀게</text>
+          <text x="630" y="250" text-anchor="middle" class="t-mono">음성 분포 ∝ 빈도^0.75</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-5.</b> Skip-gram + negative sampling. 중심 단어와 윈도우 안의 단어는 양성 쌍, 무작위로 뽑은 단어는 음성 쌍이 된다. 모델은 양성의 내적을 키우고 음성의 내적을 줄이도록 두 임베딩을 동시에 고친다. 같은 문맥("를 키운다")을 공유하는 고양이와 강아지는 같은 \(\mathbf{u}\)들 쪽으로 끌려가 결국 서로 가까워진다.</figcaption>
+    </figure>
+    <div class="formula">$$\mathcal{L}(c,o) = -\log \sigma(\mathbf{u}_o\cdot\mathbf{v}_c) \;-\; \sum_{j=1}^{k} \log \sigma(-\mathbf{u}_{n_j}\cdot\mathbf{v}_c), \qquad n_j \sim P_n(w) \propto f(w)^{3/4}$$
+      <div class="where">\(\sigma\)는 시그모이드, \(k\)는 음성 표본 수(작은 코퍼스 5~20, 큰 코퍼스 2~5), \(f(w)\)는 단어 빈도. 3/4 제곱은 흔한 단어를 덜, 드문 단어를 더 뽑게 만든다.</div></div>
+    <p>기울기도 간단하다. \(s = \sigma(\mathbf{u}\cdot\mathbf{v}_c)\), 정답 레이블 \(y \in \{0,1\}\)이라 하면 \(\partial\mathcal{L}/\partial\mathbf{v}_c = \sum (s-y)\,\mathbf{u}\), \(\partial\mathcal{L}/\partial\mathbf{u} = (s-y)\,\mathbf{v}_c\)이다. <a href="training.html">3장</a>의 로지스틱 회귀와 똑같은 형태로, 예측이 틀린 만큼 상대 벡터 방향으로 끌거나 민다. 8절에서 손으로 하던 일을 이 기울기가 대신하는 것이다. 아래 시뮬레이터는 5절의 코퍼스로 이 SGD를 브라우저에서 그대로 돌린다(연산은 모두 실제 계산이고, 난수 시드를 고정했다).</p>
+
+    <div class="sim" id="sim-w2v">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>브라우저 word2vec (SGNS)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view">
+          <canvas id="em-w2-cv"></canvas>
+          <canvas id="em-w2-loss" style="border-top:1px solid var(--border)"></canvas>
+        </div>
+        <div class="sim-controls">
+          <div class="em-btns"><button class="btn primary" id="em-w2-run">학습 시작</button><button class="btn" id="em-w2-one">1 에폭</button><button class="btn" id="em-w2-reset">초기화</button><button class="btn" id="em-w2-seed">다른 시드</button></div>
+          <div class="ctrl"><span>임베딩 차원 d</span><div class="seg" id="em-w2-d"><button data-value="2" class="on">d = 2 (그대로 표시)</button><button data-value="8">d = 8 → PCA 2D</button></div></div>
+          <label class="ctrl"><span>윈도우 k <output id="em-w2-win-out"></output></span><input type="range" id="em-w2-win" min="1" max="4" step="1" value="3"></label>
+          <label class="ctrl"><span>학습률 η <output id="em-w2-lr-out"></output></span><input type="range" id="em-w2-lr" min="0.005" max="0.3" step="0.005" value="0.05"></label>
+          <label class="ctrl"><span>음성 표본 수 <output id="em-w2-k-out"></output></span><input type="range" id="em-w2-k" min="1" max="10" step="1" value="5"></label>
+          <label class="ctrl"><span>목표 에폭 <output id="em-w2-ep-out"></output></span><input type="range" id="em-w2-ep" min="20" max="600" step="10" value="200"></label>
+          <label class="ctrl"><span>코퍼스 (고치면 초기화)</span><textarea class="ab-input" id="em-w2-corpus" rows="5" spellcheck="false"></textarea></label>
+        </div>
+      </div>
+      <div class="em-legend" id="em-w2-leg"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">에폭</span><span class="v" id="em-w2-o-ep">0</span></div>
+        <div class="stat"><span class="k">평균 손실</span><span class="v" id="em-w2-o-l">—</span></div>
+        <div class="stat"><span class="k">같은 그룹 평균 cos</span><span class="v" id="em-w2-o-in">—</span></div>
+        <div class="stat"><span class="k">다른 그룹 평균 cos</span><span class="v" id="em-w2-o-out">—</span></div>
+      </div>
+      <div class="sim-note">점은 입력 임베딩 \(\mathbf{v}\), 색은 단어 그룹(색은 우리가 붙인 정답일 뿐 학습에는 쓰이지 않는다). 해볼 것: ① "학습 시작"을 누르고 처음 20~30 에폭을 지켜보자. 무작위로 흩어진 점들이 동물·음료·탈것 세 무리로 갈라진다. 손실 곡선과 "같은 그룹 cos − 다른 그룹 cos" 차이가 함께 커진다. ② 학습률을 0.3으로 올리면 점이 요동치며 손실이 덜 매끄럽게 줄고, 0.005로 내리면 거의 움직이지 않는다(<a href="training.html">3장</a>의 학습률 실험과 같다). ③ d = 2는 공간이 좁아 무리가 겹치기 쉽다. d = 8로 바꾸면 손실이 더 낮아지고 PCA 2D에서도 무리가 더 잘 갈린다 — 차원이 표현력이다. ④ "다른 시드"를 여러 번 눌러 보자. 무리의 위치와 방향은 매번 다르지만 무리 구조는 같다. 회전 불변성(8절)을 학습이 직접 보여 준다.</div>
+    </div>
+    <div class="callout deep">
+      <strong>word2vec은 사실 행렬 분해다</strong>
+      <p>Levy와 Goldberg(2014)는 SGNS가 수렴하면 \(\mathbf{u}_c\cdot\mathbf{v}_w \approx \mathrm{PMI}(w,c) - \log k\)가 됨을 보였다. 즉 word2vec은 5절의 PMI 행렬을 \(\log k\)만큼 이동시킨 것을 암묵적으로 분해한다. "세는 방법"과 "예측하는 방법"이 같은 대상을 다른 경로로 근사하는 셈이다. 같은 해(2014)의 GloVe는 아예 동시출현 횟수의 로그를 직접 맞히는 목적 함수로 두 관점을 합쳤다. 실제 word2vec 구현에는 이 밖에도 흔한 단어를 확률적으로 건너뛰는 <em>subsampling</em>, 학습률 선형 감소 등의 요령이 들어간다. 원 논문은 Google News 약 1천억 단어로 300차원 벡터 300만 개를 학습했다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="contextual">
+    <h2>문맥 임베딩과 문장 임베딩</h2>
+    <p>word2vec 벡터는 <strong>정적</strong><span class="en">(static)</span>이다. 단어 하나에 벡터 하나. 그런데 "배"는 "배가 아프다"에서는 신체, "배를 타고"에서는 탈것, "배를 깎아 먹었다"에서는 과일이다. 정적 임베딩은 세 의미의 평균 어딘가, 어느 무리에도 속하지 않는 애매한 곳에 놓일 수밖에 없다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="정적 임베딩과 문맥 임베딩 비교">
+        <text x="200" y="24" text-anchor="middle" class="t-acc">정적 임베딩 (word2vec, 입력 테이블)</text>
+        <text x="600" y="24" text-anchor="middle" class="t-acc">문맥 임베딩 (트랜스포머 층 통과 후)</text>
+        <g>
+          <ellipse cx="90" cy="90" rx="62" ry="38" class="f-acc-soft" style="opacity:.8"/><text x="90" y="66" text-anchor="middle" class="t-dim">신체</text>
+          <text x="70" y="96" class="t-mono">머리</text><text x="104" y="112" class="t-mono">손</text>
+          <ellipse cx="310" cy="90" rx="62" ry="38" class="f-acc2-soft" style="opacity:.8"/><text x="310" y="66" text-anchor="middle" class="t-dim">탈것</text>
+          <text x="284" y="98" class="t-mono">기차</text><text x="320" y="112" class="t-mono">버스</text>
+          <ellipse cx="200" cy="215" rx="62" ry="36" class="f-ok-soft" style="opacity:.8"/><text x="200" y="244" text-anchor="middle" class="t-dim">과일</text>
+          <text x="176" y="214" class="t-mono">사과</text><text x="212" y="226" class="t-mono">포도</text>
+          <circle cx="200" cy="135" r="8" class="f-acc"/><text x="214" y="140" class="t" style="font-weight:700">배</text>
+          <text x="200" y="166" text-anchor="middle" class="t-dim">세 의미의 평균 → 어디에도 안 속함</text>
+        </g>
+        <path d="M400 40 V255" class="s-axis" style="stroke-dasharray:4 4"/>
+        <g>
+          <ellipse cx="490" cy="90" rx="62" ry="38" class="f-acc-soft" style="opacity:.8"/><text x="490" y="66" text-anchor="middle" class="t-dim">신체</text>
+          <ellipse cx="710" cy="90" rx="62" ry="38" class="f-acc2-soft" style="opacity:.8"/><text x="710" y="66" text-anchor="middle" class="t-dim">탈것</text>
+          <ellipse cx="600" cy="215" rx="62" ry="36" class="f-ok-soft" style="opacity:.8"/><text x="600" y="244" text-anchor="middle" class="t-dim">과일</text>
+          <circle cx="500" cy="98" r="7" class="f-acc"/><text x="512" y="103" class="t-mono" style="fill:var(--text)">배(가 아프다)</text>
+          <circle cx="690" cy="98" r="7" class="f-acc"/><text x="660" y="122" class="t-mono" style="fill:var(--text)">배(를 타고)</text>
+          <circle cx="600" cy="208" r="7" class="f-acc"/><text x="612" y="213" class="t-mono" style="fill:var(--text)">배(를 깎아)</text>
+          <circle cx="600" cy="135" r="6" class="f-elev" style="stroke:var(--accent);stroke-dasharray:3 2"/>
+          <path d="M600 135 L506 102 M600 135 L684 102 M600 135 L600 200" style="stroke:var(--accent);stroke-width:1.2;stroke-dasharray:4 3;fill:none"/>
+          <text x="612" y="150" class="t-dim">출발점은 같은 행 E[배]</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-6.</b> 정적 임베딩과 문맥 임베딩. 왼쪽: 테이블에서 꺼낸 "배"의 벡터는 문맥과 무관하게 하나다. 오른쪽: 트랜스포머는 같은 출발점에서 시작해, 어텐션으로 주변 토큰의 정보를 섞어 문맥에 맞는 위치로 벡터를 옮긴다.</figcaption>
+    </figure>
+    <p>현대 LLM의 입력 임베딩 테이블도 사실 정적이다. 차이는 그 뒤에 있다. 테이블에서 꺼낸 벡터가 <a href="attention.html">5장</a>의 <strong>어텐션</strong>을 거치며 같은 문장의 다른 토큰 벡터들과 가중합으로 섞이고, <a href="transformer.html">6장</a>의 트랜스포머 블록 수십 개를 지나며 점점 문맥을 반영한 <span class="term">문맥 임베딩</span><span class="en">(contextual embedding)</span>이 된다. ELMo(2018)와 BERT(2018)가 이 방식의 위력을 보여 준 뒤로 "단어 하나에 벡터 하나"라는 생각은 출발점으로만 남았다.</p>
+    <h3>문장 임베딩과 의미 검색</h3>
+    <p>단어가 아니라 문장이나 문서 전체를 벡터 하나로 만들면, 코사인 유사도로 "의미가 비슷한 문서"를 찾을 수 있다. 가장 단순한 방법은 토큰 벡터들의 <strong>평균 풀링</strong><span class="en">(mean pooling)</span>이다.</p>
+    <div class="formula">$$\mathbf{s} = \frac{1}{n}\sum_{i=1}^{n}\mathbf{h}_i, \qquad \text{score}(q, \text{doc}) = \cos(\mathbf{s}_q, \mathbf{s}_{\text{doc}})$$
+      <div class="where">\(\mathbf{h}_i\)는 각 토큰의 벡터. 실제 문장 임베딩 모델(Sentence-BERT 계열 등)은 문맥 임베딩 \(\mathbf{h}_i\)를 평균하고, 비슷한 문장 쌍이 가까워지도록 대조 학습으로 추가 학습한다.</div></div>
+
+    <div class="sim" id="sim-sent">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>평균 풀링 문장 임베딩과 코사인 검색</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view em-pad">
+          <div><span class="em-cap">질의 (토큰을 누르면 풀링에서 뺐다 넣었다 할 수 있다 · 회색 = 어휘에 없는 토큰)</span>
+            <input class="ab-input" id="em-se-q" value="왕자 가 런던 에 갔다" spellcheck="false">
+            <div class="toks" id="em-se-qt" style="margin-top:6px"></div></div>
+          <div><span class="em-cap">문서 순위 (코사인 유사도)</span><div class="em-docs" id="em-se-docs"></div></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>질의 예시</span><div class="em-btns" id="em-se-pre"></div></div>
+          <div class="ctrl"><span>풀링</span><div class="seg" id="em-se-pool"><button data-value="mean" class="on">평균</button><button data-value="max">최댓값</button></div></div>
+          <p class="em-msg" style="margin:0">단어 벡터는 6~8절과 같은 교육용 12차원 벡터(76단어)다. 조사처럼 어휘에 없는 토큰은 무시한다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">풀링에 쓴 토큰</span><span class="v" id="em-se-o-n">—</span></div>
+        <div class="stat"><span class="k">1위 문서 cos</span><span class="v" id="em-se-o-1">—</span></div>
+        <div class="stat"><span class="k">cos("고양이가 쥐를 봤다", "쥐가 고양이를 봤다")</span><span class="v" id="em-se-o-o">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본 질의 "왕자 가 런던 에 갔다"의 1위가 "왕과 여왕이 파리에 갔다"인지 보자. 겹치는 단어가 "갔다" 하나뿐인데도 왕족·도시 방향이 비슷해서 이긴다. 단어 일치가 아닌 의미 검색이다. ② 질의 토큰 "갔다"를 눌러 빼면 순위가 어떻게 바뀌는지 보자. ③ 오른쪽 아래 수치: 평균 풀링은 어순을 무시하므로 "고양이가 쥐를 봤다"와 "쥐가 고양이를 봤다"가 cos = 1이다. 누가 누구를 봤는지 구분하려면 어순을 아는 문맥 임베딩이 필요하다. ④ 질의를 "빨강 사과 를 먹었다"로 고쳐 쓰면 1위가 어떻게 되는지 확인하자.</div>
+    </div>
+    <p>이 검색 방식이 <a href="rag.html">10장</a> RAG의 핵심 부품이다. 문서들을 미리 임베딩해 벡터 데이터베이스에 넣어 두고, 질문이 오면 질문을 임베딩해 코사인이 높은 문서를 찾아 LLM에게 함께 준다. 실제 임베딩 모델의 차원은 다음과 같다(대표 예). 2025년 이후의 흐름은 다음 절에서 자세히 본다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th class="num">차원</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>all-MiniLM-L6-v2 (Sentence-Transformers)</td><td class="num">384</td><td>가볍고 빠른 영어 문장 임베딩</td></tr>
+        <tr><td>BERT-base / multilingual-e5-base</td><td class="num">768</td><td>다국어 지원 e5 계열</td></tr>
+        <tr><td>bge-m3, multilingual-e5-large</td><td class="num">1,024</td><td>한국어 포함 다국어 검색에 널리 쓰임</td></tr>
+        <tr><td>OpenAI text-embedding-3-small / -large</td><td class="num">1,536 / 3,072</td><td>차원 축소 옵션 제공</td></tr>
+        <tr><td>LLM 기반 임베딩 (e5-mistral 등)</td><td class="num">4,096</td><td>7B급 LLM의 은닉 차원 그대로</td></tr>
+        <tr><td>Qwen3-Embedding 0.6B / 4B / 8B (2025.6)</td><td class="num">1,024 / 2,560 / 4,096</td><td>LLM 기반, 다국어, 32K 컨텍스트, Matryoshka로 32차원까지 축소 가능</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn">
+      <strong>임베딩은 데이터의 편향도 배운다</strong>
+      <p>분포 가설은 양날의 검이다. 임베딩은 코퍼스에 나타난 그대로의 연관을 배우므로 사회적 편향도 함께 배운다. Bolukbasi 등(2016)은 Google News word2vec에서 "man : computer programmer = woman : ?"의 답으로 homemaker가 나온다는 것을 보였다. 방법은 이 장의 도구 그대로다. 성별 방향 \(\mathbf{g} = \mathbf{v}_{he} - \mathbf{v}_{she}\)(여러 쌍의 평균)를 구하고 직업 단어를 \(\mathbf{g}\)에 투영하면, 성별과 무관해야 할 직업들이 한쪽으로 치우쳐 있다. 이 방향을 투영해서 빼 버리는 "편향 제거"도 제안되었지만, 편향이 다른 방향에 남아 여전히 복원된다는 반론(Gonen &amp; Goldberg, 2019)도 있다. 8절에서 손으로 했던 "벡터 고치기"가 실제로는 얼마나 어려운 문제인지 보여 주는 사례다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2026 임베딩 모델 -->
+  <section id="modern-emb">
+    <h2>2026년의 임베딩 모델</h2>
+    <p>앞 절의 평균 풀링은 원리를 보여 주는 장난감이다. 실제 검색용 임베딩 모델은 지난 몇 년 사이 크게 바뀌었다. 2019년 무렵의 표준은 BERT 같은 <b>인코더</b>를 문장 쌍으로 추가 학습한 Sentence-BERT 계열(수억 파라미터, 384~1,024차원)이었다. 2024년부터는 수십억 파라미터짜리 <b>디코더 LLM을 그대로 임베딩 모델로 바꾼</b> 모델들이 검색 벤치마크(MTEB) 상위권을 차지했고, 2025~26년에는 이것이 기본값이 되었다.</p>
+    <h3>LLM 기반 임베딩: 마지막 토큰이 문장을 요약한다</h3>
+    <p>대표 예가 <b>Qwen3-Embedding</b>(Qwen, 2025년 6월, Apache 2.0)이다. Qwen3 LLM을 출발점으로 0.6B·4B·8B 세 크기가 있고, 출력 차원은 각각 1,024·2,560·4,096으로 바탕 LLM의 은닉 차원과 같다. 입력은 최대 32K 토큰, 100개 이상의 언어와 프로그래밍 언어를 지원하며, 8B 모델은 공개 당시(2025년 6월 5일 기준) MTEB 다국어 리더보드 1위(점수 70.58)였다(Qwen, 2025). 같은 계열의 <b>Qwen3-Reranker</b>(0.6B·4B·8B)도 함께 공개되어 <a href="rag.html">10장</a>의 "임베딩 검색 → 리랭킹" 2단 구조를 한 가족 모델로 꾸릴 수 있다.</p>
+    <p>디코더 LLM은 <a href="attention.html">5장</a>의 인과 마스크 때문에 앞 토큰이 뒤 토큰을 보지 못한다. 그래서 평균 풀링 대신 <strong>마지막 토큰(끝 표시 토큰)의 은닉 상태</strong>를 문장 벡터로 쓴다. 마지막 토큰만이 문장 전체에 어텐션할 수 있기 때문이다. 이 벡터를 L2 정규화하면 <a href="vector.html">1장</a>에서 본 대로 코사인 = 내적이 된다. LLM이 사전학습으로 쌓은 세계 지식과 다국어 능력을 그대로 물려받는 것이 장점이고, 파라미터가 커서 문서 색인(모든 청크를 한 번씩 통과)이 비싸다는 것이 단점이다.</p>
+    <h3>지시문을 아는 임베딩, 다국어 임베딩</h3>
+    <p>같은 문장이라도 "검색 질의"로 쓸 때와 "중복 문서 찾기"로 쓸 때 원하는 유사도가 다르다. <span class="term">지시문 인식</span><span class="en">(instruction-aware)</span> 임베딩은 질의 앞에 과제 설명을 붙인다. Qwen3-Embedding 모델 카드의 형식은 다음과 같다.</p>
+    <div class="em-eqline" style="padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);white-space:pre-wrap;overflow-wrap:anywhere">Instruct: Given a web search query, retrieve relevant passages that answer the query
+Query: What is the capital of China?</div>
+    <p>지시문은 보통 <b>질의 쪽에만</b> 붙이고 문서 쪽은 원문 그대로 임베딩한다. 문서 벡터는 미리 한 번 계산해 저장해 두고, 과제에 따라 질의 벡터만 다르게 만드는 비대칭 구조다. 또 다국어 모델은 여러 언어를 <b>하나의 공간</b>에 놓도록 학습되므로, 한국어 질문 벡터로 영어 문서를 찾는 교차 언어 검색이 따로 번역 없이 된다. 이 장 앞부분에서 본 "한국어는 토큰을 더 쓴다"는 문제는 여전히 남아서, 같은 내용의 한국어 문서는 색인 비용과 32K 입력 한도를 더 빨리 소모한다.</p>
+    <h3>대조 학습: 짝은 당기고, 배치 안의 나머지는 민다</h3>
+    <p>임베딩 모델을 만드는 핵심 학습법은 9절 word2vec의 음성 샘플링을 문장 단위로 확장한 <span class="term">대조 학습</span><span class="en">(contrastive learning)</span>이다. (질의, 정답 문서) 쌍 \(B\)개를 한 배치로 모으면, 질의 \(i\)에게 정답은 문서 \(i\) 하나이고 <b>같은 배치의 다른 문서 \(B-1\)개는 공짜 음성 예</b>가 된다. 이것을 <span class="term">배치 내 음성</span><span class="en">(in-batch negatives)</span>이라 한다.</p>
+    <div class="formula">$$\mathcal L_{\text{InfoNCE}} = -\frac{1}{B}\sum_{i=1}^{B}\log\frac{\exp\bigl(\cos(\mathbf q_i,\mathbf d_i)/\tau\bigr)}{\sum_{j=1}^{B}\exp\bigl(\cos(\mathbf q_i,\mathbf d_j)/\tau\bigr)}$$
+      <div class="where">\(\mathbf q_i, \mathbf d_i\): 질의와 정답 문서의 임베딩, \(\tau\): 온도(보통 0.01~0.05). 분수는 \(B\)개 문서에 대한 소프트맥스에서 정답의 확률이므로, 이 손실은 "\(B\)지선다 분류의 교차 엔트로피"다. 배치가 클수록 음성이 많아져 구분이 정밀해진다. 질의와 비슷해 보이지만 답이 아닌 <b>어려운 음성</b>(hard negative)을 일부러 섞으면 효과가 더 크다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="배치 내 음성을 쓰는 대조 학습의 유사도 행렬">
+        <text x="40" y="30" class="t-acc">배치 B = 5 의 유사도 행렬 cos(q<tspan baseline-shift="sub" font-size="11">i</tspan>, d<tspan baseline-shift="sub" font-size="11">j</tspan>)</text>
+        <g transform="translate(120,56)">
+          <text x="110" y="-8" text-anchor="middle" class="t-dim">문서 d₁ … d₅</text>
+          <text x="-14" y="112" text-anchor="end" class="t-dim">질의</text>
+          <text x="-14" y="132" text-anchor="end" class="t-dim">q₁…q₅</text>
+          <rect x="0" y="0" width="44" height="44" class="f-acc"/><rect x="44" y="0" width="44" height="44" class="f-surface"/><rect x="88" y="0" width="44" height="44" class="f-surface"/><rect x="132" y="0" width="44" height="44" class="f-acc2-soft"/><rect x="176" y="0" width="44" height="44" class="f-surface"/>
+          <rect x="0" y="44" width="44" height="44" class="f-surface"/><rect x="44" y="44" width="44" height="44" class="f-acc"/><rect x="88" y="44" width="44" height="44" class="f-surface"/><rect x="132" y="44" width="44" height="44" class="f-surface"/><rect x="176" y="44" width="44" height="44" class="f-surface"/>
+          <rect x="0" y="88" width="44" height="44" class="f-surface"/><rect x="44" y="88" width="44" height="44" class="f-surface"/><rect x="88" y="88" width="44" height="44" class="f-acc"/><rect x="132" y="88" width="44" height="44" class="f-surface"/><rect x="176" y="88" width="44" height="44" class="f-acc2-soft"/>
+          <rect x="0" y="132" width="44" height="44" class="f-surface"/><rect x="44" y="132" width="44" height="44" class="f-surface"/><rect x="88" y="132" width="44" height="44" class="f-surface"/><rect x="132" y="132" width="44" height="44" class="f-acc"/><rect x="176" y="132" width="44" height="44" class="f-surface"/>
+          <rect x="0" y="176" width="44" height="44" class="f-surface"/><rect x="44" y="176" width="44" height="44" class="f-acc2-soft"/><rect x="88" y="176" width="44" height="44" class="f-surface"/><rect x="132" y="176" width="44" height="44" class="f-surface"/><rect x="176" y="176" width="44" height="44" class="f-acc"/>
+          <path d="M0 0 H220 V220 H0 Z" class="s-line" style="fill:none"/>
+        </g>
+        <g>
+          <rect x="400" y="60" width="22" height="22" class="f-acc"/><text x="432" y="77" class="t">대각선 = 정답 쌍 (q<tspan baseline-shift="sub" font-size="11">i</tspan>, d<tspan baseline-shift="sub" font-size="11">i</tspan>): 점수를 올린다</text>
+          <rect x="400" y="100" width="22" height="22" class="f-surface" style="stroke:var(--border)"/><text x="432" y="117" class="t">나머지 = 배치 내 음성: 점수를 내린다</text>
+          <rect x="400" y="140" width="22" height="22" class="f-acc2-soft"/><text x="432" y="157" class="t">어려운 음성: 비슷하지만 답이 아님</text>
+          <text x="400" y="200" class="t-dim">행마다 소프트맥스 → 대각선 확률의 −log 평균</text>
+          <text x="400" y="222" class="t-dim">음성 B−1개를 추가 계산 없이 얻는다</text>
+          <text x="400" y="244" class="t-dim">(문서 임베딩은 이미 배치 안에 있으므로)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-7.</b> 배치 내 음성을 쓰는 대조 학습. \(B\)개 쌍을 한 번에 임베딩하면 \(B\times B\) 유사도 행렬이 나오고, 각 행은 "\(B\)개 중 정답 고르기" 분류 문제가 된다. 실제 학습은 배치를 수천 단위로 키우고, 검색기로 찾은 어려운 음성을 추가한다. 대규모 약지도 쌍(웹의 제목–본문, 질문–답변, LLM이 합성한 질의 등)으로 먼저 학습하고 고품질 쌍으로 다듬는 다단계 학습이 일반적이다.</figcaption>
+    </figure>
+    <h3>Matryoshka 표현 학습: 앞쪽 차원부터 중요하게</h3>
+    <p>4,096차원 벡터 1억 개는 FP32로 1.6 TB다. 차원을 줄이면 저장·검색 비용이 비례해서 줄지만, 보통의 임베딩은 정보가 모든 차원에 고루 퍼져 있어 뒷부분을 잘라 내면 품질이 크게 떨어진다. <span class="term">Matryoshka 표현 학습</span><span class="en">(MRL, Kusupati 등 2022)</span>은 러시아 인형처럼 <b>앞쪽 \(d'\)개 차원만 잘라도 그 자체로 쓸 만한 임베딩</b>이 되도록 학습한다. 방법은 단순하다. 여러 길이 \(m\in\mathcal M\)로 자른 벡터 각각에 손실을 걸어 더한다.</p>
+    <div class="formula">$$\mathcal L_{\text{MRL}} = \sum_{m\in\mathcal M} c_m\,\mathcal L\bigl(\mathbf z_{1:m}\bigr), \qquad \mathcal M = \{32, 64, 128, \dots, d\}$$
+      <div class="where">\(\mathbf z_{1:m}\): 임베딩의 앞 \(m\)개 성분(잘라 낸 뒤 다시 L2 정규화), \(\mathcal L\): 위의 InfoNCE 같은 원래 손실, \(c_m\): 가중치. 짧은 접두부가 스스로 좋은 임베딩이 되도록 압력을 받으므로, 가장 중요한(분산이 큰) 정보가 앞쪽 차원에 몰린다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 210" role="img" aria-label="Matryoshka 임베딩의 중첩 구조">
+        <text x="20" y="28" class="t-acc">하나의 4,096차원 벡터 안에 짧은 임베딩들이 중첩된다</text>
+        <rect x="20" y="48" width="760" height="40" rx="6" class="f-surface"/>
+        <rect x="20" y="48" width="380" height="40" rx="6" class="f-acc2-soft"/>
+        <rect x="20" y="48" width="190" height="40" rx="6" class="f-acc-soft"/>
+        <rect x="20" y="48" width="48" height="40" rx="6" class="f-acc"/>
+        <text x="44" y="73" text-anchor="middle" class="t-mono" style="fill:var(--on-accent)">256</text>
+        <text x="140" y="73" text-anchor="middle" class="t-mono" style="fill:var(--text)">1,024</text>
+        <text x="305" y="73" text-anchor="middle" class="t-mono" style="fill:var(--text)">2,048</text>
+        <text x="590" y="73" text-anchor="middle" class="t-mono" style="fill:var(--text)">… 4,096</text>
+        <path d="M20 100 V112 H68 V100" class="s-acc" style="fill:none"/><text x="20" y="132" class="t">256차원: 1/16 저장</text>
+        <path d="M20 146 V158 H210 V146" class="s-acc" style="fill:none"/><text x="220" y="160" class="t">1,024차원: 1/4 저장</text>
+        <path d="M20 176 V188 H400 V176" class="s-acc2" style="fill:none"/><text x="410" y="190" class="t">2,048차원: 1/2 저장</text>
+        <text x="560" y="132" class="t-dim">앞에서부터 잘라 쓰고</text>
+        <text x="560" y="152" class="t-dim">다시 L2 정규화하면 끝</text>
+      </svg>
+      <figcaption><b>그림 4-8.</b> Matryoshka 임베딩. 모델은 하나지만 앞쪽 접두부가 각각 독립된 임베딩으로 동작한다. 같은 색인에서 "짧은 벡터로 빠르게 후보 찾기 → 긴 벡터로 다시 점수 매기기"도 가능하다. Qwen3-Embedding은 32차원부터 최대 차원까지 사용자가 출력 차원을 정할 수 있다(모델 카드 기준). 그림의 칸 비율은 개념도다.</figcaption>
+    </figure>
+    <p>차원 자르기와 함께 쓰는 것이 <b>임베딩 양자화</b>다. 성분을 FP32 대신 INT8로 저장하면 1/4, 부호만 남긴 1비트 이진 벡터로 저장하면 1/32이 된다(<a href="quantization.html">9장</a>의 양자화와 같은 원리, 저장량 표는 <a href="vector.html">1장</a>). 이진 벡터의 유사도는 XOR과 비트 세기(해밍 거리)로 아주 빠르게 계산되지만 정보 손실이 커서, 보통 이진 벡터로 후보를 넉넉히 뽑은 뒤 원래 정밀도의 벡터로 다시 점수를 매긴다(rescoring). 아래 시뮬레이터에서 두 기법을 함께 실험해 보자.</p>
+    <div class="callout warn"><strong>아래 시뮬레이터의 데이터는 합성 예시다</strong><p>이 장의 손으로 만든 12차원 벡터는 차원 자르기를 실험하기엔 너무 작다. 그래서 시드를 고정한 난수로 <b>200개 항목 × 64차원</b>의 합성 임베딩을 만들었다. 20개 군집 구조를 갖고, 차원 \(j\)의 표준편차가 \(0.92^{\,j}\)로 줄어들게 해서 <b>MRL로 학습한 모델처럼 분산이 앞쪽 차원에 몰리도록</b> 했다. 비교군 "비MRL"은 같은 벡터에 무작위 직교 회전을 곱한 것이다. 회전은 모든 코사인을 보존하므로 64차원 전체에서는 두 데이터의 최근접 이웃이 완전히 같지만, 정보가 모든 차원에 고루 퍼진다. 실제 모델의 수치가 아니라 원리를 보이기 위한 교육용 예시이며, 계산(코사인 top-10, 양자화, 해밍 거리)은 모두 실제로 한다.</p></div>
+
+    <div class="sim" id="sim-mrl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>Matryoshka 차원 자르기와 임베딩 양자화</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view em-pad">
+          <div><span class="em-cap">recall@10 (64차원 FP32의 최근접 10개를 얼마나 되찾나) · 그래프를 끌어 d′ 선택</span>
+            <canvas id="em-mrl-cv" class="em-canvas-touch" style="display:block;width:100%;cursor:ew-resize"></canvas></div>
+          <div><span class="em-cap">차원별 분산 (막대) · 앞 d′개 차원이 담은 분산 비율</span>
+            <canvas id="em-mrl-var" class="em-canvas-touch" style="display:block;width:100%;cursor:ew-resize"></canvas></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>남길 차원 d′ <output id="em-mrl-d-out"></output></span><input type="range" id="em-mrl-d" min="1" max="64" step="1" value="16"></label>
+          <div class="ctrl"><span>성분 형식</span><div class="seg" id="em-mrl-q"><button data-value="f32" class="on">FP32</button><button data-value="int8">INT8</button><button data-value="bin">이진</button><button data-value="resc">이진+재채점</button></div></div>
+          <label class="check"><input type="checkbox" id="em-mrl-ref" checked> FP32 곡선을 점선으로 같이 보기</label>
+          <p class="em-msg" style="margin:0" id="em-mrl-msg">INT8: 차원마다 최대 절댓값으로 스케일을 정해 −127~127로 반올림. 이진: 부호만 남기고 해밍 거리로 비교. 이진+재채점: 해밍 거리 상위 40개를 뽑은 뒤 d′차원 FP32 코사인으로 다시 순위를 매긴다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">recall@10 · MRL</span><span class="v" id="em-mrl-o-a">—</span></div>
+        <div class="stat"><span class="k">recall@10 · 비MRL</span><span class="v" id="em-mrl-o-b">—</span></div>
+        <div class="stat"><span class="k">벡터당 바이트</span><span class="v" id="em-mrl-o-by">—</span></div>
+        <div class="stat"><span class="k">64D FP32 대비</span><span class="v" id="em-mrl-o-r">—</span></div>
+        <div class="stat"><span class="k">같은 비율로 4,096D 벡터 1억 개</span><span class="v" id="em-mrl-o-big">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① FP32에서 d′를 16까지 줄여 보자. MRL 데이터는 recall@10이 약 0.9로 버티지만, 같은 기하를 회전만 한 비MRL은 약 0.6으로 떨어진다. 아래 막대에서 MRL은 앞 16개 차원이 분산의 대부분을 담고, 비MRL은 차원마다 분산이 고르다. ② 성분 형식을 INT8로 바꾸면 곡선이 FP32 점선과 거의 겹친다. 저장은 1/4인데 순위는 거의 그대로다. ③ 이진으로 바꾸면 두 곡선 모두 크게 떨어진다. 특히 MRL은 d′를 늘려도 잘 오르지 않는다. 부호 1비트는 모든 차원에 같은 무게를 주므로, 분산이 작은 뒤쪽 차원의 잡음 같은 부호가 앞쪽 차원의 중요한 정보와 같은 표를 행사하기 때문이다. ④ 이진+재채점을 고르면 회복되는 정도를 보자. 메모리에는 1/32 크기 이진 색인만 두고, 원본 벡터는 디스크에 두었다가 후보 40개만 읽어 다시 점수를 매기는 실무 구조다. ⑤ d′ = 64로 두면 FP32 recall은 두 데이터 모두 1.0이다. 회전은 코사인을 바꾸지 않는다는 1장의 사실을 확인할 수 있다.</div>
+    </div>
+    <p>실제 수치는 모델과 벤치마크마다 다르지만 방향은 같다. MRL로 학습된 모델은 차원을 1/4~1/8로 잘라도 검색 품질 손실이 몇 퍼센트 수준인 경우가 많고, 학습하지 않은 모델은 자르면 크게 무너진다. 그래서 실무에서는 "모델이 MRL을 지원하는가"를 확인한 뒤, 평가 세트(<a href="rag.html">10장</a>의 recall@k)로 차원·양자화 조합을 골라 저장 비용과 품질을 맞춘다.</p>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>언어 모델의 입력은 <strong>토큰화</strong>(텍스트 → 토큰 ID)와 <strong>임베딩</strong>(ID → \(d\)차원 벡터) 두 단계를 거친다. 현대 LLM은 서브워드 단위를 쓰고, 어휘 크기 \(V\)는 시퀀스 길이와 임베딩 크기의 트레이드오프다.</li>
+      <li><strong>BPE</strong>는 문자(또는 바이트)에서 출발해 가장 빈번한 인접 쌍을 반복 병합한다. 바이트 수준 BPE는 [UNK]가 없지만, 한글 음절은 3바이트라 학습 데이터 비중이 작으면 한국어가 토큰을 더 많이 쓴다.</li>
+      <li>원-핫 × \(E\) = \(E\)의 한 행. 임베딩은 곱셈 없는 룩업이지만 역전파로 학습되는 가중치다. GPT-2 small 50,257 × 768 ≈ 38.6M, Llama 3 8B 128,256 × 4,096 ≈ 525M. 가중치 공유는 출력층과 테이블을 같이 쓴다.</li>
+      <li><strong>분포 가설</strong>: 비슷한 문맥의 단어는 비슷한 의미다. 동시출현 → PPMI(흔한 단어 보정) → SVD가 세는 방법이고, word2vec(SGNS)은 같은 대상(이동된 PMI)을 예측으로 근사한다.</li>
+      <li>임베딩 공간에서 유사도는 <strong>코사인</strong>, 시각화는 PCA 같은 투영으로 한다. 투영은 정보를 버리므로 판단은 원래 차원에서 해야 한다.</li>
+      <li>의미 관계는 공간의 <strong>방향</strong>으로 나타나 a − b + c 유추가 가능하다. 하지만 입력 제외 규칙에 기대고, 실제 모델에서는 관계에 따라 잘 안 되는 경우가 많다.</li>
+      <li>임베딩은 숫자 목록이고 <strong>의미는 상대적 위치</strong>다. 공간 전체 회전에 불변이라 개별 축은 의미가 없고, 학습은 기울기가 벡터를 끌고 미는 과정이다.</li>
+      <li>정적 임베딩은 다의어를 구분하지 못한다. 트랜스포머는 어텐션으로 <strong>문맥 임베딩</strong>을 만들고, 풀링한 문장 임베딩은 코사인 검색(RAG)의 기반이 된다. 임베딩은 데이터의 편향도 함께 배운다.</li>
+      <li>2025~26년의 검색용 임베딩은 <strong>LLM 기반</strong>(예: Qwen3-Embedding 0.6B/4B/8B, 1,024/2,560/4,096차원, 32K 입력)이 주류다. 마지막 토큰 풀링, 질의 쪽 지시문, 다국어 공유 공간을 쓰고, 배치 내 음성을 쓰는 <strong>InfoNCE 대조 학습</strong>으로 훈련한다.</li>
+      <li><strong>Matryoshka(MRL)</strong>는 앞쪽 \(d'\)차원만 잘라도 쓸 수 있게 여러 길이에 손실을 건다. INT8(1/4)·이진(1/32) 양자화와 함께 쓰면 저장 비용을 크게 줄이며, 이진은 재채점(rescoring)으로 품질을 보완한다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. BPE 학습의 각 단계에서 새 토큰으로 병합하는 것은?</p><div class="opts">
+        <button class="opt">사전에 등록된 형태소 경계에 맞는 쌍</button>
+        <button class="opt" data-correct>코퍼스에서 (단어 빈도를 가중해) 가장 자주 나오는 인접 토큰 쌍</button>
+        <button class="opt">임베딩 공간에서 코사인 유사도가 가장 높은 두 토큰</button>
+        <button class="opt">가장 긴 단어부터 차례로</button>
+      </div><div class="quiz-exp">BPE는 순수하게 빈도 기반이다. 매 단계 모든 인접 쌍의 빈도를 세어 최빈 쌍을 병합하고 그 규칙을 순서대로 기록한다. 새 텍스트는 같은 규칙을 같은 순서로 적용해 토큰화한다. 언어학적 형태소와 일치한다는 보장은 없다.</div></div>
+
+      <div class="quiz-q"><p>Q2. 바이트 수준 BPE 토크나이저에서 같은 내용의 한국어 문장이 영어보다 토큰을 더 많이 쓰는 주된 이유로 가장 알맞은 것은?</p><div class="opts">
+        <button class="opt">한국어 문장은 원래 단어 수가 더 많아서</button>
+        <button class="opt">한글은 유니코드에 포함되지 않아서</button>
+        <button class="opt" data-correct>한글 음절은 UTF-8로 3바이트이고, 토크나이저 학습 데이터에서 한국어 비중이 작아 한국어 바이트 열에 대한 병합 규칙이 적기 때문</button>
+        <button class="opt">특수 토큰이 한국어에만 붙기 때문</button>
+      </div><div class="quiz-exp">출발점(음절당 3바이트)과 병합 예산의 배분(코퍼스 빈도에 비례) 두 요인이 겹친다. 어휘를 키우고 다국어 데이터 비중을 높이면 격차가 줄어든다.</div></div>
+
+      <div class="quiz-q"><p>Q3. 어휘 128,256, 은닉 차원 4,096인 Llama 3 8B의 입력 임베딩 테이블 파라미터 수와, 가중치 공유를 하지 않을 때 출력층까지 합한 값은?</p><div class="opts">
+        <button class="opt">약 52.5M / 약 105M</button>
+        <button class="opt" data-correct>약 525M / 약 1.05B</button>
+        <button class="opt">약 5.25B / 약 10.5B</button>
+        <button class="opt">약 525M / 약 525M (출력층은 파라미터가 없다)</button>
+      </div><div class="quiz-exp">128,256 × 4,096 = 525,336,576 ≈ 525M. 출력층(4,096 × 128,256)도 같은 크기라 공유하지 않으면 합계 약 1.05B, 전체 8.03B의 13% 정도다. BF16이면 테이블 하나에 약 1.05 GB다.</div></div>
+
+      <div class="quiz-q"><p>Q4. 동시출현 행렬에서 원시 횟수 대신 PPMI를 쓰는 이유는?</p><div class="opts">
+        <button class="opt">행렬을 대칭으로 만들기 위해</button>
+        <button class="opt">음수 값을 만들어 정보량을 늘리기 위해</button>
+        <button class="opt" data-correct>"를", "에"처럼 어디에나 나오는 흔한 단어의 영향을 줄이고, 우연보다 더 자주 함께 나오는 쌍을 강조하기 위해</button>
+        <button class="opt">SVD를 하지 않아도 되도록 차원을 줄이기 위해</button>
+      </div><div class="quiz-exp">PMI는 \(P(w,c)\)를 독립일 때의 기대값 \(P(w)P(c)\)와 비교한다. 흔한 단어는 \(P(c)\)가 커서 PMI가 작아진다. 작은 코퍼스에서 잡음이 큰 음수 PMI는 0으로 잘라 PPMI를 쓴다. 5절 시뮬레이터에서 횟수 ↔ PPMI를 바꿔 보면 차이가 보인다.</div></div>
+
+      <div class="quiz-q"><p>Q5. 유추 a − b + c에서 결과 후보에서 a, b, c를 제외하는 관례에 대해 옳은 설명은?</p><div class="opts">
+        <button class="opt">계산 속도를 높이기 위한 최적화일 뿐 결과에는 영향이 없다</button>
+        <button class="opt" data-correct>제외하지 않으면 a(또는 c) 자신이 1위가 되는 경우가 많아, 유추 성공의 상당 부분이 이 규칙에 기댄다</button>
+        <button class="opt">이 규칙이 있으면 모든 관계에서 유추가 성공한다</button>
+        <button class="opt">코사인 대신 유클리드 거리를 쓰면 이 규칙이 필요 없다</button>
+      </div><div class="quiz-exp">\(\mathbf{v}_a - \mathbf{v}_b + \mathbf{v}_c\)는 보통 a와 c에 가깝다. 차이 벡터가 작기 때문이다. 7절 시뮬레이터에서 "입력 단어 제외"를 끄면 김치 − 한국 + 일본의 답이 김치로 바뀐다. 거리 척도를 바꿔도 이 경향은 남는다.</div></div>
+
+      <div class="quiz-q"><p>Q6. "배가 아프다"와 "배를 타고"의 "배"에 대해 옳은 것은?</p><div class="opts">
+        <button class="opt">word2vec과 트랜스포머 모두 두 "배"에 서로 다른 입력 임베딩 행을 쓴다</button>
+        <button class="opt" data-correct>둘 다 같은 입력 임베딩 행에서 출발하지만, 트랜스포머는 어텐션을 거치며 문맥에 따라 서로 다른 문맥 임베딩을 만든다</button>
+        <button class="opt">트랜스포머는 다의어마다 토크나이저가 별도 토큰을 만든다</button>
+        <button class="opt">평균 풀링 문장 임베딩을 쓰면 두 "배"가 자동으로 구분된다</button>
+      </div><div class="quiz-exp">입력 임베딩 테이블은 토큰 ID만 보므로 문맥과 무관하다. 문맥 구분은 그 뒤의 어텐션(5장)과 트랜스포머 층(6장)이 한다. 정적 단어 벡터의 평균 풀링은 어순과 문맥을 무시하므로 다의어를 구분하지 못한다.</div></div>
+
+      <div class="quiz-q"><p>Q7. 배치 크기 B = 1,024로 (질의, 정답 문서) 쌍을 묶어 InfoNCE로 학습한다. 질의 하나가 받는 음성 예의 수와, 이 방식이 효율적인 이유는?</p><div class="opts">
+        <button class="opt">음성 1개. 정답과 가장 먼 문서 하나만 쓰기 때문</button>
+        <button class="opt" data-correct>음성 1,023개. 같은 배치의 다른 질의들의 정답 문서를 음성으로 재사용하므로 추가 임베딩 계산이 없다</button>
+        <button class="opt">음성 1,024²개. 모든 문서 쌍을 비교하기 때문</button>
+        <button class="opt">음성 0개. 대조 학습은 정답 쌍만 쓴다</button>
+      </div><div class="quiz-exp">배치 안의 문서 임베딩 \(B\)개는 이미 계산되어 있으므로 \(B\times B\) 유사도 행렬만 만들면 질의마다 정답 1개 + 음성 \(B-1\)개의 \(B\)지선다 소프트맥스가 된다(그림 4-7). 배치가 클수록 음성이 많아 학습 신호가 정밀해진다.</div></div>
+
+      <div class="quiz-q"><p>Q8. MRL로 학습한 임베딩과 학습하지 않은 임베딩을 모두 앞 1/4 차원만 남기고 잘랐다. 예상되는 결과는?</p><div class="opts">
+        <button class="opt">둘 다 검색 품질이 그대로다. 코사인은 차원 수와 무관하므로</button>
+        <button class="opt">둘 다 똑같이 1/4로 떨어진다</button>
+        <button class="opt" data-correct>MRL 임베딩은 중요한 정보가 앞쪽에 몰려 있어 품질이 대체로 유지되고, 일반 임베딩은 정보가 모든 차원에 퍼져 있어 크게 떨어진다</button>
+        <button class="opt">일반 임베딩이 더 잘 버틴다. MRL은 뒤쪽 차원에 정보를 몰아넣기 때문</button>
+      </div><div class="quiz-exp">MRL은 여러 길이의 접두부 각각에 손실을 걸어 앞쪽 차원이 스스로 좋은 임베딩이 되게 만든다. 11절 시뮬레이터에서 같은 기하를 회전만 한 비MRL 데이터는 전체 차원에서는 이웃이 완전히 같지만, 잘라 내면 recall이 훨씬 빨리 무너진다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  /* ======================================================= 공통 계산 (DOM 없음) */
+  const EM = {};
+  /** 대칭 행렬 고유분해 (Jacobi 회전). 반환: {vals:[...], vecs:[[...]...]} — vecs[k]는 k번째 고유벡터, 고윳값 내림차순 */
+  EM.eigSym = function (A) {
+    const n = A.length, a = A.map((r) => r.slice());
+    const V = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
+    for (let sweep = 0; sweep < 60; sweep++) {
+      let off = 0;
+      for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) off += a[p][q] * a[p][q];
+      if (off < 1e-14) break;
+      for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) {
+        if (Math.abs(a[p][q]) < 1e-15) continue;
+        const th = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+        for (let k = 0; k < n; k++) { const kp = a[k][p], kq = a[k][q]; a[k][p] = c * kp - s * kq; a[k][q] = s * kp + c * kq; }
+        for (let k = 0; k < n; k++) { const pk = a[p][k], qk = a[q][k]; a[p][k] = c * pk - s * qk; a[q][k] = s * pk + c * qk; }
+        for (let k = 0; k < n; k++) { const kp = V[k][p], kq = V[k][q]; V[k][p] = c * kp - s * kq; V[k][q] = s * kp + c * kq; }
+      }
+    }
+    const idx = [...Array(n).keys()].sort((i, j) => a[j][j] - a[i][i]);
+    return {
+      vals: idx.map((i) => a[i][i]),
+      vecs: idx.map((i) => {
+        const v = V.map((r) => r[i]);
+        let m = 0; v.forEach((x, k) => { if (Math.abs(x) > Math.abs(v[m])) m = k; });
+        return v[m] < 0 ? v.map((x) => -x) : v; // 부호 고정: 절댓값 최대 성분을 양수로
+      }),
+    };
+  };
+  /** PCA: X(n×d) → {mean, comps(k×d), vals, total} (공분산 고유벡터) */
+  EM.pca = function (X, k) {
+    const n = X.length, d = X[0].length;
+    const mean = Array(d).fill(0);
+    X.forEach((x) => x.forEach((v, j) => (mean[j] += v / n)));
+    const C = Array.from({ length: d }, () => Array(d).fill(0));
+    X.forEach((x) => {
+      for (let i = 0; i < d; i++) { const xi = x[i] - mean[i]; for (let j = i; j < d; j++) C[i][j] += (xi * (x[j] - mean[j])) / (n - 1); }
+    });
+    for (let i = 0; i < d; i++) for (let j = 0; j < i; j++) C[i][j] = C[j][i];
+    const e = EM.eigSym(C);
+    const total = e.vals.reduce((s, v) => s + Math.max(0, v), 0);
+    return { mean, comps: e.vecs.slice(0, k), vals: e.vals.slice(0, k), total };
+  };
+  EM.project = (x, P) => P.comps.map((c) => { let s = 0; for (let j = 0; j < c.length; j++) s += (x[j] - P.mean[j]) * c[j]; return s; });
+  /** 코사인 최근접 top-k: vecs 배열에서 q와 가장 비슷한 것. exclude: Set(인덱스) */
+  EM.nearest = function (q, vecs, k, exclude) {
+    const out = [];
+    vecs.forEach((v, i) => { if (!exclude || !exclude.has(i)) out.push([i, AB.cos(q, v)]); });
+    out.sort((a, b) => b[1] - a[1]);
+    return out.slice(0, k);
+  };
+
+  /* -------------------------------------------------- BPE (문자 단위) */
+  EM.bpeInit = function (text) {
+    const freq = new Map();
+    text.split(/\s+/).filter(Boolean).forEach((w) => freq.set(w, (freq.get(w) || 0) + 1));
+    const words = [...freq].map(([w, n]) => ({ sym: ["▁", ...Array.from(w)], n }));
+    const base = [];
+    words.forEach((w) => w.sym.forEach((s) => { if (!base.includes(s)) base.push(s); }));
+    return { words, base, merges: [] };
+  };
+  EM.bpePairs = function (st) {
+    const m = new Map();
+    st.words.forEach((w) => {
+      for (let i = 0; i < w.sym.length - 1; i++) {
+        const key = w.sym[i] + "\u0000" + w.sym[i + 1];
+        m.set(key, (m.get(key) || 0) + w.n);
+      }
+    });
+    return [...m].map(([k, n]) => { const [a, b] = k.split("\u0000"); return { a, b, n }; })
+      .sort((x, y) => y.n - x.n); // 안정 정렬: 동률이면 먼저 나온 쌍
+  };
+  EM.mergeSeq = function (sym, a, b) {
+    const out = [];
+    for (let i = 0; i < sym.length; i++) {
+      if (i < sym.length - 1 && sym[i] === a && sym[i + 1] === b) { out.push(a + b); i++; }
+      else out.push(sym[i]);
+    }
+    return out;
+  };
+  EM.bpeMerge = function (st, a, b, n) {
+    st.words.forEach((w) => (w.sym = EM.mergeSeq(w.sym, a, b)));
+    st.merges.push({ a, b, tok: a + b, n });
+  };
+  EM.bpeEncode = function (text, base, merges, k) {
+    const toks = [];
+    text.split(/\s+/).filter(Boolean).forEach((w) => {
+      let sym = ["▁", ...Array.from(w)];
+      for (let i = 0; i < k && i < merges.length; i++) sym = EM.mergeSeq(sym, merges[i].a, merges[i].b);
+      sym.forEach((s) => toks.push({ s, unk: s.length === 1 && !base.includes(s) }));
+    });
+    return toks;
+  };
+
+  /* -------------------------------------------------- 동시출현 / PPMI / SVD */
+  EM.tokenizeLines = (text) => text.split(/\n+/).map((l) => l.trim().split(/\s+/).filter(Boolean)).filter((l) => l.length);
+  EM.cooc = function (lines, vocab, win) {
+    const id = new Map(vocab.map((w, i) => [w, i]));
+    const V = vocab.length, C = Array.from({ length: V }, () => Array(V).fill(0));
+    lines.forEach((ws) => ws.forEach((w, i) => {
+      if (!id.has(w)) return;
+      for (let j = Math.max(0, i - win); j <= Math.min(ws.length - 1, i + win); j++) {
+        if (j === i || !id.has(ws[j])) continue;
+        C[id.get(w)][id.get(ws[j])] += 1;
+      }
+    }));
+    return C;
+  };
+  EM.ppmi = function (C) {
+    const V = C.length; let tot = 0;
+    const row = C.map((r) => r.reduce((s, v) => s + v, 0));
+    row.forEach((v) => (tot += v));
+    return C.map((r, i) => r.map((v, j) => {
+      if (!v || !row[i] || !row[j]) return 0;
+      return Math.max(0, Math.log2((v * tot) / (row[i] * row[j])));
+    }));
+  };
+  /** 거듭제곱법 + 디플레이션으로 상위 k개 특이벡터: M ≈ U Σ Vᵀ. 반환 {U(k×n), S} */
+  EM.svdTop = function (M, k, iters = 300) {
+    const n = M.length;
+    const MtM = AB.matmul(AB.transpose(M), M);
+    const A = MtM.map((r) => r.slice());
+    const U = [], S = [];
+    for (let c = 0; c < k; c++) {
+      let v = Array.from({ length: n }, (_, i) => 1 + 0.1 * Math.sin(i * 1.7 + c));
+      let lam = 0;
+      for (let it = 0; it < iters; it++) {
+        const w = AB.matvec(A, v); const nn = AB.norm(w) || 1;
+        lam = nn; v = w.map((x) => x / nn);
+      }
+      // 디플레이션
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) A[i][j] -= lam * v[i] * v[j];
+      const sig = Math.sqrt(Math.max(0, lam));
+      const u = AB.matvec(M, v).map((x) => (sig > 1e-9 ? x / sig : 0));
+      let m = 0; u.forEach((x, i) => { if (Math.abs(x) > Math.abs(u[m])) m = i; });
+      U.push(u[m] < 0 ? u.map((x) => -x) : u); S.push(sig);
+    }
+    return { U, S };
+  };
+
+  /* -------------------------------------------------- word2vec SGNS */
+  EM.SGNS = function (lines, d, seed) {
+    const cnt = new Map();
+    lines.forEach((ws) => ws.forEach((w) => cnt.set(w, (cnt.get(w) || 0) + 1)));
+    const vocab = [...cnt.keys()];
+    const id = new Map(vocab.map((w, i) => [w, i]));
+    const r = AB.rng(seed);
+    const V = vocab.length;
+    const Win = Array.from({ length: V }, () => Array.from({ length: d }, () => (r() - 0.5) / d));
+    const Wout = Array.from({ length: V }, () => Array(d).fill(0));
+    // 음성 샘플링 분포: unigram^0.75
+    const p = vocab.map((w) => Math.pow(cnt.get(w), 0.75)); const Z = p.reduce((s, v) => s + v, 0);
+    const cdf = []; let acc = 0; p.forEach((v) => cdf.push((acc += v / Z)));
+    const sample = () => { const u = r(); let lo = 0, hi = V - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (cdf[m] < u) lo = m + 1; else hi = m; } return lo; };
+    const corpus = lines.map((ws) => ws.map((w) => id.get(w)));
+    const sig = (x) => 1 / (1 + Math.exp(-x));
+    const S = { vocab, cnt, Win, Wout, d, epoch: 0, losses: [] };
+    /** 한 에폭: 모든 (중심, 문맥) 쌍에 대해 양성 1 + 음성 k 업데이트. 평균 손실 반환 */
+    S.epochRun = function (win, lr, k) {
+      let L = 0, m = 0;
+      const g = new Float64Array(d);
+      corpus.forEach((ws) => ws.forEach((c, i) => {
+        for (let j = Math.max(0, i - win); j <= Math.min(ws.length - 1, i + win); j++) {
+          if (j === i) continue;
+          const o = ws[j]; const vc = Win[c];
+          g.fill(0);
+          for (let t = 0; t <= k; t++) {
+            const tgt = t === 0 ? o : sample();
+            if (t > 0 && tgt === o) continue;
+            const label = t === 0 ? 1 : 0, u = Wout[tgt];
+            let z = 0; for (let q = 0; q < d; q++) z += vc[q] * u[q];
+            const s = sig(z);
+            L += label ? -Math.log(s + 1e-9) : -Math.log(1 - s + 1e-9);
+            const gg = (s - label) * lr;
+            for (let q = 0; q < d; q++) { g[q] += gg * u[q]; u[q] -= gg * vc[q]; }
+          }
+          for (let q = 0; q < d; q++) vc[q] -= g[q];
+          m++;
+        }
+      }));
+      S.epoch++; const avg = L / Math.max(1, m); S.losses.push(avg); return avg;
+    };
+    return S;
+  };
+  /* ======================================================= 교육용 단어 벡터 (손으로 설계) */
+  // 의미 축 12개. 값은 대략 -1 ~ 1. 실제 모델의 축은 이렇게 해석 가능하지 않다(본문 참고).
+  EM.AXES = ["왕족", "성별(남+)", "나이", "생물", "크기", "음식", "장소", "동서", "동작", "과거", "색", "수"];
+  const AX = {}; EM.AXES.forEach((a, i) => (AX[["roy", "gen", "age", "ani", "size", "food", "place", "geo", "act", "past", "color", "num"][i]] = i));
+  EM.CATS = [
+    { key: "person", name: "사람", col: "accent" },
+    { key: "animal", name: "동물", col: "ok" },
+    { key: "food", name: "음식", col: "warn" },
+    { key: "place", name: "나라·도시", col: "blue" },
+    { key: "verb", name: "동작", col: "accent-2" },
+    { key: "color", name: "색", col: "bad" },
+    { key: "number", name: "수", col: "text-dim" },
+  ];
+  const W = (w, cat, spec) => ({ w, cat, spec });
+  const G = { 미국: -1, 영국: -0.6, 프랑스: -0.25, 중국: 0.3, 한국: 0.65, 일본: 1 };
+  EM.WORDS = [
+    // 사람
+    W("왕", "person", { roy: 1, gen: 1, age: 0.6, ani: 1 }),
+    W("여왕", "person", { roy: 1, gen: -1, age: 0.6, ani: 1 }),
+    W("왕자", "person", { roy: 1, gen: 1, age: -0.5, ani: 1 }),
+    W("공주", "person", { roy: 1, gen: -1, age: -0.5, ani: 1 }),
+    W("남자", "person", { gen: 1, age: 0.2, ani: 1 }),
+    W("여자", "person", { gen: -1, age: 0.2, ani: 1 }),
+    W("소년", "person", { gen: 1, age: -0.7, ani: 1 }),
+    W("소녀", "person", { gen: -1, age: -0.7, ani: 1 }),
+    W("아버지", "person", { gen: 1, age: 0.5, ani: 1 }),
+    W("어머니", "person", { gen: -1, age: 0.5, ani: 1 }),
+    W("할아버지", "person", { gen: 1, age: 1, ani: 1 }),
+    W("할머니", "person", { gen: -1, age: 1, ani: 1 }),
+    W("아들", "person", { gen: 1, age: -0.4, ani: 1 }),
+    W("딸", "person", { gen: -1, age: -0.4, ani: 1 }),
+    // 동물
+    W("개", "animal", { ani: 1, size: -0.1 }),
+    W("강아지", "animal", { ani: 1, size: -0.35, age: -0.7 }),
+    W("고양이", "animal", { ani: 1, size: -0.3 }),
+    W("쥐", "animal", { ani: 1, size: -0.7 }),
+    W("말", "animal", { ani: 1, size: 0.5 }),
+    W("소", "animal", { ani: 1, size: 0.55, food: 0.3 }),
+    W("송아지", "animal", { ani: 1, size: 0.2, age: -0.7, food: 0.2 }),
+    W("돼지", "animal", { ani: 1, size: 0.35, food: 0.4 }),
+    W("닭", "animal", { ani: 1, size: -0.4, food: 0.45 }),
+    W("사자", "animal", { ani: 1, size: 0.45 }),
+    W("호랑이", "animal", { ani: 1, size: 0.5, geo: 0.2 }),
+    W("코끼리", "animal", { ani: 1, size: 0.9 }),
+    W("고래", "animal", { ani: 1, size: 1 }),
+    // 음식
+    W("사과", "food", { food: 1, size: -0.4, color: 0.3 }),
+    W("바나나", "food", { food: 1, size: -0.4, color: 0.2 }),
+    W("딸기", "food", { food: 1, size: -0.6, color: 0.3 }),
+    W("빵", "food", { food: 1, size: -0.3 }),
+    W("밥", "food", { food: 1, size: -0.3, geo: 0.35 }),
+    W("우유", "food", { food: 1, size: -0.3, color: 0.15 }),
+    W("커피", "food", { food: 1, size: -0.4, color: 0.1 }),
+    W("김치", "food", { food: 1, size: -0.4, geo: 0.6 * G.한국 }),
+    W("스시", "food", { food: 1, size: -0.4, geo: 0.6 * G.일본 }),
+    W("만두", "food", { food: 1, size: -0.4, geo: 0.6 * G.중국 }),
+    W("바게트", "food", { food: 1, size: -0.4, geo: 0.6 * G.프랑스 }),
+    W("햄버거", "food", { food: 1, size: -0.4, geo: 0.6 * G.미국 }),
+    // 나라·도시 (나라는 규모가 크고 도시는 작다)
+    ...Object.keys(G).map((c) => W(c, "place", { place: 1, size: 0.8, geo: G[c] })),
+    ...[["서울", "한국"], ["도쿄", "일본"], ["베이징", "중국"], ["파리", "프랑스"], ["워싱턴", "미국"], ["런던", "영국"]].map(([c, n]) => W(c, "place", { place: 1, size: 0.3, geo: G[n] })),
+    W("집", "place", { place: 1, size: -0.3 }),
+    W("학교", "place", { place: 1, size: 0, age: -0.3 }),
+    W("병원", "place", { place: 1, size: 0.1, age: 0.3 }),
+    // 동작 (현재/과거)
+    ...[["먹다", "먹었다", { food: 0.5 }], ["가다", "갔다", { place: 0.4 }], ["보다", "봤다", { color: 0.35 }], ["자다", "잤다", { ani: 0.4, size: -0.2 }], ["달리다", "달렸다", { place: 0.3, ani: 0.3, size: 0.2 }]]
+      .flatMap(([p, q, s]) => [W(p, "verb", Object.assign({ act: 1 }, s)), W(q, "verb", Object.assign({ act: 1, past: 0.7 }, s))]),
+    // 색
+    W("빨강", "color", { color: 1, food: 0.25 }),
+    W("파랑", "color", { color: 1, place: 0.2 }),
+    W("초록", "color", { color: 1, ani: 0.2 }),
+    W("노랑", "color", { color: 1, food: 0.15, age: -0.1 }),
+    W("검정", "color", { color: 1, age: 0.2, size: 0.1 }),
+    W("하양", "color", { color: 1, age: -0.2, size: -0.1 }),
+    // 수 (크기 축에 규모를 싣는다)
+    ...[["하나", -0.8], ["둘", -0.6], ["셋", -0.45], ["다섯", -0.2], ["열", 0.2], ["백", 0.7]].map(([w, s]) => W(w, "number", { num: 1, size: s })),
+  ];
+  EM.IDX = new Map(EM.WORDS.map((x, i) => [x.w, i]));
+  /** 설계 벡터 + 가우스 노이즈 σ (시드 고정) */
+  EM.makeVecs = function (sigma, seed = 4) {
+    const r = AB.rng(seed);
+    return EM.WORDS.map((x) => {
+      const v = Array(EM.AXES.length).fill(0);
+      Object.entries(x.spec).forEach(([k, val]) => (v[AX[k]] = val));
+      return v.map((a) => a + sigma * r.n());
+    });
+  };
+  EM.ANALOGIES = [
+    ["왕", "남자", "여자", "여왕"],
+    ["서울", "한국", "일본", "도쿄"],
+    ["강아지", "개", "소", "송아지"],
+    ["먹었다", "먹다", "가다", "갔다"],
+    ["김치", "한국", "일본", "스시"],
+    ["공주", "소녀", "소년", "왕자"],
+    ["할머니", "여자", "남자", "할아버지"],
+    ["파리", "프랑스", "영국", "런던"],
+  ];
+
+  /* ======================================================= 공통 도우미 */
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const catOf = (cat) => EM.CATS.find((c) => c.key === cat);
+  const catColor = (cat) => AB.color(catOf(cat).col);
+  const fmt3 = (x) => (x >= 0 ? " " : "") + x.toFixed(3);
+  /** 캔버스 좌표 얻기 */
+  const ptr = (cv, e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  /** 이웃 목록 HTML */
+  function nbHTML(list, names, maxCos) {
+    return list.map(([i, s], k) => `<button data-i="${i}"><span class="rk">${k + 1}</span><span>${esc(names[i])}<span class="bar" style="width:${Math.max(4, ((s + 1) / 2) * 100 * (maxCos || 1)).toFixed(0)}%"></span></span><span class="num">${s.toFixed(3)}</span></button>`).join("");
+  }
+  // datalist
+  (function () {
+    const dl = document.createElement("datalist"); dl.id = "em-dl-words";
+    dl.innerHTML = EM.WORDS.map((x) => `<option value="${x.w}">`).join("");
+    document.body.appendChild(dl);
+  })();
+  function fillWordSelect(sel, val) {
+    sel.innerHTML = EM.CATS.map((c) => `<optgroup label="${c.name}">` + EM.WORDS.map((x, i) => (x.cat === c.key ? `<option value="${i}">${x.w}</option>` : "")).join("") + "</optgroup>").join("");
+    sel.value = String(EM.IDX.get(val));
+  }
+
+  /* ======================================================= SIM 1: BPE */
+  (function () {
+    const PRESET = {
+      ko: { c: "학교 학교에 학교에서 학교에서 학교로 학생 학생이 학생이 학생은 학생들 학생들이 학생들이 공부 공부를 공부한다 공부한다 공부했다 공부했다 먹다 먹는다 먹는다 먹었다 먹었다 먹고 갔다 갔다 간다 했다 했다 한다 한다", t: "학생들이 학교에서 공부했다" },
+      en: { c: "low low low low low lower lower newest newest newest newest newest newest widest widest widest", t: "lowest newer wider" },
+    };
+    const ta = $("em-bpe-corpus"), test = $("em-bpe-test");
+    let st, timer = 0, lastNew = null;
+    const kGet = AB.range("em-bpe-k", (v) => v + " / " + (st ? st.merges.length : 0), () => renderTest());
+    function reset() {
+      stopAuto();
+      st = EM.bpeInit(ta.value); lastNew = null;
+      kGet.el.max = 0; kGet.set(0);
+      render();
+    }
+    function doMerge(a, b, n) {
+      const atMax = Number(kGet.el.value) === st.merges.length;
+      EM.bpeMerge(st, a, b, n); lastNew = a + b;
+      kGet.el.max = st.merges.length;
+      if (atMax) kGet.set(st.merges.length); else kGet.set(Number(kGet.el.value));
+      render();
+    }
+    function step() {
+      const p = EM.bpePairs(st);
+      if (!p.length || p[0].n < 1) { stopAuto(); return false; }
+      doMerge(p[0].a, p[0].b, p[0].n); return true;
+    }
+    function stopAuto() { if (timer) { clearInterval(timer); timer = 0; } $("em-bpe-auto").textContent = "자동"; }
+    $("em-bpe-step").addEventListener("click", step);
+    $("em-bpe-auto").addEventListener("click", () => {
+      if (timer) { stopAuto(); return; }
+      $("em-bpe-auto").textContent = "정지";
+      timer = setInterval(() => { if (!step() || st.merges.length >= 120) stopAuto(); }, 320);
+    });
+    $("em-bpe-reset").addEventListener("click", reset);
+    document.querySelectorAll("#sim-bpe [data-preset]").forEach((b) => b.addEventListener("click", () => {
+      const p = PRESET[b.dataset.preset]; ta.value = p.c; test.value = p.t; reset();
+    }));
+    let deb = 0;
+    ta.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(reset, 300); });
+    test.addEventListener("input", renderTest);
+    $("em-bpe-pairs").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-a]"); if (!b) return;
+      doMerge(b.dataset.a, b.dataset.b, Number(b.dataset.n));
+    });
+    function render() {
+      const pairs = EM.bpePairs(st).slice(0, 10);
+      $("em-bpe-pairs").innerHTML = pairs.length
+        ? pairs.map((p, i) => `<button class="tok em-click${i === 0 ? " em-top" : ""}" data-a="${esc(p.a)}" data-b="${esc(p.b)}" data-n="${p.n}">${esc(p.a)} + ${esc(p.b)}<small>×${p.n}</small></button>`).join("")
+        : '<span class="em-msg">더 병합할 쌍이 없다. 모든 단어가 토큰 하나가 되었다.</span>';
+      $("em-bpe-words").innerHTML = st.words.slice(0, 40).map((w) => `<span class="em-w">${w.sym.map((s) => `<span class="tok${s === lastNew ? " em-new" : ""}">${esc(s)}</span>`).join("")}<i>×${w.n}</i></span>`).join("");
+      const merged = st.merges.map((m) => m.tok);
+      $("em-bpe-vocab").innerHTML = st.base.map((s) => `<span class="tok dim">${esc(s)}</span>`).join("") +
+        merged.map((s, i) => `<span class="tok${i === merged.length - 1 ? " em-new" : ""}">${esc(s)}</span>`).join("");
+      $("em-bpe-log").innerHTML = st.merges.map((m) => `<li>${esc(m.a)} + ${esc(m.b)} → ${esc(m.tok)} (${m.n}회)</li>`).join("") || '<li style="list-style:none;color:var(--text-faint)">아직 병합 없음</li>';
+      const lg = $("em-bpe-log"); lg.scrollTop = lg.scrollHeight;
+      AB.stat("em-bpe-o-v", st.base.length + st.merges.length + `<small>= ${st.base.length} + ${st.merges.length}</small>`);
+      AB.stat("em-bpe-o-m", String(st.merges.length));
+      const tot0 = st.words.reduce((s, w) => s + (Array.from(w.sym.join("")).length) * w.n, 0);
+      const tot = st.words.reduce((s, w) => s + w.sym.length * w.n, 0);
+      AB.stat("em-bpe-o-c", tot + `<small>/ ${tot0}</small>`);
+      renderTest();
+    }
+    function renderTest() {
+      if (!st) return;
+      const k = Number(kGet.el.value);
+      const out = $("em-bpe-k-out"); if (out) out.textContent = k + " / " + st.merges.length;
+      const toks = EM.bpeEncode(test.value, st.base, st.merges, k);
+      $("em-bpe-out").innerHTML = toks.map((t) => (t.unk ? `<span class="tok em-unk" title="어휘에 없는 문자">[UNK:${esc(t.s)}]</span>` : `<span class="tok">${esc(t.s)}</span>`)).join("") || '<span class="em-msg">테스트 문장을 입력하자</span>';
+      const nUnk = toks.filter((t) => t.unk).length;
+      AB.stat("em-bpe-o-t", toks.length + (nUnk ? `<small>UNK ${nUnk}</small>` : ""));
+    }
+    ta.value = PRESET.ko.c;
+    reset();
+  })();
+
+  /* ======================================================= SIM 2: 임베딩 룩업 */
+  (function () {
+    const VOC = ["<s>", "나", "는", "고양이", "를", "좋아", "한다", "강아지"];
+    const SENT = [0, 1, 2, 3, 4, 5, 6];
+    const r = AB.rng(11);
+    const E = VOC.map(() => Array.from({ length: 4 }, () => Math.round((r() * 2 - 1) * 100) / 100));
+    let sel = 3;
+    const xT = $("em-lk-x"), ET = $("em-lk-E"), yT = $("em-lk-y");
+    function heatBg(v) { return v >= 0 ? AB.heat(Math.min(1, v / 1.5) * 0.85, "accent") : AB.heat(Math.min(1, -v / 1.5) * 0.85, "accent-2"); }
+    function build() {
+      $("em-lk-toks").innerHTML = SENT.map((i) => `<button class="tok em-click${i === sel ? " em-on" : ""}" data-i="${i}">${esc(VOC[i])}</button>`).join("") +
+        ` <span class="em-msg" style="margin:0 6px">어휘에만 있음:</span><button class="tok em-click${sel === 7 ? " em-on" : ""}" data-i="7">강아지</button>`;
+      xT.innerHTML = "<tr><th></th>" + VOC.map((_, i) => `<th>${i}</th>`).join("") + "</tr><tr><th>x</th>" + VOC.map((_, i) => `<td style="background:${i === sel ? AB.color("accent") : AB.color("surface")};color:${i === sel ? AB.color("on-accent") : AB.color("text-dim")};font-weight:${i === sel ? 700 : 400}">${i === sel ? 1 : 0}</td>`).join("") + "</tr>";
+      ET.innerHTML = "<tr><th></th><th></th>" + [0, 1, 2, 3].map((j) => `<th>d${j}</th>`).join("") + "</tr>" +
+        E.map((row, i) => `<tr class="${i === sel ? "em-hl" : ""}"><th class="em-rowlab">${esc(VOC[i])}</th><th>${i}</th>` + row.map((v, j) => `<td class="em-drag" data-i="${i}" data-j="${j}" style="background:${heatBg(v)}">${v.toFixed(2)}</td>`).join("") + "</tr>").join("");
+      compute();
+    }
+    function compute() {
+      const x = VOC.map((_, i) => (i === sel ? 1 : 0));
+      const y = AB.matvec(AB.transpose(E), x); // xᵀE 를 실제 행렬곱으로
+      yT.innerHTML = "<tr>" + y.map((v) => `<td style="background:${heatBg(v)}">${v.toFixed(2)}</td>`).join("") + "</tr>";
+      const terms = VOC.map((_, i) => `${x[i]}·E${i}`).join(" + ");
+      $("em-lk-eq").innerHTML = `x·E = ${terms}<br>= 1·E${sel} = E[${sel}] = (${E[sel].map((v) => v.toFixed(2)).join(", ")})`;
+      AB.stat("em-lk-o-id", `${esc(VOC[sel])} → ${sel}`);
+    }
+    $("em-lk-toks").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (!b) return; sel = Number(b.dataset.i); build(); });
+    // 셀 드래그 편집
+    let drag = null;
+    ET.addEventListener("pointerdown", (e) => {
+      const td = e.target.closest("td.em-drag"); if (!td) return;
+      e.preventDefault();
+      drag = { i: Number(td.dataset.i), j: Number(td.dataset.j), y0: e.clientY, v0: E[td.dataset.i][td.dataset.j], td };
+      td.setPointerCapture(e.pointerId);
+    });
+    ET.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const v = AB.clamp(Math.round((drag.v0 - (e.clientY - drag.y0) * 0.02) * 100) / 100, -2, 2);
+      E[drag.i][drag.j] = v;
+      drag.td.textContent = v.toFixed(2); drag.td.style.background = heatBg(v);
+      compute();
+    });
+    const end = () => { drag = null; };
+    ET.addEventListener("pointerup", end); ET.addEventListener("pointercancel", end);
+    AB.onTheme(build);
+
+    // 파라미터 계산기
+    const PRE = { gpt2: { V: 50257, d: 768, tie: true, total: 124e6, name: "GPT-2 small 124M" }, llama3: { V: 128256, d: 4096, tie: false, total: 8.03e9, name: "Llama 3 8B" } };
+    let V = 50257, preset = "gpt2";
+    const tie = $("em-lk-tie");
+    const vEl = $("em-lk-v"), dEl = $("em-lk-d");
+    const fill = (el) => el.style.setProperty("--fill", ((el.value - el.min) / (el.max - el.min)) * 100 + "%");
+    const ps = AB.seg("em-lk-preset", (p) => {
+      preset = p; const P = PRE[p];
+      if (P) { V = P.V; vEl.value = Math.log2(V); dEl.value = P.d; tie.checked = P.tie; fill(vEl); fill(dEl); }
+      calc();
+    });
+    const toCustom = () => { if (preset !== "custom") { preset = "custom"; ps.set("custom", false); } };
+    vEl.addEventListener("input", () => { V = Math.round(Math.pow(2, Number(vEl.value))); fill(vEl); toCustom(); calc(); });
+    dEl.addEventListener("input", () => { fill(dEl); toCustom(); calc(); });
+    tie.addEventListener("change", () => { toCustom(); calc(); });
+    const dt = AB.seg("em-lk-dt", calc);
+    function calc() {
+      $("em-lk-v-out").textContent = V.toLocaleString("en-US");
+      $("em-lk-d-out").textContent = dEl.value;
+      const d = Number(dEl.value), bytes = Number(dt ? dt() : 4);
+      const p1 = V * d, p2 = tie.checked ? p1 : 2 * p1;
+      AB.stat("em-lk-o-p", AB.big(p1) + `<small>${p1.toLocaleString("en-US")}</small>`);
+      AB.stat("em-lk-o-p2", AB.big(p2) + `<small>${tie.checked ? "공유" : "별도"}</small>`);
+      const mb = p2 * bytes; AB.stat("em-lk-o-mem", mb >= 1e9 ? (mb / 1e9).toPrecision(3) + " GB" : (mb / 1e6).toPrecision(3) + " MB");
+      const P = PRE[preset];
+      AB.stat("em-lk-o-r", P ? ((p2 / P.total) * 100).toFixed(1) + `%<small>${P.name}</small>` : "—<small>프리셋에서</small>");
+    }
+    build();
+    ps.set("gpt2");
+  })();
+
+  /* ======================================================= SIM 3: 동시출현 → PPMI → 2D */
+  EM.CO_CORPUS = `귀여운 고양이 를 키운다
+귀여운 강아지 를 키운다
+토끼 털 을 빗는다
+고양이 털 을 빗는다
+햄스터 를 키운다
+귀여운 토끼 를 키운다
+강아지 털 이 길다
+햄스터 털 이 짧다
+차가운 우유 를 마신다
+차가운 주스 를 마신다
+컵 에 커피 를 따른다
+컵 에 물 을 따른다
+우유 를 컵 에 따른다
+뜨거운 커피 를 마신다
+물 을 마신다
+주스 를 컵 에 따른다
+역 에서 기차 를 탄다
+역 에서 지하철 을 탄다
+빠른 버스 를 탄다
+빠른 택시 를 탄다
+기차 가 역 에 선다
+버스 가 빠르게 달린다
+택시 를 역 에서 탄다
+지하철 이 빠르게 달린다`;
+  EM.CO_GROUPS = [
+    { name: "동물", col: "ok", words: ["고양이", "강아지", "토끼", "햄스터"] },
+    { name: "음료", col: "warn", words: ["우유", "커피", "주스", "물"] },
+    { name: "탈것", col: "blue", words: ["버스", "기차", "지하철", "택시"] },
+  ];
+  EM.groupOf = (w) => EM.CO_GROUPS.findIndex((g) => g.words.includes(w));
+  /** 그룹 내/간 평균 코사인 */
+  EM.groupCos = function (words, vecOf) {
+    let wi = 0, nw = 0, bt = 0, nb = 0;
+    const T = words.filter((w) => EM.groupOf(w) >= 0);
+    T.forEach((a, i) => T.forEach((b, j) => {
+      if (i >= j) return;
+      const c = AB.cos(vecOf(a), vecOf(b));
+      if (EM.groupOf(a) === EM.groupOf(b)) { wi += c; nw++; } else { bt += c; nb++; }
+    }));
+    return [nw ? wi / nw : NaN, nb ? bt / nb : NaN];
+  };
+  (function () {
+    const ta = $("em-co-corpus"); ta.value = EM.CO_CORPUS;
+    let D = null, selW = -1, selCell = null, heatGeom = null, scPts = [];
+    const win = AB.range("em-co-win", (v) => String(v), () => { compute(); draw(); });
+    const mode = AB.seg("em-co-mode", () => heat.redraw());
+    const src = AB.seg("em-co-src", () => { compute(); draw(); });
+    function compute() {
+      const lines = EM.tokenizeLines(ta.value);
+      const cnt = new Map(); lines.flat().forEach((w) => cnt.set(w, (cnt.get(w) || 0) + 1));
+      const all = [...cnt.keys()];
+      let targets = EM.CO_GROUPS.flatMap((g) => g.words).filter((w) => cnt.has(w));
+      if (targets.length < 3) targets = [...all].sort((a, b) => cnt.get(b) - cnt.get(a)).slice(0, 10);
+      const ctx = all.filter((w) => !targets.includes(w)).sort((a, b) => cnt.get(b) - cnt.get(a)).slice(0, 28);
+      const vocab = [...targets, ...all.filter((w) => !targets.includes(w))];
+      if (vocab.length < 3) { D = null; return; }
+      const C = EM.cooc(lines, vocab, win());
+      const M = EM.ppmi(C);
+      const S = src() === "ppmi" ? M : C;
+      const rows = S.map((r) => { const n = AB.norm(r) || 1; return r.map((v) => v / n); });
+      const P = EM.pca(rows, 2);
+      const xy = rows.map((r) => EM.project(r, P));
+      D = { vocab, targets, ctx, C, M, S, rows, P, xy, id: new Map(vocab.map((w, i) => [w, i])) };
+      if (selW >= vocab.length) selW = -1;
+      const [gi, go] = EM.groupCos(targets, (w) => S[D.id.get(w)]);
+      AB.stat("em-co-o-v", `${vocab.length}<small>/ 목표 ${targets.length}</small>`);
+      AB.stat("em-co-o-in", isFinite(gi) ? gi.toFixed(3) : "—");
+      AB.stat("em-co-o-out", isFinite(go) ? go.toFixed(3) : "—");
+      AB.stat("em-co-o-ev", ((P.vals[0] + P.vals[1]) / P.total * 100).toFixed(0) + "%");
+    }
+    const heat = AB.canvas($("em-co-heat"), (ctx, w, h) => {
+      if (!D) return;
+      const P = AB.palette();
+      const R = D.targets, Cc = D.ctx;
+      const L = 52, Tp = 50, cw = (w - L - 8) / Math.max(1, Cc.length), ch = (h - Tp - 8) / R.length;
+      heatGeom = { L, Tp, cw, ch };
+      const Mx = mode() === "ppmi" ? D.M : D.C;
+      let mx = 0; R.forEach((a) => Cc.forEach((b) => (mx = Math.max(mx, Mx[D.id.get(a)][D.id.get(b)]))));
+      R.forEach((a, i) => Cc.forEach((b, j) => {
+        const v = Mx[D.id.get(a)][D.id.get(b)];
+        ctx.fillStyle = AB.heat(mx ? v / mx : 0);
+        ctx.fillRect(L + j * cw + 0.5, Tp + i * ch + 0.5, cw - 1, ch - 1);
+      }));
+      // 라벨
+      ctx.font = `${Math.min(12, ch * 0.75)}px ${getComputedStyle(document.body).fontFamily}`;
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      R.forEach((a, i) => { const g = EM.groupOf(a); ctx.fillStyle = D.id.get(a) === selW ? P.accent : g >= 0 ? AB.color(EM.CO_GROUPS[g].col) : P.text; ctx.fillText(a, L - 5, Tp + (i + 0.5) * ch); });
+      ctx.save(); ctx.font = `${Math.min(11, cw * 0.9)}px ${getComputedStyle(document.body).fontFamily}`; ctx.fillStyle = P.dim; ctx.textAlign = "left";
+      Cc.forEach((b, j) => { ctx.save(); ctx.translate(L + (j + 0.5) * cw, Tp - 4); ctx.rotate(-Math.PI / 2.6); ctx.fillText(b, 0, 0); ctx.restore(); });
+      ctx.restore();
+      if (selW >= 0 && R.includes(D.vocab[selW])) { const i = R.indexOf(D.vocab[selW]); ctx.strokeStyle = P.accent; ctx.lineWidth = 1.5; ctx.strokeRect(L, Tp + i * ch, Cc.length * cw, ch); }
+      if (selCell) { ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.strokeRect(L + selCell[1] * cw, Tp + selCell[0] * ch, cw, ch); }
+      ctx.fillStyle = P.faint; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
+      ctx.fillText(mode() === "ppmi" ? "PPMI" : "횟수", 6, 6);
+    }, { aspect: 0.56, minHeight: 280, maxHeight: 360 });
+    const sc = AB.canvas($("em-co-sc"), (ctx, w, h) => {
+      if (!D) return;
+      const P = AB.palette();
+      const xs = D.xy.map((p) => p[0]), ys = D.xy.map((p) => p[1]);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const pad = 34, sx = (w - 2 * pad) / (x1 - x0 || 1), sy = (h - 2 * pad) / (y1 - y0 || 1);
+      const X = (v) => pad + (v - x0) * sx, Y = (v) => h - pad - (v - y0) * sy;
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(0), pad / 2); ctx.lineTo(X(0), h - pad / 2); ctx.moveTo(pad / 2, Y(0)); ctx.lineTo(w - pad / 2, Y(0)); ctx.stroke();
+      const ff = getComputedStyle(document.body).fontFamily;
+      scPts = [];
+      const nn = selW >= 0 ? new Set(D.rows.map((r, j) => [j, AB.cos(D.rows[selW], r)]).filter((x) => x[0] !== selW).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => x[0])) : new Set();
+      // 문맥 단어 먼저(흐리게), 목표 단어 나중
+      const order = [...D.vocab.keys()].sort((a, b) => (D.targets.includes(D.vocab[a]) ? 1 : 0) - (D.targets.includes(D.vocab[b]) ? 1 : 0));
+      order.forEach((i) => {
+        const wd = D.vocab[i], px = X(D.xy[i][0]), py = Y(D.xy[i][1]);
+        const isT = D.targets.includes(wd), g = EM.groupOf(wd);
+        const col = g >= 0 ? AB.color(EM.CO_GROUPS[g].col) : P.faint;
+        if (selW >= 0 && nn.has(i)) { ctx.strokeStyle = P.accent; ctx.lineWidth = 1.2; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(D.xy[selW][0]), Y(D.xy[selW][1])); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]); }
+        ctx.fillStyle = col; ctx.globalAlpha = isT ? 1 : 0.6;
+        ctx.beginPath(); ctx.arc(px, py, isT ? 5 : 3, 0, 7); ctx.fill();
+        if (i === selW) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, 9, 0, 7); ctx.stroke(); }
+        ctx.font = isT ? `600 12px ${ff}` : `10.5px ${ff}`; ctx.fillStyle = isT ? P.text : P.faint;
+        ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(wd, px + 7, py);
+        ctx.globalAlpha = 1;
+        scPts.push([px, py, i]);
+      });
+      ctx.fillStyle = P.faint; ctx.font = `11px ${ff}`; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(`2D 투영 (${src() === "ppmi" ? "PPMI" : "횟수"} 행 → SVD/PCA)`, 6, 6);
+    }, { aspect: 0.62, minHeight: 260, maxHeight: 400 });
+    function draw() { heat.redraw(); sc.redraw(); }
+    function info(html) { $("em-co-info").innerHTML = html; }
+    $("em-co-heat").addEventListener("pointerdown", (e) => {
+      if (!D || !heatGeom) return;
+      const [x, y] = ptr(e.currentTarget, e), G = heatGeom;
+      const j = Math.floor((x - G.L) / G.cw), i = Math.floor((y - G.Tp) / G.ch);
+      if (i < 0 || j < 0 || i >= D.targets.length || j >= D.ctx.length) return;
+      selCell = [i, j];
+      const a = D.targets[i], b = D.ctx[j], ia = D.id.get(a), ib = D.id.get(b);
+      info(`<b>${esc(a)}</b> 주변의 <b>${esc(b)}</b>: 횟수 ${D.C[ia][ib]}, PPMI ${D.M[ia][ib].toFixed(2)}`);
+      selW = ia; draw();
+    });
+    $("em-co-sc").addEventListener("pointerdown", (e) => {
+      const [x, y] = ptr(e.currentTarget, e);
+      let best = -1, bd = 26;
+      scPts.forEach(([px, py, i]) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } });
+      if (best < 0) return;
+      selW = best; selCell = null;
+      const nn = D.rows.map((r, j) => [j, AB.cos(D.rows[best], r)]).filter((q) => q[0] !== best).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      info(`<b>${esc(D.vocab[best])}</b>와 문맥이 비슷한 단어: ` + nn.map(([j, s]) => `${esc(D.vocab[j])} (${s.toFixed(2)})`).join(", "));
+      draw();
+    });
+    let deb = 0;
+    ta.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => { selW = -1; selCell = null; compute(); draw(); }, 250); });
+    compute(); draw();
+  })();
+
+  /* ======================================================= SIM 4: 3D 임베딩 공간 탐색기 */
+  (function () {
+    const el = $("em-v3d");
+    const T = AB.three(el, { camera: [5.2, 3.4, 6.4], target: [0, 0, 0], fov: 42, minDistance: 2.5, maxDistance: 22 });
+    if (!T) return;
+    const THREE = T.THREE;
+    const vecs = EM.makeVecs(0.05);
+    const P = EM.pca(vecs, 3);
+    const N = vecs.length;
+    const geo = new THREE.SphereGeometry(0.085, 18, 12);
+    const mats = {};
+    EM.CATS.forEach((c) => (mats[c.key] = new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.05 })));
+    const meshes = [], labels = [], target = [];
+    const hidden = new Set();
+    let sel = -1, nbs = [], labMode = "all", proj = "pca";
+    EM.WORDS.forEach((x, i) => {
+      const m = new THREE.Mesh(geo, mats[x.cat]); m.userData.i = i; T.scene.add(m); meshes.push(m);
+      const L = T.label(esc(x.w), [0, 0, 0], "em-lab"); labels.push(L);
+      target.push(new THREE.Vector3());
+    });
+    // 좌표축
+    const axMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 });
+    const axLen = 2.9;
+    const axGeo = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([-axLen, 0, 0, axLen, 0, 0, 0, -axLen, 0, 0, axLen, 0, 0, 0, -axLen, 0, 0, axLen], 3));
+    T.scene.add(new THREE.LineSegments(axGeo, axMat));
+    const axLab = [[axLen + 0.25, 0, 0], [0, axLen + 0.2, 0], [0, 0, axLen + 0.25]].map((p) => T.label("", p, "em-axl"));
+    // 이웃 연결선
+    const nbPos = new Float32Array(5 * 6);
+    const nbGeo = new THREE.BufferGeometry(); nbGeo.setAttribute("position", new THREE.BufferAttribute(nbPos, 3));
+    const nbMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.9 });
+    const nbLines = new THREE.LineSegments(nbGeo, nbMat); nbLines.visible = false; T.scene.add(nbLines);
+
+    function themeColors() {
+      EM.CATS.forEach((c) => { const col = new THREE.Color(AB.color(c.col)); mats[c.key].color.copy(col); mats[c.key].emissive.copy(col).multiplyScalar(AB.isDark() ? 0.45 : 0.15); });
+      axMat.color.set(AB.color("text-faint")); nbMat.color.set(AB.color("accent"));
+      labels.forEach((L, i) => (L.el.style.borderLeftColor = catColor(EM.WORDS[i].cat)));
+    }
+    themeColors(); AB.onTheme(themeColors);
+
+    // 축 선택 UI
+    const axSel = [0, 1, 2].map((k) => $("em-sp-ax" + k));
+    axSel.forEach((s, k) => { s.innerHTML = EM.AXES.map((a, j) => `<option value="${j}">${["x", "y", "z"][k]}: ${a}</option>`).join(""); s.value = String([1, 0, 2][k]); s.addEventListener("change", () => { setProj("axes"); }); });
+    const projSeg = AB.seg("em-sp-proj", (v) => setProj(v));
+    function setProj(v) {
+      proj = v; if (projSeg() !== v) projSeg.set(v, false);
+      axSel.forEach((s) => (s.disabled = v === "pca"));
+      $("em-sp-axes").style.opacity = v === "pca" ? 0.5 : 1;
+      computeTargets(); updateSel();
+    }
+    function computeTargets() {
+      if (proj === "pca") {
+        const z = vecs.map((v) => EM.project(v, P));
+        let mx = 0; z.forEach((p) => p.forEach((q) => (mx = Math.max(mx, Math.abs(q)))));
+        const s = 2.6 / (mx || 1);
+        z.forEach((p, i) => target[i].set(p[0] * s, p[1] * s, p[2] * s));
+        const ev = P.vals.map((v) => ((v / P.total) * 100).toFixed(0));
+        axLab[0].el.textContent = `PC1 ${ev[0]}%`; axLab[1].el.textContent = `PC2 ${ev[1]}%`; axLab[2].el.textContent = `PC3 ${ev[2]}%`;
+      } else {
+        const d = axSel.map((s) => Number(s.value));
+        vecs.forEach((v, i) => target[i].set(v[d[0]] * 2.3, v[d[1]] * 2.3, v[d[2]] * 2.3));
+        d.forEach((j, k) => (axLab[k].el.textContent = EM.AXES[j]));
+      }
+    }
+    // 처음엔 바로 그 위치에
+    computeTargets(); meshes.forEach((m, i) => m.position.copy(target[i]));
+    AB.stat("em-sp-o-ev", ((P.vals.reduce((a, b) => a + b, 0) / P.total) * 100).toFixed(1) + "%");
+
+    // 범주 토글
+    $("em-sp-cats").innerHTML = EM.CATS.map((c) => `<button data-c="${c.key}"><i style="background:var(--${c.col})"></i>${c.name}</button>`).join("");
+    $("em-sp-cats").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-c]"); if (!b) return;
+      const k = b.dataset.c; hidden.has(k) ? hidden.delete(k) : hidden.add(k);
+      b.classList.toggle("off", hidden.has(k)); updateVis();
+    });
+    AB.seg("em-sp-lab", (v) => { labMode = v; updateVis(); });
+    $("em-sp-rot").addEventListener("change", (e) => (T.controls.autoRotate = e.target.checked));
+
+    function updateVis() {
+      const nbSet = new Set(nbs.map((x) => x[0]));
+      EM.WORDS.forEach((x, i) => {
+        const vis = !hidden.has(x.cat) || i === sel;
+        meshes[i].visible = vis;
+        const isSel = i === sel, isNb = nbSet.has(i);
+        meshes[i].scale.setScalar(isSel ? 1.9 : isNb ? 1.4 : 1);
+        let show = vis && (labMode === "all" || isSel || (labMode === "near" && isNb));
+        labels[i].setVisible(show);
+        labels[i].el.classList.toggle("em-lsel", isSel);
+        labels[i].el.classList.toggle("em-nbr", isNb);
+        labels[i].el.classList.toggle("em-dim", sel >= 0 && labMode === "all" && !isSel && !isNb);
+      });
+    }
+    function updateSel() {
+      if (sel < 0) {
+        nbs = []; nbLines.visible = false;
+        $("em-sp-nb").innerHTML = '<span class="em-msg">점을 탭하거나 단어를 검색하자.</span>';
+        ["em-sp-o-w", "em-sp-o-nn", "em-sp-o-ov"].forEach((id) => AB.stat(id, "—"));
+        updateVis(); return;
+      }
+      nbs = EM.nearest(vecs[sel], vecs, 5, new Set([sel]));
+      $("em-sp-nbt").textContent = `“${EM.WORDS[sel].w}”의 최근접 이웃 (12차원 코사인)`;
+      $("em-sp-nb").innerHTML = nbHTML(nbs, EM.WORDS.map((x) => x.w));
+      nbLines.visible = true;
+      // 3D(현재 투영) 좌표 기준 top-5와 비교
+      const d3 = target.map((p, i) => [i, p.distanceTo(target[sel])]).filter((x) => x[0] !== sel).sort((a, b) => a[1] - b[1]).slice(0, 5).map((x) => x[0]);
+      const ov = nbs.filter(([i]) => d3.includes(i)).length;
+      AB.stat("em-sp-o-w", esc(EM.WORDS[sel].w) + `<small>${catOf(EM.WORDS[sel].cat).name}</small>`);
+      AB.stat("em-sp-o-nn", esc(EM.WORDS[nbs[0][0]].w) + `<small>${nbs[0][1].toFixed(3)}</small>`);
+      AB.stat("em-sp-o-ov", `${ov} / 5<small>${proj === "pca" ? "PCA" : "의미 축"}</small>`);
+      updateVis();
+    }
+    function select(i) { sel = i; if (i >= 0 && hidden.has(EM.WORDS[i].cat)) { hidden.delete(EM.WORDS[i].cat); document.querySelector(`#em-sp-cats [data-c="${EM.WORDS[i].cat}"]`).classList.remove("off"); } updateSel(); }
+    $("em-sp-nb").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (b) select(Number(b.dataset.i)); });
+    const go = () => { const w = $("em-sp-q").value.trim(); if (EM.IDX.has(w)) select(EM.IDX.get(w)); else $("em-sp-q").style.borderColor = "var(--bad)"; };
+    $("em-sp-go").addEventListener("click", go);
+    $("em-sp-q").addEventListener("keydown", (e) => { $("em-sp-q").style.borderColor = ""; if (e.key === "Enter") go(); });
+    $("em-sp-q").addEventListener("change", () => { if (EM.IDX.has($("em-sp-q").value.trim())) go(); });
+
+    // 탭/클릭 선택: Raycaster, 실패하면 화면 거리
+    const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), tmp = new THREE.Vector3();
+    let down = null;
+    const cvs = T.renderer.domElement;
+    cvs.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
+    cvs.addEventListener("pointerup", (e) => {
+      if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 7) { down = null; return; }
+      down = null;
+      const r = cvs.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, T.camera);
+      const hit = ray.intersectObjects(meshes.filter((m) => m.visible), false);
+      if (hit.length) { select(hit[0].object.userData.i); return; }
+      let best = -1, bd = e.pointerType === "touch" ? 30 : 18;
+      meshes.forEach((m, i) => {
+        if (!m.visible) return;
+        tmp.copy(m.position).project(T.camera);
+        const sx = ((tmp.x + 1) / 2) * r.width, sy = ((1 - tmp.y) / 2) * r.height;
+        const d = Math.hypot(sx - (e.clientX - r.left), sy - (e.clientY - r.top));
+        if (d < bd && tmp.z < 1) { bd = d; best = i; }
+      });
+      select(best);
+    });
+
+    T.onFrame((dt) => {
+      const a = 1 - Math.exp(-dt * 7);
+      meshes.forEach((m, i) => { m.position.lerp(target[i], a); labels[i].pos.copy(m.position); });
+      if (sel >= 0) {
+        const s = meshes[sel].position;
+        nbs.forEach(([j], k) => { const p = meshes[j].position; nbPos.set([s.x, s.y, s.z, p.x, p.y, p.z], k * 6); });
+        nbGeo.attributes.position.needsUpdate = true;
+      }
+    });
+    setProj("pca");
+    select(EM.IDX.get("왕"));
+  })();
+
+  /* ======================================================= SIM 5: 벡터 산술 & 유추 */
+  (function () {
+    const cv = $("em-an-cv");
+    const selA = $("em-an-a"), selB = $("em-an-b"), selC = $("em-an-c");
+    fillWordSelect(selA, "왕"); fillWordSelect(selB, "남자"); fillWordSelect(selC, "여자");
+    let vecs = EM.makeVecs(0.05), Pg = EM.pca(vecs, 2), R = null, pts = [];
+    const role = AB.seg("em-an-role");
+    const plane = AB.seg("em-an-plane", () => draw());
+    const sig = AB.range("em-an-sig", (v) => v.toFixed(2), (v) => { vecs = EM.makeVecs(v); Pg = EM.pca(vecs, 2); update(); });
+    const ex = $("em-an-ex");
+    $("em-an-pre").innerHTML = EM.ANALOGIES.map((q, i) => `<button class="btn" data-i="${i}">${q[0]}−${q[1]}+${q[2]}</button>`).join("");
+    $("em-an-pre").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-i]"); if (!b) return;
+      const q = EM.ANALOGIES[Number(b.dataset.i)];
+      selA.value = EM.IDX.get(q[0]); selB.value = EM.IDX.get(q[1]); selC.value = EM.IDX.get(q[2]); update();
+    });
+    [selA, selB, selC].forEach((s) => s.addEventListener("change", update));
+    ex.addEventListener("change", update);
+    const solve = (V, a, b, c, excl) => { const q = AB.add(AB.sub(V[a], V[b]), V[c]); return { q, res: EM.nearest(q, V, V.length, excl ? new Set([a, b, c]) : null) }; };
+    function update() {
+      const a = Number(selA.value), b = Number(selB.value), c = Number(selC.value);
+      const s = solve(vecs, a, b, c, ex.checked);
+      const sNo = solve(vecs, a, b, c, false);
+      R = { a, b, c, q: s.q, res: s.res.slice(0, 5), all: s.res };
+      $("em-an-res").innerHTML = nbHTML(R.res, EM.WORDS.map((x) => x.w));
+      AB.stat("em-an-o-1", esc(EM.WORDS[R.res[0][0]].w) + `<small>${R.res[0][1].toFixed(3)}</small>`);
+      AB.stat("em-an-o-n", esc(EM.WORDS[sNo.res[0][0]].w) + `<small>${sNo.res[0][1].toFixed(3)}</small>`);
+      const pre = EM.ANALOGIES.find((q) => EM.IDX.get(q[0]) === a && EM.IDX.get(q[1]) === b && EM.IDX.get(q[2]) === c);
+      if (pre) { const k = s.res.findIndex(([i]) => EM.WORDS[i].w === pre[3]); AB.stat("em-an-o-r", (k >= 0 ? k + 1 + "위" : "제외됨") + `<small>${pre[3]}</small>`); }
+      else AB.stat("em-an-o-r", "—<small>프리셋 아님</small>");
+      let ok = 0; EM.ANALOGIES.forEach((q) => { const r = solve(vecs, ...q.slice(0, 3).map((w) => EM.IDX.get(w)), true); if (EM.WORDS[r.res[0][0]].w === q[3]) ok++; });
+      AB.stat("em-an-o-acc", `${ok} / ${EM.ANALOGIES.length}<small>σ=${sig().toFixed(2)}</small>`);
+      draw();
+    }
+    function draw() { canvas.redraw(); }
+    const canvas = AB.canvas(cv, (ctx, w, h) => {
+      if (!R) return;
+      const P = AB.palette(), ff = getComputedStyle(document.body).fontFamily;
+      const { a, b, c, q } = R, top = R.res[0][0];
+      let pr, frac;
+      if (plane() === "ana") {
+        const o = vecs[b];
+        const u1 = AB.sub(vecs[a], o); const n1 = AB.norm(u1) || 1; const e1 = u1.map((x) => x / n1);
+        let u2 = AB.sub(vecs[c], o); const pj = AB.dot(u2, e1); u2 = u2.map((x, i) => x - pj * e1[i]);
+        let n2 = AB.norm(u2); let e2 = n2 > 1e-6 ? u2.map((x) => x / n2) : Pg.comps[1];
+        pr = (x) => { const d = AB.sub(x, o); return [AB.dot(d, e1), AB.dot(d, e2)]; };
+        frac = (x) => { const d = AB.sub(x, o); const t = AB.dot(d, d); if (t < 1e-9) return 1; const p = pr(x); return (p[0] * p[0] + p[1] * p[1]) / t; };
+      } else {
+        pr = (x) => EM.project(x, Pg); frac = () => 1;
+      }
+      const key = [a, b, c, top].map((i) => pr(vecs[i])).concat([pr(q)]);
+      let x0 = Math.min(...key.map((p) => p[0])), x1 = Math.max(...key.map((p) => p[0])), y0 = Math.min(...key.map((p) => p[1])), y1 = Math.max(...key.map((p) => p[1]));
+      const span = Math.max(x1 - x0, y1 - y0, 0.6) * 0.5 + 0.25;
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      const pad = 30, s = Math.min((w - 2 * pad) / (2 * span), (h - 2 * pad) / (2 * span));
+      const X = (v) => w / 2 + (v - cx) * s, Y = (v) => h / 2 - (v - cy) * s;
+      // 격자
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      const g0 = Math.floor((cx - w / 2 / s) * 2) / 2, g1 = cx + w / 2 / s;
+      for (let g = g0; g <= g1; g += 0.5) { ctx.beginPath(); ctx.moveTo(X(g), 0); ctx.lineTo(X(g), h); ctx.stroke(); }
+      const h0 = Math.floor((cy - h / 2 / s) * 2) / 2, h1 = cy + h / 2 / s;
+      for (let g = h0; g <= h1; g += 0.5) { ctx.beginPath(); ctx.moveTo(0, Y(g)); ctx.lineTo(w, Y(g)); ctx.stroke(); }
+      // 다른 단어들
+      pts = [];
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      vecs.forEach((v, i) => {
+        if ([a, b, c].includes(i)) return;
+        const p = pr(v), px = X(p[0]), py = Y(p[1]);
+        if (px < -10 || px > w + 10 || py < -10 || py > h + 10) return;
+        const f = frac(v), al = 0.12 + 0.75 * f * f;
+        ctx.globalAlpha = al; ctx.fillStyle = catColor(EM.WORDS[i].cat);
+        ctx.beginPath(); ctx.arc(px, py, i === top ? 5 : 3.2, 0, 7); ctx.fill();
+        if (f > 0.55 || i === top || R.res.some(([j]) => j === i)) { ctx.font = `11px ${ff}`; ctx.fillStyle = P.dim; ctx.fillText(EM.WORDS[i].w, px + 6, py); }
+        ctx.globalAlpha = 1;
+        pts.push([px, py, i]);
+      });
+      const A = pr(vecs[a]), B = pr(vecs[b]), Cc = pr(vecs[c]), Q = pr(q), Tp = pr(vecs[top]);
+      const arrow = (p0, p1, col, dash) => {
+        const x0_ = X(p0[0]), y0_ = Y(p0[1]), x1_ = X(p1[0]), y1_ = Y(p1[1]);
+        const L = Math.hypot(x1_ - x0_, y1_ - y0_); if (L < 4) return;
+        const ux = (x1_ - x0_) / L, uy = (y1_ - y0_) / L, ex_ = x1_ - ux * 7, ey_ = y1_ - uy * 7;
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2.2; ctx.setLineDash(dash ? [6, 4] : []);
+        ctx.beginPath(); ctx.moveTo(x0_ + ux * 6, y0_ + uy * 6); ctx.lineTo(ex_, ey_); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(ex_, ey_); ctx.lineTo(ex_ - ux * 9 - uy * 5, ey_ - uy * 9 + ux * 5); ctx.lineTo(ex_ - ux * 9 + uy * 5, ey_ - uy * 9 - ux * 5); ctx.closePath(); ctx.fill();
+      };
+      arrow(B, A, P.accent, false); arrow(Cc, Q, P.accent, true);
+      arrow(B, Cc, P.accent2, false); arrow(A, Q, P.accent2, true);
+      // 결과까지 거리
+      ctx.strokeStyle = P.ok; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(X(Q[0]), Y(Q[1])); ctx.lineTo(X(Tp[0]), Y(Tp[1])); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = P.ok; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(X(Tp[0]), Y(Tp[1]), 9, 0, 7); ctx.stroke();
+      const tag = (p, txt, col, dy) => {
+        const px = X(p[0]), py = Y(p[1]);
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, 6, 0, 7); ctx.fill();
+        ctx.font = `700 13px ${ff}`; const tw = ctx.measureText(txt).width;
+        let lx = px + 10; if (lx + tw > w - 4) lx = px - 10 - tw;
+        ctx.fillStyle = AB.alpha(AB.color("bg-elev"), 0.85); ctx.fillRect(lx - 3, py + dy - 9, tw + 6, 18);
+        ctx.fillStyle = P.text; ctx.fillText(txt, lx, py + dy);
+      };
+      tag(B, "b " + EM.WORDS[b].w, P.dim, 0); tag(A, "a " + EM.WORDS[a].w, P.accent, 0); tag(Cc, "c " + EM.WORDS[c].w, P.accent2, 0);
+      // 별
+      const sx = X(Q[0]), sy = Y(Q[1]);
+      ctx.fillStyle = P.warn; ctx.beginPath();
+      for (let k = 0; k < 10; k++) { const r = k % 2 ? 4 : 10, t = -Math.PI / 2 + (k * Math.PI) / 5; ctx.lineTo(sx + r * Math.cos(t), sy + r * Math.sin(t)); }
+      ctx.closePath(); ctx.fill();
+      ctx.font = `700 12px ${ff}`; ctx.fillStyle = P.warn; ctx.textAlign = "center"; ctx.fillText("a−b+c", sx, sy - 16);
+      ctx.textAlign = "left"; ctx.font = `700 13px ${ff}`; ctx.fillStyle = P.ok;
+      const tl = "→ " + EM.WORDS[top].w; const tpx = X(Tp[0]) + 12, tpy = Y(Tp[1]) + 16;
+      ctx.fillText(tl, Math.min(tpx, w - ctx.measureText(tl).width - 4), tpy);
+      ctx.font = `11px ${ff}`; ctx.fillStyle = P.faint; ctx.textBaseline = "top";
+      ctx.fillText(plane() === "ana" ? "유추 평면: 원점 b, 축 = (a−b, c−b의 직교 성분)" : "전체 단어의 PCA 1-2 평면", 8, 8);
+    }, { aspect: 0.78, minHeight: 300, maxHeight: 480 });
+    cv.addEventListener("pointerdown", (e) => {
+      const [x, y] = ptr(cv, e);
+      let best = -1, bd = e.pointerType === "touch" ? 26 : 16;
+      pts.forEach(([px, py, i]) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } });
+      if (best < 0) return;
+      ({ a: selA, b: selB, c: selC })[role()].value = String(best); update();
+    });
+    update();
+  })();
+
+  /* ======================================================= SIM 6: 임베딩을 손으로 바꾸기 */
+  (function () {
+    const SETS = {
+      royal: { w: ["왕", "여왕", "왕자", "공주", "남자", "여자", "소년", "소녀"], ax: [1, 0] },
+      geo: { w: ["한국", "일본", "중국", "프랑스", "서울", "도쿄", "베이징", "파리"], ax: [7, 4] },
+      mix: { w: ["개", "고양이", "소", "돼지", "닭", "사과", "우유", "김치"], ax: [3, 5] },
+      verb: { w: ["먹다", "먹었다", "가다", "갔다", "보다", "봤다", "자다", "잤다"], ax: [9, 5] },
+    };
+    const v0 = EM.makeVecs(0.05);
+    let vecs = v0.map((v) => v.slice());
+    let subset = [], sel = -1, basis = null, box = null, drag = null, pts = [];
+    const sx = $("em-ed-x"), sy = $("em-ed-y"), anSel = $("em-ed-an");
+    [sx, sy].forEach((s, k) => (s.innerHTML = EM.AXES.map((a, j) => `<option value="${j}">${k ? "세로" : "가로"}: ${a}</option>`).join("")));
+    anSel.innerHTML = EM.ANALOGIES.map((q, i) => `<option value="${i}">${q[0]} − ${q[1]} + ${q[2]} (기대: ${q[3]})</option>`).join("");
+    const setSeg = AB.seg("em-ed-set", (v) => loadSet(v));
+    const planeSeg = AB.seg("em-ed-plane", () => makeBasis());
+    [sx, sy].forEach((s) => s.addEventListener("change", () => { if (planeSeg() !== "axes") planeSeg.set("axes", false); makeBasis(); }));
+    anSel.addEventListener("change", update);
+    $("em-ed-reset").addEventListener("click", () => { vecs = v0.map((v) => v.slice()); makeBasis(); });
+    $("em-ed-repca").addEventListener("click", () => { planeSeg.set("pca", false); makeBasis(); });
+    function loadSet(k) {
+      const S = SETS[k]; subset = S.w.map((w) => EM.IDX.get(w)); sel = subset[1];
+      sx.value = S.ax[0]; sy.value = S.ax[1];
+      anSel.value = String({ royal: 0, geo: 1, mix: 2, verb: 3 }[k]);
+      makeBasis();
+    }
+    const unit = (j) => EM.AXES.map((_, i) => (i === j ? 1 : 0));
+    function makeBasis() {
+      if (planeSeg() === "pca") {
+        const P = EM.pca(subset.map((i) => vecs[i]), 2); basis = { o: P.mean, e: P.comps, name: ["PC1 (8단어)", "PC2 (8단어)"] };
+      } else {
+        const jx = Number(sx.value), jy = Number(sy.value);
+        basis = { o: EM.AXES.map(() => 0), e: [unit(jx), unit(jy === jx ? (jx + 1) % 12 : jy)], name: [EM.AXES[jx], EM.AXES[jy]] };
+      }
+      [sx, sy].forEach((s) => (s.style.opacity = planeSeg() === "pca" ? 0.5 : 1));
+      // 화면 범위는 기저를 정할 때 한 번만 정한다(끄는 동안 고정)
+      const p = vecs.map(pr).concat(v0.map(pr));
+      const sub = subset.map((i) => pr(vecs[i]));
+      const xs = sub.map((q) => q[0]), ys = sub.map((q) => q[1]);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 0.8) * 0.5 + 0.45;
+      box = { cx, cy, half };
+      update();
+    }
+    const pr = (v) => basis.e.map((e) => { let s = 0; for (let j = 0; j < v.length; j++) s += (v[j] - basis.o[j]) * e[j]; return s; });
+    function map(w, h) {
+      const pad = 24, s = Math.min(w - 2 * pad, h - 2 * pad) / (2 * box.half);
+      return { s, X: (x) => w / 2 + (x - box.cx) * s, Y: (y) => h / 2 - (y - box.cy) * s, iX: (px) => box.cx + (px - w / 2) / s, iY: (py) => box.cy - (py - h / 2) / s };
+    }
+    const cvP = AB.canvas($("em-ed-cv"), (ctx, w, h) => {
+      if (!basis) return;
+      const P = AB.palette(), ff = getComputedStyle(document.body).fontFamily, M = map(w, h);
+      // 축
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      for (let g = Math.ceil((box.cx - box.half * 2) * 2) / 2; g < box.cx + box.half * 2; g += 0.5) { ctx.beginPath(); ctx.moveTo(M.X(g), 0); ctx.lineTo(M.X(g), h); ctx.stroke(); }
+      for (let g = Math.ceil((box.cy - box.half * 2) * 2) / 2; g < box.cy + box.half * 2; g += 0.5) { ctx.beginPath(); ctx.moveTo(0, M.Y(g)); ctx.lineTo(w, M.Y(g)); ctx.stroke(); }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(M.X(0), 0); ctx.lineTo(M.X(0), h); ctx.moveTo(0, M.Y(0)); ctx.lineTo(w, M.Y(0)); ctx.stroke();
+      ctx.font = `11px ${ff}`; ctx.fillStyle = P.faint; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillText(basis.name[0] + " →", w - 6, AB.clamp(M.Y(0) - 4, 16, h - 30)); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("↑ " + basis.name[1], 6, 6);
+      // 나머지 단어
+      const inSub = new Set(subset);
+      vecs.forEach((v, i) => {
+        if (inSub.has(i)) return; const p = pr(v);
+        ctx.globalAlpha = 0.28; ctx.fillStyle = catColor(EM.WORDS[i].cat);
+        ctx.beginPath(); ctx.arc(M.X(p[0]), M.Y(p[1]), 2.6, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+      });
+      // 이웃 연결
+      if (sel >= 0) {
+        const nb = EM.nearest(vecs[sel], vecs, 3, new Set([sel])), ps = pr(vecs[sel]);
+        ctx.strokeStyle = P.accent; ctx.lineWidth = 1.2; ctx.setLineDash([3, 3]);
+        nb.forEach(([j]) => { const q = pr(vecs[j]); ctx.beginPath(); ctx.moveTo(M.X(ps[0]), M.Y(ps[1])); ctx.lineTo(M.X(q[0]), M.Y(q[1])); ctx.stroke(); });
+        ctx.setLineDash([]);
+        nb.forEach(([j]) => { if (inSub.has(j)) return; const q = pr(vecs[j]); ctx.fillStyle = P.dim; ctx.font = `10.5px ${ff}`; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(EM.WORDS[j].w, M.X(q[0]) + 5, M.Y(q[1])); });
+      }
+      pts = [];
+      subset.forEach((i) => {
+        const p = pr(vecs[i]), o = pr(v0[i]);
+        const px = M.X(p[0]), py = M.Y(p[1]), ox = M.X(o[0]), oy = M.Y(o[1]);
+        const moved = AB.norm(AB.sub(vecs[i], v0[i])) > 1e-6;
+        if (moved) {
+          ctx.strokeStyle = P.faint; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+          ctx.beginPath(); ctx.arc(ox, oy, 6, 0, 7); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]);
+        }
+        const col = catColor(EM.WORDS[i].cat);
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, i === sel ? 8 : 6.5, 0, 7); ctx.fill();
+        if (i === sel) { ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, 11, 0, 7); ctx.stroke(); }
+        ctx.font = `${i === sel ? 700 : 600} 13px ${ff}`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        const tw = ctx.measureText(EM.WORDS[i].w).width; let lx = px + 12; if (lx + tw > w - 4) lx = px - 12 - tw;
+        ctx.fillStyle = AB.alpha(AB.color("bg-elev"), 0.8); ctx.fillRect(lx - 3, py - 9, tw + 6, 18);
+        ctx.fillStyle = P.text; ctx.fillText(EM.WORDS[i].w, lx, py);
+        pts.push([px, py, i]);
+      });
+    }, { aspect: 0.85, minHeight: 320, maxHeight: 500 });
+    const cv = $("em-ed-cv");
+    cv.addEventListener("pointerdown", (e) => {
+      const [x, y] = ptr(cv, e);
+      let best = -1, bd = e.pointerType === "touch" ? 28 : 18;
+      pts.forEach(([px, py, i]) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } });
+      if (best < 0) return;
+      e.preventDefault(); sel = best; drag = { id: e.pointerId }; cv.setPointerCapture(e.pointerId); update();
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const [x, y] = ptr(cv, e); const M = map(cvP.w, cvP.h);
+      const tx = M.iX(AB.clamp(x, 0, cvP.w)), ty = M.iY(AB.clamp(y, 0, cvP.h)), cur = pr(vecs[sel]);
+      const dx = tx - cur[0], dy = ty - cur[1];
+      vecs[sel] = vecs[sel].map((v, j) => v + dx * basis.e[0][j] + dy * basis.e[1][j]);
+      update();
+    });
+    const end = () => { drag = null; };
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+
+    // 막대 편집기
+    const RANGE = 1.6;
+    const bars = AB.canvas($("em-ed-bars"), (ctx, w, h) => {
+      if (sel < 0) return;
+      const P = AB.palette(), ff = getComputedStyle(document.body).fontFamily;
+      const L = 66, Rr = 40, rh = (h - 8) / 12, X = (v) => L + ((v + RANGE) / (2 * RANGE)) * (w - L - Rr);
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(X(0), 2); ctx.lineTo(X(0), h - 4); ctx.stroke();
+      EM.AXES.forEach((a, j) => {
+        const y = 4 + j * rh, v = vecs[sel][j], o = v0[sel][j];
+        ctx.fillStyle = j % 2 ? "transparent" : AB.alpha(AB.color("surface"), 0.6); ctx.fillRect(L, y, w - L - Rr, rh);
+        ctx.fillStyle = v >= 0 ? P.accent : P.accent2;
+        ctx.fillRect(Math.min(X(0), X(v)), y + rh * 0.22, Math.abs(X(v) - X(0)), rh * 0.56);
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(X(o), y + 2); ctx.lineTo(X(o), y + rh - 2); ctx.stroke(); ctx.setLineDash([]);
+        ctx.font = `12px ${ff}`; ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(a, L - 6, y + rh / 2);
+        ctx.font = `11px ${getComputedStyle(document.body).getPropertyValue("--mono") || "monospace"}`; ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.fillText(v.toFixed(2), w - Rr + 4, y + rh / 2);
+      });
+    }, { height: 290 });
+    const bcv = $("em-ed-bars"); let bdrag = null;
+    const barSet = (e) => {
+      const [x, y] = ptr(bcv, e), w = bars.w, h = bars.h, L = 66, Rr = 40, rh = (h - 8) / 12;
+      const j = bdrag != null ? bdrag : Math.floor((y - 4) / rh);
+      if (j < 0 || j > 11) return null;
+      const v = AB.clamp(((x - L) / (w - L - Rr)) * 2 * RANGE - RANGE, -RANGE, RANGE);
+      vecs[sel][j] = Math.round(v * 100) / 100; return j;
+    };
+    bcv.addEventListener("pointerdown", (e) => { if (sel < 0) return; const j = barSet(e); if (j == null) return; e.preventDefault(); bdrag = j; bcv.setPointerCapture(e.pointerId); update(); });
+    bcv.addEventListener("pointermove", (e) => { if (bdrag == null) return; barSet(e); update(); });
+    const bend = () => (bdrag = null); bcv.addEventListener("pointerup", bend); bcv.addEventListener("pointercancel", bend);
+
+    // 유사도 행렬
+    const simc = AB.canvas($("em-ed-sim"), (ctx, w, h) => {
+      const P = AB.palette(), ff = getComputedStyle(document.body).fontFamily;
+      const n = subset.length, L = 52, Tp = 22, cs = Math.min((w - L - 4) / n, (h - Tp - 4) / n);
+      ctx.textBaseline = "middle";
+      subset.forEach((i, r) => subset.forEach((j, c) => {
+        const s = AB.cos(vecs[i], vecs[j]);
+        ctx.fillStyle = AB.diverge(s); ctx.fillRect(L + c * cs + 0.5, Tp + r * cs + 0.5, cs - 1, cs - 1);
+        if (cs > 26) { ctx.fillStyle = Math.abs(s) > 0.6 ? AB.color("on-accent") : P.text; ctx.font = `${cs > 34 ? 11 : 9.5}px ${ff}`; ctx.textAlign = "center"; ctx.fillText(s.toFixed(2), L + (c + 0.5) * cs, Tp + (r + 0.5) * cs); }
+      }));
+      ctx.font = `11.5px ${ff}`;
+      subset.forEach((i, r) => {
+        ctx.fillStyle = i === sel ? P.accent : P.dim; ctx.textAlign = "right"; ctx.fillText(EM.WORDS[i].w, L - 5, Tp + (r + 0.5) * cs);
+        ctx.save(); ctx.translate(L + (r + 0.5) * cs, Tp - 4); ctx.textAlign = "center"; ctx.fillText(EM.WORDS[i].w.slice(0, 3), 0, -4); ctx.restore();
+      });
+      if (sel >= 0) { const r = subset.indexOf(sel); if (r >= 0) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(L, Tp + r * cs, n * cs, cs); ctx.strokeRect(L + r * cs, Tp, cs, n * cs); } }
+    }, { height: 290 });
+
+    function update() {
+      cvP.redraw(); bars.redraw(); simc.redraw();
+      if (sel < 0) return;
+      const nb = EM.nearest(vecs[sel], vecs, 5, new Set([sel]));
+      $("em-ed-nbt").textContent = `“${EM.WORDS[sel].w}”의 최근접 이웃 (전체 76단어)`;
+      $("em-ed-nb").innerHTML = nbHTML(nb, EM.WORDS.map((x) => x.w));
+      $("em-ed-bart").textContent = `“${EM.WORDS[sel].w}”의 12차원 벡터 (막대를 좌우로 끌어 편집 · 점선 = 원래 값)`;
+      AB.stat("em-ed-o-w", esc(EM.WORDS[sel].w));
+      AB.stat("em-ed-o-nn", esc(EM.WORDS[nb[0][0]].w) + `<small>${nb[0][1].toFixed(3)}</small>`);
+      const q = EM.ANALOGIES[Number(anSel.value)], ids = q.slice(0, 3).map((w) => EM.IDX.get(w));
+      const qv = AB.add(AB.sub(vecs[ids[0]], vecs[ids[1]]), vecs[ids[2]]);
+      const r = EM.nearest(qv, vecs, 1, new Set(ids))[0];
+      const okk = EM.WORDS[r[0]].w === q[3];
+      AB.stat("em-ed-o-an", `<span style="color:var(--${okk ? "ok" : "bad"})">${esc(EM.WORDS[r[0]].w)}</span><small>${r[1].toFixed(3)}</small>`);
+      AB.stat("em-ed-o-d", AB.norm(AB.sub(vecs[sel], v0[sel])).toFixed(3));
+    }
+    $("em-ed-nb").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (!b) return; const i = Number(b.dataset.i); if (subset.includes(i)) { sel = i; update(); } });
+    loadSet("royal");
+  })();
+
+  /* ======================================================= SIM 7: 브라우저 word2vec */
+  (function () {
+    const ta = $("em-w2-corpus"); ta.value = EM.CO_CORPUS;
+    let seed = 3, S = null, running = false, acc = 0, prevComps = null, view = null, coords = [];
+    const win = AB.range("em-w2-win", (v) => String(v));
+    const lr = AB.range("em-w2-lr", (v) => v.toFixed(3));
+    const kneg = AB.range("em-w2-k", (v) => String(v));
+    const ep = AB.range("em-w2-ep", (v) => String(v));
+    const dSeg = AB.seg("em-w2-d", () => reset());
+    $("em-w2-leg").innerHTML = EM.CO_GROUPS.map((g) => `<span><i style="background:var(--${g.col})"></i>${g.name}</span>`).join("") + `<span><i style="background:var(--text-faint)"></i>문맥 단어</span>`;
+    function reset() {
+      S = EM.SGNS(EM.tokenizeLines(ta.value), Number(dSeg()), seed);
+      prevComps = null; view = null; setRun(false); refresh();
+    }
+    function setRun(v) { running = v; $("em-w2-run").textContent = v ? "일시정지" : S && S.epoch > 0 ? "계속 학습" : "학습 시작"; }
+    $("em-w2-run").addEventListener("click", () => { if (!running && S.epoch >= ep()) ep.set(Math.min(600, S.epoch + 100)); setRun(!running); });
+    $("em-w2-one").addEventListener("click", () => { setRun(false); S.epochRun(win(), lr(), kneg()); refresh(); });
+    $("em-w2-reset").addEventListener("click", reset);
+    $("em-w2-seed").addEventListener("click", () => { seed++; reset(); });
+    let deb = 0; ta.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(reset, 300); });
+    function project() {
+      const X = S.Win;
+      if (S.d === 2) return X.map((v) => v.slice());
+      const P = EM.pca(X, 2);
+      if (prevComps) P.comps = P.comps.map((c, k) => (AB.dot(c, prevComps[k]) < 0 ? c.map((x) => -x) : c));
+      prevComps = P.comps;
+      return X.map((v) => EM.project(v, P));
+    }
+    function refresh() {
+      coords = project();
+      const xs = coords.map((p) => p[0]), ys = coords.map((p) => p[1]);
+      const nb = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+      if (!view) view = nb; else Object.keys(nb).forEach((k) => (view[k] += (nb[k] - view[k]) * 0.15));
+      AB.stat("em-w2-o-ep", String(S.epoch));
+      AB.stat("em-w2-o-l", S.losses.length ? S.losses[S.losses.length - 1].toFixed(3) : "—");
+      const [gi, go] = EM.groupCos(S.vocab, (w) => S.Win[S.vocab.indexOf(w)]);
+      AB.stat("em-w2-o-in", isFinite(gi) ? gi.toFixed(3) : "—");
+      AB.stat("em-w2-o-out", isFinite(go) ? go.toFixed(3) : "—");
+      sc.redraw(); lc.redraw();
+    }
+    const sc = AB.canvas($("em-w2-cv"), (ctx, w, h) => {
+      if (!S || !view) return;
+      const P = AB.palette(), ff = getComputedStyle(document.body).fontFamily;
+      const pad = 30, spanX = view.x1 - view.x0 || 1, spanY = view.y1 - view.y0 || 1;
+      const s = Math.min((w - 2 * pad - 50) / spanX, (h - 2 * pad) / spanY);
+      const cx = (view.x0 + view.x1) / 2, cy = (view.y0 + view.y1) / 2;
+      const X = (v) => w / 2 - 20 + (v - cx) * s, Y = (v) => h / 2 - (v - cy) * s;
+      ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(X(0), 0); ctx.lineTo(X(0), h); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke();
+      const order = S.vocab.map((wd, i) => [i, EM.groupOf(wd)]).sort((a, b) => a[1] - b[1]);
+      order.forEach(([i, g]) => {
+        const px = X(coords[i][0]), py = Y(coords[i][1]);
+        const isT = g >= 0;
+        ctx.fillStyle = isT ? AB.color(EM.CO_GROUPS[g].col) : P.faint;
+        ctx.globalAlpha = isT ? 1 : 0.55;
+        ctx.beginPath(); ctx.arc(px, py, isT ? 5 : 3, 0, 7); ctx.fill();
+        ctx.font = isT ? `600 12px ${ff}` : `10.5px ${ff}`; ctx.fillStyle = isT ? P.text : P.faint;
+        ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(S.vocab[i], px + 7, py);
+        ctx.globalAlpha = 1;
+      });
+      ctx.fillStyle = P.faint; ctx.font = `11px ${ff}`; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(S.d === 2 ? "입력 임베딩 v (d=2, 좌표 그대로)" : "입력 임베딩 v (d=8 → PCA 2D)", 8, 8);
+    }, { aspect: 0.72, minHeight: 300, maxHeight: 460 });
+    const lc = AB.canvas($("em-w2-loss"), (ctx, w, h) => {
+      if (!S) return;
+      const L = S.losses, P = AB.palette();
+      const ymax = Math.max(1, ...(L.length ? [L[0] * 1.05] : [5]));
+      AB.chart(ctx, { x: 46, y: 12, w: w - 60, h: h - 40 }, {
+        x: [0, Math.max(ep(), S.epoch, 10)], y: [0, ymax], xLabel: "에폭", yLabel: "손실",
+        series: [{ data: L.map((v, i) => [i + 1, v]), color: P.accent, width: 2 }],
+      });
+    }, { height: 150 });
+    AB.loop($("sim-w2v"), (dt) => {
+      if (!running || !S) return;
+      acc += dt * 30;
+      let n = 0;
+      while (acc >= 1 && n < 4) { acc -= 1; n++; if (S.epoch < ep()) S.epochRun(win(), lr(), kneg()); }
+      if (S.epoch >= ep()) setRun(false);
+      if (n) refresh();
+    });
+    reset();
+  })();
+
+  /* ======================================================= SIM 8: 문장 임베딩 */
+  (function () {
+    const vecs = EM.makeVecs(0.05);
+    const DOCS = [
+      "왕 과 여왕 이 파리 에 갔다",
+      "공주 가 딸기 와 사과 를 먹었다",
+      "소년 이 개 와 달렸다",
+      "할머니 가 김치 와 밥 을 먹었다",
+      "고양이 가 쥐 를 봤다",
+      "쥐 가 고양이 를 봤다",
+      "도쿄 와 서울 에 갔다",
+      "코끼리 와 고래 는 크다",
+      "빨강 과 파랑 을 봤다",
+    ];
+    const PRE = ["왕자 가 런던 에 갔다", "빨강 사과 를 먹었다", "강아지 와 소녀 가 달렸다", "할아버지 가 만두 를 먹었다", "베이징 에 갔다"];
+    const q = $("em-se-q"); let off = new Set();
+    const pool = AB.seg("em-se-pool", render);
+    $("em-se-pre").innerHTML = PRE.map((p, i) => `<button class="btn" data-i="${i}">${p}</button>`).join("");
+    $("em-se-pre").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (!b) return; q.value = PRE[b.dataset.i]; off = new Set(); render(); });
+    q.addEventListener("input", () => { off = new Set(); render(); });
+    $("em-se-qt").addEventListener("click", (e) => { const b = e.target.closest("button[data-k]"); if (!b) return; const k = Number(b.dataset.k); off.has(k) ? off.delete(k) : off.add(k); render(); });
+    const toks = (s) => s.trim().split(/\s+/).filter(Boolean);
+    function embed(ts, skip) {
+      const use = ts.map((t, k) => [t, k]).filter(([t, k]) => EM.IDX.has(t) && !(skip && skip.has(k))).map(([t]) => vecs[EM.IDX.get(t)]);
+      if (!use.length) return null;
+      if (pool() === "max") return use[0].map((_, j) => Math.max(...use.map((v) => v[j])));
+      return use[0].map((_, j) => use.reduce((s, v) => s + v[j], 0) / use.length);
+    }
+    function render() {
+      const qt = toks(q.value);
+      $("em-se-qt").innerHTML = qt.map((t, k) => EM.IDX.has(t) ? `<button class="tok em-click${off.has(k) ? " dim" : " em-on"}" data-k="${k}" title="눌러서 풀링에서 빼기/넣기">${esc(t)}</button>` : `<span class="tok dim">${esc(t)}</span>`).join("");
+      const qv = embed(qt, off);
+      AB.stat("em-se-o-n", String(qt.filter((t, k) => EM.IDX.has(t) && !off.has(k)).length) + `<small>/ ${qt.length}</small>`);
+      const sc = DOCS.map((d, i) => { const dv = embed(toks(d)); return [i, qv && dv ? AB.cos(qv, dv) : NaN]; }).sort((a, b) => (isNaN(b[1]) ? -2 : b[1]) - (isNaN(a[1]) ? -2 : a[1]));
+      $("em-se-docs").innerHTML = sc.map(([i, s], r) => `<div class="em-doc${r === 0 && isFinite(s) ? " top" : ""}"><span class="rk">${r + 1}</span><span class="toks">${toks(DOCS[i]).map((t) => `<span class="tok${EM.IDX.has(t) ? "" : " dim"}">${esc(t)}</span>`).join("")}</span><span class="sc">${isFinite(s) ? s.toFixed(3) : "—"}</span><span class="sb"><b style="width:${isFinite(s) ? Math.max(0, s) * 100 : 0}%"></b></span></div>`).join("");
+      AB.stat("em-se-o-1", isFinite(sc[0][1]) ? sc[0][1].toFixed(3) : "—");
+      const a = embed(toks(DOCS[4])), b = embed(toks(DOCS[5]));
+      AB.stat("em-se-o-o", AB.cos(a, b).toFixed(3));
+    }
+    render();
+  })();
+
+  /* ======================================================= SIM 9: Matryoshka 차원 자르기 + 양자화 */
+  (function () {
+    if (!$("sim-mrl")) return;
+    const N = 200, D = 64, K = 10, NC = 20, DECAY = 0.92, NOISE = 0.8, RESC = 40;
+    // 합성 데이터(시드 고정): 군집 중심 + 잡음, 차원 j의 크기 DECAY^j → 분산이 앞쪽에 몰림(MRL 유사)
+    const r = AB.rng(2026);
+    const C = []; for (let c = 0; c < NC; c++) C.push(Array.from({ length: D }, () => r.n()));
+    const sc = Array.from({ length: D }, (_, j) => Math.pow(DECAY, j));
+    const XM = []; for (let i = 0; i < N; i++) { const c = C[i % NC]; XM.push(c.map((v, j) => sc[j] * (v + NOISE * r.n()))); }
+    // 무작위 직교 회전(그람–슈미트) → 비MRL: 코사인은 그대로, 분산은 모든 차원에 고르게
+    const Q = [];
+    for (let k = 0; k < D; k++) {
+      const v = Array.from({ length: D }, () => r.n());
+      for (const q of Q) { let d = 0; for (let j = 0; j < D; j++) d += v[j] * q[j]; for (let j = 0; j < D; j++) v[j] -= d * q[j]; }
+      let n = 0; for (let j = 0; j < D; j++) n += v[j] * v[j]; n = Math.sqrt(n); Q.push(v.map((x) => x / n));
+    }
+    const XR = XM.map((x) => Q.map((q) => { let d = 0; for (let j = 0; j < D; j++) d += q[j] * x[j]; return d; }));
+    const variance = (X) => { const m = Array(D).fill(0), v = Array(D).fill(0); X.forEach((x) => x.forEach((a, j) => (m[j] += a / N))); X.forEach((x) => x.forEach((a, j) => (v[j] += (a - m[j]) ** 2 / (N - 1)))); return v; };
+    const VAR = { m: variance(XM), r: variance(XR) };
+
+    function prep(X, dp, mode) {
+      const Y = X.map((x) => x.slice(0, dp));
+      if (mode === "int8") {
+        const s = []; for (let j = 0; j < dp; j++) { let m = 0; Y.forEach((y) => (m = Math.max(m, Math.abs(y[j])))); s.push(m / 127 || 1); }
+        return Y.map((y) => y.map((v, j) => Math.round(v / s[j]) * s[j]));
+      }
+      if (mode === "bin") return Y.map((y) => y.map((v) => (v >= 0 ? 1 : -1)));
+      return Y;
+    }
+    // 각 질의 i에 대해 다른 199개와의 유사도 상위 k (동점은 번호순)
+    function ranks(Y, k, cos) {
+      const nr = Y.map((y) => Math.sqrt(y.reduce((s, v) => s + v * v, 0)) || 1);
+      return Y.map((q, i) => {
+        const s = [];
+        for (let j = 0; j < N; j++) { if (j === i) continue; let d = 0; const y = Y[j]; for (let t = 0; t < q.length; t++) d += q[t] * y[t]; s.push([j, cos ? d / (nr[i] * nr[j]) : d]); }
+        s.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+        return s.slice(0, k).map((x) => x[0]);
+      });
+    }
+    const GT = ranks(XM, K, true); // 64D FP32 기준 (XR도 회전이라 동일)
+    const hits = (T) => { let h = 0; T.forEach((t, i) => { const g = new Set(GT[i]); t.forEach((x) => { if (g.has(x)) h++; }); }); return h / (N * K); };
+    function recall(X, dp, mode) {
+      if (mode === "resc") {
+        const B = prep(X, dp, "bin"), F = prep(X, dp, "f32");
+        const nF = F.map((y) => Math.sqrt(y.reduce((s, v) => s + v * v, 0)) || 1);
+        const cand = ranks(B, RESC, false);
+        return hits(cand.map((cs, i) => cs.map((j) => { let d = 0; for (let t = 0; t < dp; t++) d += F[i][t] * F[j][t]; return [j, d / (nF[i] * nF[j])]; })
+          .sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, K).map((x) => x[0])));
+      }
+      return hits(ranks(prep(X, dp, mode), K, mode !== "bin"));
+    }
+    const DS = [1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 56, 64];
+    const cache = {};
+    function curve(mode) {
+      if (!cache[mode]) cache[mode] = { m: DS.map((d) => [d, recall(XM, d, mode)]), r: DS.map((d) => [d, recall(XR, d, mode)]) };
+      return cache[mode];
+    }
+    const pt = {};
+    function at(mode, d) { const k = mode + ":" + d; if (!(k in pt)) pt[k] = [recall(XM, d, mode), recall(XR, d, mode)]; return pt[k]; }
+    const bytesPer = (mode, d) => (mode === "f32" ? 4 * d : mode === "int8" ? d : Math.ceil(d / 8));
+
+    const dGet = AB.range("em-mrl-d", (v) => String(v), refresh);
+    const qGet = AB.seg("em-mrl-q", refresh);
+    $("em-mrl-ref").addEventListener("change", refresh);
+    let box = null, vbox = null;
+    const cv = AB.canvas($("em-mrl-cv"), (ctx, w, h) => {
+      const P = AB.palette(), mode = qGet(), d = dGet(), cu = curve(mode);
+      const series = [];
+      if ($("em-mrl-ref").checked && mode !== "f32") {
+        const f = curve("f32");
+        series.push({ data: f.m, color: AB.alpha(P.accent, 0.55), width: 1.5, dash: [5, 4] }, { data: f.r, color: AB.alpha(P.accent2, 0.55), width: 1.5, dash: [5, 4] });
+      }
+      series.push({ data: cu.m, color: P.accent, width: 2.5 }, { data: cu.r, color: P.accent2, width: 2.5 });
+      const v = at(mode, d);
+      const res = AB.chart(ctx, { x: 46, y: 12, w: w - 60, h: h - 52 }, {
+        x: [1, 64], y: [0, 1], xLabel: "남긴 차원 d′", yLabel: "recall@10", series,
+        vlines: [{ x: d, color: P.dim, dash: [3, 3] }],
+        points: [{ x: d, y: v[0], color: P.accent, r: 5 }, { x: d, y: v[1], color: P.accent2, r: 5 }],
+        yFmt: (y) => y.toFixed(1),
+      });
+      box = res.box;
+      const ff = getComputedStyle(document.body).fontFamily;
+      ctx.font = `600 12px ${ff}`; ctx.textBaseline = "top"; ctx.textAlign = "right";
+      ctx.fillStyle = P.accent; ctx.fillText("● MRL (앞쪽에 정보 집중)", box.x + box.w - 6, box.y + box.h - 40);
+      ctx.fillStyle = P.accent2; ctx.fillText("● 비MRL (회전: 고르게 분산)", box.x + box.w - 6, box.y + box.h - 22);
+    }, { aspect: 0.5, minHeight: 220, maxHeight: 300 });
+    const vc = AB.canvas($("em-mrl-var"), (ctx, w, h) => {
+      const P = AB.palette(), d = dGet();
+      const bx = { x: 46, y: 8, w: w - 60, h: h - 30 }; vbox = bx;
+      const mx = Math.max(...VAR.m, ...VAR.r), bw = bx.w / D;
+      ctx.fillStyle = AB.alpha(P.accent, 0.08); ctx.fillRect(bx.x, bx.y, bw * d, bx.h);
+      for (let j = 0; j < D; j++) {
+        const hm = (VAR.m[j] / mx) * bx.h, hr = (VAR.r[j] / mx) * bx.h, x0 = bx.x + j * bw;
+        ctx.globalAlpha = j < d ? 1 : 0.35;
+        ctx.fillStyle = P.accent; ctx.fillRect(x0 + bw * 0.08, bx.y + bx.h - hm, bw * 0.4, hm);
+        ctx.fillStyle = P.accent2; ctx.fillRect(x0 + bw * 0.52, bx.y + bx.h - hr, bw * 0.4, hr);
+      }
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx.x, bx.y + bx.h + 0.5); ctx.lineTo(bx.x + bx.w, bx.y + bx.h + 0.5); ctx.stroke();
+      ctx.strokeStyle = P.text; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(bx.x + bw * d, bx.y); ctx.lineTo(bx.x + bw * d, bx.y + bx.h); ctx.stroke(); ctx.setLineDash([]);
+      const sum = (a, n) => a.slice(0, n).reduce((s, v) => s + v, 0);
+      const fm = sum(VAR.m, d) / sum(VAR.m, D), fr = sum(VAR.r, d) / sum(VAR.r, D);
+      const ff = getComputedStyle(document.body).fontFamily;
+      ctx.font = `600 12px ${ff}`; ctx.textBaseline = "top";
+      const tx = bx.x + bw * d + 6, right = tx > bx.x + bx.w - 150;
+      ctx.textAlign = right ? "right" : "left";
+      const xx = right ? bx.x + bw * d - 6 : tx;
+      ctx.fillStyle = P.accent; ctx.fillText(`MRL ${(fm * 100).toFixed(0)}%`, xx, bx.y + 4);
+      ctx.fillStyle = P.accent2; ctx.fillText(`비MRL ${(fr * 100).toFixed(0)}%`, xx, bx.y + 20);
+      ctx.fillStyle = P.faint; ctx.font = `11px ${ff}`; ctx.textAlign = "left"; ctx.fillText("차원 1", bx.x, bx.y + bx.h + 5); ctx.textAlign = "right"; ctx.fillText("64", bx.x + bx.w, bx.y + bx.h + 5);
+    }, { height: 120 });
+    // 그래프 드래그로 d′ 선택
+    function drag(canvas, getBox, fromX) {
+      const set = (e) => { const b = getBox(); if (!b) return; const rc = canvas.getBoundingClientRect(); dGet.set(AB.clamp(Math.round(fromX(e.clientX - rc.left, b)), 1, 64), true); };
+      canvas.addEventListener("pointerdown", (e) => { canvas.setPointerCapture(e.pointerId); set(e); });
+      canvas.addEventListener("pointermove", (e) => { if (canvas.hasPointerCapture(e.pointerId)) set(e); });
+    }
+    drag($("em-mrl-cv"), () => box, (x, b) => 1 + ((x - b.x) / b.w) * 63);
+    drag($("em-mrl-var"), () => vbox, (x, b) => Math.ceil(((x - b.x) / b.w) * 64));
+    function refresh() {
+      const mode = qGet(), d = dGet(), v = at(mode, d);
+      AB.stat("em-mrl-o-a", v[0].toFixed(2));
+      AB.stat("em-mrl-o-b", v[1].toFixed(2));
+      const by = bytesPer(mode, d);
+      AB.stat("em-mrl-o-by", by + " B" + (mode === "resc" ? "<small> (메모리)</small>" : ""));
+      AB.stat("em-mrl-o-r", "1/" + AB.fmt(256 / by, 3));
+      AB.stat("em-mrl-o-big", AB.bytes(1e8 * 4096 * 4 * (by / 256), 3, false));
+      cv.redraw(); vc.redraw();
+    }
+    refresh();
+  })();
+})();
+</script>
+</body>
+</html>

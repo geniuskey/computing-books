@@ -1,0 +1,392 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>AIBook · 신경망에서 LLM까지</title>
+<meta name="description" content="벡터 하나에서 대규모 언어 모델까지 — 공학도를 위한 인터랙티브 AI 교과서. 임베딩 공간을 직접 돌리고, 어텐션 행렬을 손으로 편집하며 머신러닝 기초부터 신경망·Transformer·LLM·양자화·RAG·프롬프트·에이전트 시스템·실전 검증까지 배운다.">
+<link rel="stylesheet" href="css/style.css">
+<script src="js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  .chain { overflow-x: auto; }
+  .chain svg { min-width: 820px; }
+  .paths { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .path { padding: 18px 20px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elev); }
+  .path h3 { margin: 0 0 6px; font-size: 17px; }
+  .path p { margin: 0 0 10px; color: var(--text-dim); font-size: 14.5px; }
+  .path .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .path .steps a { font-family: var(--mono); font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .path .steps a:hover { text-decoration: none; filter: brightness(1.1); }
+  .numbers { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .numbers div { background: var(--bg-elev); padding: 18px 20px; }
+  .numbers b { display: block; font-family: var(--mono); font-size: 24px; white-space: nowrap; letter-spacing: -0.02em; color: var(--text); }
+  .numbers span { color: var(--text-dim); font-size: 14px; }
+  .hero-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .hero-badges span { font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); background: var(--bg-elev); }
+  .feat { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .feat a { display: block; padding: 20px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); box-shadow: var(--shadow); }
+  .feat a:hover { text-decoration: none; border-color: var(--accent); }
+  .feat .k { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; letter-spacing: .1em; }
+  .feat h3 { margin: 6px 0 6px; font-size: 18px; }
+  .feat p { margin: 0; color: var(--text-dim); font-size: 14.5px; line-height: 1.6; }
+  .feat canvas { display: block; width: 100%; height: 150px; margin-top: 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--canvas-bg); touch-action: none; cursor: grab; }
+  .hm-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-dim); margin-top: 10px; }
+  .hm-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../shared/css/book-shell.css">
+<script defer src="../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-root="">
+<section class="home-hero">
+  <div class="inner">
+    <div>
+      <div class="eyebrow">Interactive AI Textbook</div>
+      <h1>벡터 하나에서<br><span class="grad">대규모 언어 모델까지</span></h1>
+      <p>ChatGPT가 문장을 이어 쓰는 원리는 생각보다 단순한 연산의 반복입니다. 숫자 목록(벡터)이 의미를 담고, 내적이 관계를 재고, 소프트맥스가 주의를 나눕니다. 임베딩 공간을 직접 돌려 보고, 어텐션 행렬을 손으로 고쳐 보고, 브라우저 안에서 작은 신경망을 학습시키며 Transformer와 LLM을 바닥부터 이해하는 교과서입니다. MoE·하이브리드 어텐션·FP4·추론 모델·에이전트까지, 2026년 지금의 모델이 실제로 어떻게 만들어지는지도 다룹니다. 머신러닝 기초와 평가 지표에서 출발해 프롬프트 엔지니어링, RAG·에이전트·MCP 시스템 설계, 멀티모달, 결과 검증과 보안 같은 실전 활용 역량까지 한 권으로 익힙니다.</p>
+      <div class="cta">
+        <a class="primary" href="chapters/ml.html">0장부터 시작하기 →</a>
+        <a class="ghost" href="chapters/glossary.html#curriculum">커리큘럼 맵 보기</a>
+        <a class="ghost" href="chapters/attention.html">어텐션 행렬 만져 보기</a>
+      </div>
+      <div class="hero-badges">
+        <span>18개 챕터</span><span>120여 개 학습 개념</span><span>100개가 넘는 시뮬레이터</span><span>2026년 최신 동향 반영</span><span>브라우저 속 실제 계산</span><span>공대 학부 수준</span>
+      </div>
+    </div>
+    <div class="hero-3d" id="hero3d"><span class="hint">드래그해서 돌려보세요 · 의미가 비슷한 단어끼리 모이고, 문장의 토큰들이 서로 주의를 기울입니다</span></div>
+  </div>
+</section>
+
+<section class="home-section">
+  <h2>LLM은 어떻게 한 단어를 고르는가</h2>
+  <p class="sub">한 문장으로: <b>글자를 벡터로 바꾸고, 벡터끼리 서로를 참고하게 한 뒤, 다음 토큰의 확률을 계산한다.</b> 이 흐름을 따라가는 것이 이 교과서의 목차입니다.</p>
+  <figure class="diagram chain">
+    <svg viewBox="0 0 1120 300" role="img" aria-label="텍스트에서 다음 토큰까지의 흐름과 챕터 지도">
+      <defs>
+        <marker id="hm-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+      </defs>
+      <!-- 1 text/tokens -->
+      <g transform="translate(14,34)">
+        <rect width="150" height="130" rx="14" class="f-elev"/>
+        <text x="75" y="30" text-anchor="middle" class="t-mono">"고양이가 매트에"</text>
+        <g transform="translate(14,48)">
+          <rect width="38" height="22" rx="5" class="f-acc-soft"/><text x="19" y="15" text-anchor="middle" class="t-mono">고양</text>
+          <rect x="42" width="30" height="22" rx="5" class="f-acc-soft"/><text x="57" y="15" text-anchor="middle" class="t-mono">이가</text>
+          <rect x="76" width="30" height="22" rx="5" class="f-acc-soft"/><text x="91" y="15" text-anchor="middle" class="t-mono">매트</text>
+          <rect x="110" width="12" height="22" rx="5" class="f-acc-soft"/><text x="116" y="15" text-anchor="middle" class="t-mono">에</text>
+        </g>
+        <text x="75" y="102" text-anchor="middle" class="t-mono">→ [1523, 88, 4012, 7]</text>
+        <text x="75" y="166" text-anchor="middle" class="t">토큰화</text>
+        <text x="75" y="184" text-anchor="middle" class="t-mono">Ch.04</text>
+      </g>
+      <path d="M172 99 H206" class="s-acc" marker-end="url(#hm-arr)"/>
+      <!-- 2 embedding -->
+      <g transform="translate(214,34)">
+        <rect width="150" height="130" rx="14" class="f-elev"/>
+        <path d="M24 108 V22 M24 108 H134" class="s-axis"/>
+        <g class="f-acc"><circle cx="50" cy="44" r="4"/><circle cx="60" cy="52" r="4"/><circle cx="44" cy="58" r="4"/></g>
+        <g class="f-acc2"><circle cx="104" cy="88" r="4"/><circle cx="116" cy="78" r="4"/><circle cx="98" cy="96" r="4"/></g>
+        <g style="fill:var(--warn)"><circle cx="110" cy="36" r="4"/><circle cx="96" cy="44" r="4"/></g>
+        <text x="76" y="126" text-anchor="middle" class="t-mono">의미 = 위치</text>
+        <text x="75" y="166" text-anchor="middle" class="t">벡터 · 임베딩</text>
+        <text x="75" y="184" text-anchor="middle" class="t-mono">Ch.01, 04</text>
+      </g>
+      <path d="M372 99 H406" class="s-acc" marker-end="url(#hm-arr)"/>
+      <!-- 3 attention -->
+      <g transform="translate(414,34)">
+        <rect width="150" height="130" rx="14" class="f-elev"/>
+        <g transform="translate(35,18)">
+          <rect width="20" height="20" style="fill:var(--accent)" opacity=".95"/>
+          <rect y="20" width="20" height="20" style="fill:var(--accent)" opacity=".45"/><rect x="20" y="20" width="20" height="20" style="fill:var(--accent)" opacity=".6"/>
+          <rect y="40" width="20" height="20" style="fill:var(--accent)" opacity=".2"/><rect x="20" y="40" width="20" height="20" style="fill:var(--accent)" opacity=".7"/><rect x="40" y="40" width="20" height="20" style="fill:var(--accent)" opacity=".3"/>
+          <rect y="60" width="20" height="20" style="fill:var(--accent)" opacity=".15"/><rect x="20" y="60" width="20" height="20" style="fill:var(--accent)" opacity=".25"/><rect x="40" y="60" width="20" height="20" style="fill:var(--accent)" opacity=".2"/><rect x="60" y="60" width="20" height="20" style="fill:var(--accent)" opacity=".75"/>
+          <rect width="80" height="80" fill="none" style="stroke:var(--border)"/>
+        </g>
+        <text x="75" y="118" text-anchor="middle" class="t-mono">softmax(QKᵀ/√d)·V</text>
+        <text x="75" y="166" text-anchor="middle" class="t">어텐션</text>
+        <text x="75" y="184" text-anchor="middle" class="t-mono">Ch.05</text>
+      </g>
+      <path d="M572 99 H606" class="s-acc" marker-end="url(#hm-arr)"/>
+      <!-- 4 transformer -->
+      <g transform="translate(614,34)">
+        <rect width="150" height="130" rx="14" class="f-elev"/>
+        <g transform="translate(30,16)">
+          <rect width="90" height="20" rx="4" class="f-acc-soft"/><text x="45" y="14" text-anchor="middle" class="t-mono">Attention</text>
+          <rect y="26" width="90" height="20" rx="4" class="f-acc2-soft"/><text x="45" y="40" text-anchor="middle" class="t-mono">FFN</text>
+          <rect y="52" width="90" height="20" rx="4" class="f-acc-soft"/><text x="45" y="66" text-anchor="middle" class="t-mono">Attention</text>
+          <rect y="78" width="90" height="20" rx="4" class="f-acc2-soft"/><text x="45" y="92" text-anchor="middle" class="t-mono">FFN</text>
+        </g>
+        <text x="138" y="70" class="t-mono" text-anchor="end">×N</text>
+        <text x="75" y="166" text-anchor="middle" class="t">Transformer</text>
+        <text x="75" y="184" text-anchor="middle" class="t-mono">Ch.02–03, 06</text>
+      </g>
+      <path d="M772 99 H806" class="s-acc" marker-end="url(#hm-arr)"/>
+      <!-- 5 next token -->
+      <g transform="translate(814,34)">
+        <rect width="150" height="130" rx="14" class="f-elev"/>
+        <g transform="translate(20,20)">
+          <rect y="0" width="96" height="14" rx="3" class="f-acc"/><text x="102" y="11" class="t-mono">앉았</text>
+          <rect y="22" width="54" height="14" rx="3" class="f-acc" opacity=".6"/><text x="60" y="33" class="t-mono">누웠</text>
+          <rect y="44" width="30" height="14" rx="3" class="f-acc" opacity=".4"/><text x="36" y="55" class="t-mono">있</text>
+          <rect y="66" width="14" height="14" rx="3" class="f-acc" opacity=".25"/><text x="20" y="77" class="t-mono">…</text>
+        </g>
+        <text x="75" y="120" text-anchor="middle" class="t-mono">P(다음 토큰)</text>
+        <text x="75" y="166" text-anchor="middle" class="t">LLM · 생성</text>
+        <text x="75" y="184" text-anchor="middle" class="t-mono">Ch.07–08</text>
+      </g>
+      <!-- 6 side: quant + rag + serving -->
+      <g transform="translate(990,20)">
+        <rect width="118" height="38" rx="9" class="f-acc2-soft"/><text x="59" y="17" text-anchor="middle" class="t">양자화</text><text x="59" y="31" text-anchor="middle" class="t-mono">Ch.09</text>
+        <rect y="44" width="118" height="38" rx="9" class="f-acc2-soft"/><text x="59" y="61" text-anchor="middle" class="t">RAG</text><text x="59" y="75" text-anchor="middle" class="t-mono">Ch.10</text>
+        <rect y="88" width="118" height="38" rx="9" class="f-acc-soft"/><text x="59" y="105" text-anchor="middle" class="t">추론 · 에이전트</text><text x="59" y="119" text-anchor="middle" class="t-mono">Ch.11</text>
+        <rect y="132" width="118" height="38" rx="9" class="f-acc2-soft"/><text x="59" y="149" text-anchor="middle" class="t">서빙 설계</text><text x="59" y="163" text-anchor="middle" class="t-mono">Ch.12</text>
+      </g>
+      <path d="M970 99 H984" class="s-line" stroke-dasharray="3 3"/>
+      <!-- loop back -->
+      <path d="M889 230 V252 H89 V234" class="s-acc" stroke-dasharray="5 5" fill="none" marker-end="url(#hm-arr)"/>
+      <text x="489" y="280" text-anchor="middle" class="t-dim">고른 토큰을 입력 끝에 붙이고 다시 처음부터 — 자기회귀 생성 (Ch.08)</text>
+    </svg>
+    <figcaption><b>그림 0-1.</b> 텍스트가 다음 토큰이 되기까지의 흐름과 챕터 지도. 양자화(Ch.09), RAG(Ch.10), 서빙 설계(Ch.12)는 이 흐름을 더 싸고, 더 정확하고, 더 빠르게 만드는 기술이고, 추론 모델과 에이전트(Ch.11)는 이 루프를 길게 돌리며 도구를 쓰게 만든 2025~2026년의 흐름입니다.</figcaption>
+  </figure>
+</section>
+
+<section class="home-section" style="padding-top:0">
+  <h2>읽지 말고, 만져 보세요</h2>
+  <p class="sub">이 책의 그림은 대부분 살아 있습니다. 아래 두 개는 맛보기 — 점을 끌어 보세요. 본문에서는 훨씬 큰 버전이 기다립니다.</p>
+  <div class="feat">
+    <a href="chapters/embedding.html">
+      <span class="k">CHAPTER 04 · EMBEDDING</span>
+      <h3>임베딩 공간을 손으로 비틀기</h3>
+      <p>단어는 고차원 공간의 점입니다. 점을 끌어 옮기면 가장 가까운 이웃이 바뀝니다. 본문에서는 3D 공간을 돌리고 왕 − 남자 + 여자를 직접 계산합니다.</p>
+      <canvas id="mini-emb" aria-label="드래그 가능한 미니 임베딩 공간"></canvas>
+    </a>
+    <a href="chapters/attention.html">
+      <span class="k">CHAPTER 05 · ATTENTION</span>
+      <h3>어텐션 행렬을 직접 편집하기</h3>
+      <p>쿼리 점을 끌면 키와의 내적이 바뀌고, 소프트맥스가 주의를 다시 나눕니다. 본문에서는 점수 행렬의 칸을 직접 올리고 내립니다.</p>
+      <canvas id="mini-attn" aria-label="드래그 가능한 미니 어텐션"></canvas>
+    </a>
+  </div>
+</section>
+
+<section class="home-section" style="padding-top:0">
+  <h2>숫자로 보는 요즘 AI</h2>
+  <p class="sub">이 교과서를 끝내면 아래 숫자가 어디서 나오는지, 서로 어떻게 얽혀 있는지 설명할 수 있게 됩니다.</p>
+  <div class="numbers">
+    <div><b>≈ 2N</b><span>파라미터 N개짜리 모델이 토큰 하나를 만들 때 드는 연산(FLOPs). MoE라면 N은 '활성' 파라미터</span></div>
+    <div><b>5.1B / 117B</b><span>gpt-oss-120b가 토큰마다 실제로 쓰는 파라미터 / 전체 파라미터. 전문가 128개 중 4개만 깨어난다</span></div>
+    <div><b>128 KiB</b><span>Llama 3 8B가 토큰 하나마다 쌓는 KV 캐시(FP16). 128k 문맥이면 16 GiB — 그래서 MLA·하이브리드 어텐션이 나왔다</span></div>
+    <div><b>3 : 1</b><span>Qwen3.5의 선형 어텐션(Gated DeltaNet) 층과 풀 어텐션 층의 비율 (2026)</span></div>
+    <div><b>1M 토큰</b><span>DeepSeek-V4의 기본 컨텍스트 길이. 압축·희소 어텐션으로 KV를 수십 분의 1로 줄였다 (2026)</span></div>
+    <div><b>4.5 bit</b><span>NVFP4의 원소당 실제 비용: 4비트 값 16개가 FP8 스케일 하나를 공유한다</span></div>
+    <div><b>288 GB</b><span>NVIDIA Rubin GPU 한 개의 HBM4 용량(약 19~22 TB/s, 2026년 하반기 공급)</span></div>
+    <div><b>~20 → 1000+</b><span>Chinchilla의 계산 최적 '파라미터당 토큰' vs 추론 비용을 아끼려 훨씬 더 오래 학습하는 요즘 소형 모델</span></div>
+  </div>
+</section>
+
+<section class="home-section" style="padding-top:0">
+  <h2>전체 챕터</h2>
+  <p class="sub">순서대로 읽어도 좋고, 관심 있는 장부터 골라 읽어도 됩니다. 각 장은 개념 → 그림 → 수식 → 시뮬레이터 → 퀴즈 순서로 구성됩니다.</p>
+  <div class="ch-grid" id="chgrid"></div>
+</section>
+
+<section class="home-section" style="padding-top:0">
+  <h2>추천 학습 경로</h2>
+  <p class="sub">배경과 목적에 따라 이렇게 읽어 보세요.</p>
+  <div class="paths">
+    <div class="path"><h3>AI 기초 역량 · 시험 대비</h3><p>AI 활용 능력을 체계적으로 갖추려면. ML 기초와 지표 → LLM 원리 → 프롬프트 → RAG·에이전트 → 실전 검증, 마지막에 커리큘럼 맵으로 점검.</p><div class="steps"><a href="chapters/ml.html">00</a><a href="chapters/embedding.html">04</a><a href="chapters/llm.html">07</a><a href="chapters/generation.html">08</a><a href="chapters/prompt.html">13</a><a href="chapters/rag.html">10</a><a href="chapters/aisystem.html">14</a><a href="chapters/multimodal.html">15</a><a href="chapters/practice.html">16</a><a href="chapters/glossary.html#curriculum">17</a></div></div>
+    <div class="path"><h3>입문 · 전체 그림</h3><p>AI가 처음이라면. 학습의 기본 개념에서 출발해 LLM이 글을 쓰는 원리까지 한 줄로.</p><div class="steps"><a href="chapters/ml.html">00</a><a href="chapters/vector.html">01</a><a href="chapters/neuron.html">02</a><a href="chapters/embedding.html">04</a><a href="chapters/attention.html">05</a><a href="chapters/generation.html">08</a></div></div>
+    <div class="path"><h3>Transformer 핵심만</h3><p>신경망 기초는 안다면. 임베딩·어텐션·블록 구조에 집중.</p><div class="steps"><a href="chapters/embedding.html">04</a><a href="chapters/attention.html">05</a><a href="chapters/transformer.html">06</a><a href="chapters/llm.html">07</a></div></div>
+    <div class="path"><h3>ML 엔지니어 · 학습</h3><p>모델을 직접 학습시키려면. 최적화(Muon), 스케일링, 정렬(RLHF·DPO), 추론 RL(GRPO).</p><div class="steps"><a href="chapters/neuron.html">02</a><a href="chapters/training.html">03</a><a href="chapters/transformer.html">06</a><a href="chapters/llm.html">07</a><a href="chapters/agent.html">11</a></div></div>
+    <div class="path"><h3>추론 · 하드웨어</h3><p>LLM을 빠르고 싸게 돌리려면. KV 캐시, 양자화, 루프라인, 배칭.</p><div class="steps"><a href="chapters/transformer.html">06</a><a href="chapters/generation.html">08</a><a href="chapters/quantization.html">09</a><a href="chapters/design.html">12</a></div></div>
+    <div class="path"><h3>AI 애플리케이션 · 에이전트</h3><p>LLM으로 서비스를 만들려면. 프롬프트, RAG, 도구를 쓰는 에이전트, 가드레일과 관측, 검증과 비용 설계.</p><div class="steps"><a href="chapters/generation.html">08</a><a href="chapters/prompt.html">13</a><a href="chapters/rag.html">10</a><a href="chapters/agent.html">11</a><a href="chapters/aisystem.html">14</a><a href="chapters/practice.html">16</a><a href="chapters/design.html">12</a></div></div>
+    <div class="path"><h3>2026 최신 동향만</h3><p>기초는 안다면. MoE·하이브리드 어텐션·FP4·추론 모델·멀티모달·분리 서빙.</p><div class="steps"><a href="chapters/attention.html">05</a><a href="chapters/transformer.html">06</a><a href="chapters/quantization.html">09</a><a href="chapters/agent.html">11</a><a href="chapters/design.html">12</a><a href="chapters/multimodal.html">15</a></div></div>
+  </div>
+</section>
+
+<section class="home-section" style="padding-top:0">
+  <h2>이 사이트 사용법</h2>
+  <div class="flow">
+    <div><b>읽기</b>개념과 직관을 먼저. 영어 용어는 괄호로 병기합니다.</div>
+    <div><b>보기</b>SVG 도해와 3D 모델로 구조를 머릿속에 그립니다.</div>
+    <div><b>만지기</b>점·벡터·행렬 칸을 직접 끌어 보세요. 극단에서 배웁니다.</div>
+    <div><b>학습시키기</b>작은 신경망과 언어 모델이 브라우저 안에서 실제로 학습합니다.</div>
+    <div><b>확인하기</b>장마다 퀴즈, 마지막 장에서 종합 퀴즈로 마무리합니다.</div>
+  </div>
+</section>
+
+<script>
+(function () {
+  // chapter cards
+  const grid = document.getElementById("chgrid");
+  const tagName = { sim: "시뮬레이터", "3d": "3D" };
+  grid.innerHTML = AB.CHAPTERS.map((c) => `
+    <a class="ch-card" href="chapters/${c.slug}.html">
+      <span class="num">CHAPTER ${c.num}</span>
+      <h3>${c.title}</h3>
+      <p>${c.desc}</p>
+      <span class="tags">${c.tags.map((t) => `<span class="${t === "sim" ? "tg-sim" : t === "3d" ? "d3" : ""}">${tagName[t] || t}</span>`).join("")}</span>
+    </a>`).join("");
+
+  /* ------------------------------------------------ mini sims (drag inside cards) */
+  // 카드가 링크이므로, 캔버스 안 클릭/드래그는 이동을 막는다
+  function stopLink(cv) { ["click"].forEach((ev) => cv.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); })); }
+  function dragPoints(cv, pts, redraw, pick = 18) {
+    let drag = -1;
+    const pos = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; };
+    cv.addEventListener("pointerdown", (e) => {
+      const [x, y] = pos(e), r = cv.getBoundingClientRect();
+      let best = -1, bd = pick;
+      pts.forEach((p, i) => { if (p.fixed) return; const d = Math.hypot((p.x - x) * r.width, (p.y - y) * r.height); if (d < bd) { bd = d; best = i; } });
+      if (best >= 0) { drag = best; cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing"; e.preventDefault(); }
+    });
+    cv.addEventListener("pointermove", (e) => { if (drag < 0) return; const [x, y] = pos(e); pts[drag].x = AB.clamp(x, 0.03, 0.97); pts[drag].y = AB.clamp(y, 0.08, 0.92); redraw(); });
+    const up = () => { drag = -1; cv.style.cursor = ""; };
+    cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+    stopLink(cv);
+  }
+
+  // mini embedding: words as points, nearest neighbour lines (Euclidean in 2D)
+  const embPts = [
+    { w: "고양이", x: 0.18, y: 0.30, c: "accent" }, { w: "강아지", x: 0.26, y: 0.42, c: "accent" }, { w: "호랑이", x: 0.12, y: 0.55, c: "accent" },
+    { w: "사과", x: 0.62, y: 0.28, c: "warn" }, { w: "바나나", x: 0.72, y: 0.40, c: "warn" }, { w: "포도", x: 0.58, y: 0.48, c: "warn" },
+    { w: "자동차", x: 0.80, y: 0.76, c: "accent-2" }, { w: "기차", x: 0.66, y: 0.82, c: "accent-2" }, { w: "자전거", x: 0.88, y: 0.62, c: "accent-2" },
+  ];
+  const embCv = AB.canvas("#mini-emb", (ctx, w, h) => {
+    const P = AB.palette();
+    ctx.font = "12px " + AB.color("font");
+    embPts.forEach((p, i) => {
+      let best = -1, bd = 1e9;
+      embPts.forEach((q, j) => { if (i === j) return; const d = Math.hypot((p.x - q.x) * w, (p.y - q.y) * h); if (d < bd) { bd = d; best = j; } });
+      const q = embPts[best];
+      ctx.strokeStyle = AB.alpha(AB.color(p.c), 0.35); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p.x * w, p.y * h); ctx.lineTo(q.x * w, q.y * h); ctx.stroke();
+    });
+    embPts.forEach((p) => {
+      ctx.fillStyle = AB.color(p.c); ctx.beginPath(); ctx.arc(p.x * w, p.y * h, 5.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(p.w, p.x * w + 9, p.y * h);
+    });
+  }, { height: 150 });
+  dragPoints(embCv.canvas, embPts, () => embCv.redraw());
+
+  // mini attention: draggable query, 4 fixed keys; weights = softmax(q·k / T)
+  const keys = [{ w: "the", x: 0.2, y: 0.25 }, { w: "cat", x: 0.75, y: 0.25 }, { w: "sat", x: 0.25, y: 0.78 }, { w: "mat", x: 0.7, y: 0.75 }];
+  const qpt = [{ x: 0.62, y: 0.38 }];
+  const attnCv = AB.canvas("#mini-attn", (ctx, w, h) => {
+    const P = AB.palette();
+    const vx = (p) => [(p.x - 0.5) * 4, (0.5 - p.y) * 4];
+    const q = vx(qpt[0]);
+    const s = keys.map((k) => AB.dot(q, vx(k)));
+    const a = AB.softmax(s, 1);
+    const plotW = w * 0.62;
+    // key points + lines
+    keys.forEach((k, i) => {
+      const x = k.x * plotW, y = k.y * h;
+      ctx.strokeStyle = AB.alpha(P.accent, 0.15 + 0.85 * a[i]); ctx.lineWidth = 1 + 7 * a[i];
+      ctx.beginPath(); ctx.moveTo(qpt[0].x * plotW, qpt[0].y * h); ctx.lineTo(x, y); ctx.stroke();
+    });
+    keys.forEach((k) => {
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(k.x * plotW, k.y * h, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = P.text; ctx.font = "12px " + AB.color("mono"); ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(k.w, k.x * plotW, k.y * h - 8);
+    });
+    ctx.fillStyle = P.accent; ctx.beginPath(); ctx.arc(qpt[0].x * plotW, qpt[0].y * h, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = P.text; ctx.textBaseline = "top"; ctx.fillText("query", qpt[0].x * plotW, qpt[0].y * h + 9);
+    // bars
+    const bx = plotW + 14, bw = w - bx - 12;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "11px " + AB.color("mono");
+    keys.forEach((k, i) => {
+      const y = 22 + i * 30;
+      ctx.fillStyle = P.dim; ctx.fillText(k.w, bx, y);
+      ctx.fillStyle = AB.color("surface-2"); ctx.fillRect(bx, y + 8, bw, 8);
+      ctx.fillStyle = P.accent; ctx.fillRect(bx, y + 8, bw * a[i], 8);
+      ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.fillText(a[i].toFixed(2), bx + bw, y); ctx.textAlign = "left";
+    });
+  }, { height: 150 });
+  const qProxy = [{ get x() { return qpt[0].x * 0.62; }, set x(v) { qpt[0].x = AB.clamp(v / 0.62, 0.05, 0.95); }, get y() { return qpt[0].y; }, set y(v) { qpt[0].y = v; } }];
+  dragPoints(attnCv.canvas, qProxy, () => attnCv.redraw());
+
+  /* ------------------------------------------------ hero 3D: embedding galaxy + attention arcs */
+  const el = document.getElementById("hero3d");
+  const T = AB.three(el, { camera: [9, 6.5, 11], target: [0, 0, 0], fov: 38, autoRotate: true, autoRotateSpeed: 0.55, pan: false, minDistance: 6, maxDistance: 28 });
+  if (!T) return;
+  const { THREE, scene } = T;
+  const rng = AB.rng(7);
+  const isDark = () => AB.isDark();
+
+  // clusters (semantic groups)
+  const groups = [
+    { name: "동물", c: [-3.2, 1.6, -1.2], col: 0x8b6cf6, words: ["고양이", "강아지", "호랑이", "토끼"] },
+    { name: "음식", c: [3.0, 1.2, -2.0], col: 0xf59e0b, words: ["사과", "김치", "빵", "커피"] },
+    { name: "장소", c: [-1.4, -2.0, 2.8], col: 0x22c3a6, words: ["서울", "도쿄", "파리", "매트"] },
+    { name: "동작", c: [2.4, -1.8, 2.2], col: 0xec4899, words: ["앉았다", "달린다", "먹는다", "잔다"] },
+    { name: "기계", c: [0.4, 3.0, 2.4], col: 0x3b82f6, words: ["자동차", "GPU", "로봇", "기차"] },
+  ];
+  const dotGeo = new THREE.SphereGeometry(0.06, 8, 6);
+  const wordPos = {};
+  const cloud = new THREE.Group(); scene.add(cloud);
+  groups.forEach((g) => {
+    const mat = new THREE.MeshBasicMaterial({ color: g.col, transparent: true, opacity: 0.85 });
+    for (let i = 0; i < 70; i++) {
+      const r = 1.25 * Math.cbrt(rng());
+      const th = rng() * Math.PI * 2, ph = Math.acos(2 * rng() - 1);
+      const m = new THREE.Mesh(dotGeo, mat);
+      m.position.set(g.c[0] + r * Math.sin(ph) * Math.cos(th), g.c[1] + r * Math.cos(ph) * 0.8, g.c[2] + r * Math.sin(ph) * Math.sin(th));
+      cloud.add(m);
+    }
+    const big = new THREE.SphereGeometry(0.13, 14, 10);
+    g.words.forEach((w, i) => {
+      const a = (i / g.words.length) * Math.PI * 2 + 0.4;
+      const p = new THREE.Vector3(g.c[0] + Math.cos(a) * 0.75, g.c[1] + (i % 2 ? 0.35 : -0.3), g.c[2] + Math.sin(a) * 0.75);
+      const m = new THREE.Mesh(big, new THREE.MeshBasicMaterial({ color: g.col }));
+      m.position.copy(p); cloud.add(m);
+      wordPos[w] = p;
+      if (i < 2 || ["매트", "앉았다", "GPU"].includes(w)) T.label(w, p.clone().add(new THREE.Vector3(0, 0.32, 0)));
+    });
+  });
+  // faint axes
+  const axMat = new THREE.LineBasicMaterial({ color: 0x8a93a8, transparent: true, opacity: 0.25 });
+  [[[-5, 0, 0], [5, 0, 0]], [[0, -4, 0], [0, 4, 0]], [[0, 0, -4], [0, 0, 4]]].forEach(([a, b]) => {
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a), new THREE.Vector3(...b)]), axMat));
+  });
+
+  // sentence: tokens attend to earlier tokens (causal) — arcs pulse in sequence
+  const pairs = [["매트", "고양이"], ["앉았다", "고양이"], ["앉았다", "매트"], ["GPU", "로봇"], ["커피", "빵"]];
+  const arcs = pairs.map(([from, to], i) => {
+    const a = wordPos[from], b = wordPos[to];
+    const mid = a.clone().add(b).multiplyScalar(0.5); mid.y += 1.6 + 0.3 * i;
+    const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+    const geo = new THREE.TubeGeometry(curve, 48, 0.025, 6, false);
+    const mat = new THREE.MeshBasicMaterial({ color: i < 3 ? 0xd6409f : 0x8b6cf6, transparent: true, opacity: 0.15 });
+    const mesh = new THREE.Mesh(geo, mat); scene.add(mesh);
+    const pulse = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: i < 3 ? 0xff6fb5 : 0xa18cff }));
+    scene.add(pulse);
+    return { curve, mat, pulse, phase: i * 0.37 };
+  });
+  T.label("어텐션: '앉았다' → '고양이'", wordPos["앉았다"].clone().lerp(wordPos["고양이"], 0.5).add(new THREE.Vector3(0, 2.3, 0)));
+
+  T.onFrame((dt, t) => {
+    cloud.rotation.y = Math.sin(t * 0.1) * 0.05;
+    arcs.forEach((A) => {
+      const u = ((t * 0.35 + A.phase) % 1);
+      A.pulse.position.copy(A.curve.getPoint(u));
+      A.mat.opacity = 0.18 + 0.5 * Math.pow(Math.sin(u * Math.PI), 2);
+    });
+  });
+  AB.onTheme(() => { axMat.opacity = isDark() ? 0.25 : 0.35; });
+})();
+</script>
+</body>
+</html>

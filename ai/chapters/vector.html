@@ -1,0 +1,1299 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>벡터와 행렬 · AIBook</title>
+<meta name="description" content="AI의 언어인 선형대수: 벡터와 특징 공간, 내적·코사인 유사도·투영, 행렬 = 선형 변환, 행렬곱과 FLOPs, 신경망 층 y = Wx + b와 텐서 shape, 고차원의 직관, 노름과 정규화, PCA까지 직접 조작하며 익힌다.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .vc-drag { touch-action: none; cursor: crosshair; }
+  .vc-rank { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 560px) { .vc-rank { grid-template-columns: minmax(0, 1fr); } }
+  .vc-rank h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-dim); font-weight: 700; }
+  .vc-rank ol { list-style: none; margin: 0 !important; padding: 0 !important; display: grid; gap: 3px; }
+  .vc-rank li { margin: 0 !important; display: grid; grid-template-columns: 18px minmax(0, 1fr) 52px; gap: 6px; align-items: center; font-size: 13px; line-height: 1.35; padding: 3px 6px; border-radius: 6px; cursor: pointer; position: relative; }
+  .vc-rank li .bar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; background: var(--accent-soft); z-index: 0; }
+  .vc-rank li > span { position: relative; z-index: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vc-rank li .n { font-family: var(--mono); color: var(--text-faint); font-size: 11px; }
+  .vc-rank li .s { font-family: var(--mono); text-align: right; font-size: 12px; color: var(--text-dim); }
+  .vc-rank li.sel { outline: 2px solid var(--accent-2); }
+  .vc-mm { display: grid; grid-template-columns: auto auto; gap: 10px 16px; justify-content: center; align-items: end; }
+  .vc-mm .lbl { font-family: var(--mono); font-size: 12px; color: var(--text-dim); text-align: center; margin-bottom: 2px; }
+  .vc-mm td { min-width: 34px; height: 30px; cursor: ns-resize; touch-action: none; user-select: none; border: 1px solid transparent !important; }
+  .vc-mm table.c td { cursor: pointer; }
+  .vc-mm td.hi { border-color: var(--accent-2) !important; font-weight: 700; }
+  .vc-mm td.cur { outline: 2px solid var(--warn); }
+  .vc-expl { font-family: var(--mono); font-size: 13px; line-height: 1.7; padding: 10px 18px; border-top: 1px solid var(--border); background: var(--surface); min-height: 48px; overflow-x: auto; white-space: nowrap; }
+  .vc-expl b { color: var(--accent); }
+  .vc-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .vc-matbox { font-family: var(--mono); font-size: 14px; display: inline-grid; grid-template-columns: auto auto; gap: 2px 14px; padding: 6px 12px; border-left: 2px solid var(--text-dim); border-right: 2px solid var(--text-dim); border-radius: 6px; }
+  .vc-matbox .ci { color: var(--accent); } .vc-matbox .cj { color: var(--accent-2); }
+  .vc-flops { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; }
+  .vc-flops label { font-size: 13px; color: var(--text-dim); display: grid; gap: 4px; }
+  .vc-flops input { font-family: var(--mono); }
+  .vc-flopsout { font-family: var(--mono); font-size: 13px; color: var(--text); margin-top: 10px; line-height: 1.7; }
+  figure.diagram svg.vc-narrow { max-width: 620px; margin: 0 auto; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="vector">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 01</div>
+    <h1>벡터와 행렬</h1>
+    <p class="lead">신경망이 보는 세상에는 사진도, 문장도, 사용자도 없다. 오직 숫자 배열과 그 배열을 다른 배열로 바꾸는 규칙만 있다. 앞의 것이 벡터이고 뒤의 것이 행렬이다. GPT가 다음 단어를 고르는 과정도 결국 수천 차원 벡터들의 내적과 거대한 행렬곱의 연속이다. 이 장에서는 이후 모든 장 — 임베딩, 어텐션, Transformer, 양자화, 서빙 — 에서 쓰일 선형대수의 직관을 손으로 만지며 쌓는다.</p>
+    <ul class="objectives">
+      <li>이미지·단어·사용자 취향이 어떻게 하나의 <strong>특징 공간</strong> 속 점(벡터)이 되는지 설명할 수 있다.</li>
+      <li>내적·코사인 유사도·유클리드 거리의 관계를 알고, 정규화 여부에 따라 검색 순위가 어떻게 달라지는지 예측할 수 있다.</li>
+      <li>2×2 행렬을 기저 벡터의 도착지로 읽고, 행렬식(넓이 배율·뒤집힘)과 고유벡터의 기하학적 의미를 안다.</li>
+      <li>행렬곱을 '행·열 내적의 표'와 '변환의 합성' 두 관점으로 이해하고, FLOPs = 2mnk로 연산량을 셀 수 있다.</li>
+      <li>신경망 층 \(\mathbf y = W\mathbf x + \mathbf b\)를 배치·시퀀스 차원까지 확장한 텐서 shape로 읽고, GPU가 왜 행렬곱 기계인지 설명할 수 있다.</li>
+      <li>고차원에서 랜덤 벡터가 거의 직교하고 거리가 집중되는 현상, 노름·L2 정규화·투영·PCA의 의미를 이해한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="why">
+    <h2>왜 벡터인가: 모든 것은 숫자 배열이다</h2>
+    <p>컴퓨터가 고양이 사진을 '본다'는 것은 픽셀 밝기 숫자들을 읽는다는 뜻이다. 28×28 흑백 손글씨 숫자 이미지는 784개의 숫자이고, 224×224 컬러 사진은 224×224×3 = 150,528개의 숫자다. 1초짜리 16 kHz 음성은 16,000개의 숫자다. 이 숫자들을 한 줄로 늘어놓으면 <span class="term">벡터</span><span class="en">(vector)</span>가 된다. 784개 숫자로 된 이미지는 784차원 공간의 <strong>점 하나</strong>다.</p>
+    <p>단어는 조금 다르다. '고양이'라는 글자 자체에는 숫자가 없다. 그래서 언어 모델은 어휘의 각 토큰에 학습 가능한 벡터를 하나씩 배정한다. GPT-2 small은 토큰마다 768개, Llama 3 8B는 4096개의 숫자를 쓴다. 이것을 <span class="term">임베딩</span><span class="en">(embedding)</span>이라 하며 <a href="embedding.html">4장</a>의 주제다. 추천 시스템에서는 사용자의 취향을 '액션 4점, 로맨스 0점, SF 3점…' 같은 벡터로 쓰고, 영화도 같은 축 위의 벡터로 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="이미지, 단어, 사용자 취향이 벡터가 되는 과정">
+        <defs>
+          <marker id="vc-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="133" y="24" text-anchor="middle" class="t-acc">이미지</text>
+        <g transform="translate(40,44)">
+          <rect x="0" y="0" width="22" height="22" style="fill:var(--accent);opacity:.05"/><rect x="22" y="0" width="22" height="22" style="fill:var(--accent);opacity:.2"/><rect x="44" y="0" width="22" height="22" style="fill:var(--accent);opacity:.25"/><rect x="66" y="0" width="22" height="22" style="fill:var(--accent);opacity:.05"/>
+          <rect x="0" y="22" width="22" height="22" style="fill:var(--accent);opacity:.1"/><rect x="22" y="22" width="22" height="22" style="fill:var(--accent);opacity:.95"/><rect x="44" y="22" width="22" height="22" style="fill:var(--accent);opacity:.9"/><rect x="66" y="22" width="22" height="22" style="fill:var(--accent);opacity:.1"/>
+          <rect x="0" y="44" width="22" height="22" style="fill:var(--accent);opacity:.05"/><rect x="22" y="44" width="22" height="22" style="fill:var(--accent);opacity:.3"/><rect x="44" y="44" width="22" height="22" style="fill:var(--accent);opacity:.95"/><rect x="66" y="44" width="22" height="22" style="fill:var(--accent);opacity:.05"/>
+          <rect x="0" y="66" width="22" height="22" style="fill:var(--accent);opacity:.05"/><rect x="22" y="66" width="22" height="22" style="fill:var(--accent);opacity:.85"/><rect x="44" y="66" width="22" height="22" style="fill:var(--accent);opacity:.9"/><rect x="66" y="66" width="22" height="22" style="fill:var(--accent);opacity:.2"/>
+          <rect x="0" y="0" width="88" height="88" style="fill:none;stroke:var(--border)"/>
+        </g>
+        <path d="M140 88 H172" class="s-line" marker-end="url(#vc-ar)"/>
+        <text x="180" y="62" class="t-mono">[0.05,</text><text x="180" y="78" class="t-mono"> 0.20,</text><text x="180" y="94" class="t-mono"> 0.25,</text><text x="180" y="110" class="t-mono"> …,</text><text x="180" y="126" class="t-mono"> 0.20]</text>
+        <text x="133" y="170" text-anchor="middle" class="t-dim">픽셀 밝기를 한 줄로 펼친다</text>
+        <text x="133" y="190" text-anchor="middle" class="t-mono">28×28 → 784차원</text>
+
+        <text x="400" y="24" text-anchor="middle" class="t-acc">단어(토큰)</text>
+        <rect x="312" y="70" width="70" height="36" rx="7" class="f-acc-soft"/>
+        <text x="347" y="93" text-anchor="middle" class="t">고양이</text>
+        <path d="M388 88 H420" class="s-line" marker-end="url(#vc-ar)"/>
+        <text x="428" y="62" class="t-mono">[ 0.21,</text><text x="428" y="78" class="t-mono">  -0.73,</text><text x="428" y="94" class="t-mono">  0.05,</text><text x="428" y="110" class="t-mono">  …,</text><text x="428" y="126" class="t-mono">  0.48]</text>
+        <text x="400" y="170" text-anchor="middle" class="t-dim">표에서 그 토큰의 행을 꺼낸다</text>
+        <text x="400" y="190" text-anchor="middle" class="t-mono">GPT-2 768 · Llama 3 8B 4096차원</text>
+
+        <text x="666" y="24" text-anchor="middle" class="t-acc">사용자 취향</text>
+        <g transform="translate(580,40)">
+          <path d="M0 90 H110" class="s-axis"/>
+          <rect x="6" y="18" width="14" height="72" class="f-acc"/><rect x="28" y="88" width="14" height="2" class="f-acc"/><rect x="50" y="36" width="14" height="54" class="f-acc"/><rect x="72" y="72" width="14" height="18" class="f-acc"/><rect x="94" y="88" width="14" height="2" class="f-acc"/>
+          <text x="13" y="106" text-anchor="middle" class="t-mono">액</text><text x="35" y="106" text-anchor="middle" class="t-mono">로</text><text x="57" y="106" text-anchor="middle" class="t-mono">SF</text><text x="79" y="106" text-anchor="middle" class="t-mono">코</text><text x="101" y="106" text-anchor="middle" class="t-mono">공</text>
+        </g>
+        <path d="M698 88 H716" class="s-line" marker-end="url(#vc-ar)"/>
+        <text x="722" y="80" class="t-mono">[4,0,3,</text><text x="722" y="96" class="t-mono"> 1,0]</text>
+        <text x="666" y="170" text-anchor="middle" class="t-dim">축마다 의미가 있는 점수</text>
+        <text x="666" y="190" text-anchor="middle" class="t-mono">5차원</text>
+
+        <rect x="40" y="214" width="720" height="40" rx="10" class="f-surface"/>
+        <text x="400" y="239" text-anchor="middle" class="t">세 경우 모두 '공간 속 한 점'이 된다 → 가까움 = 비슷함, 방향 = 성질</text>
+      </svg>
+      <figcaption><b>그림 1-1.</b> 서로 다른 데이터가 같은 형식, 곧 고정 길이의 숫자 배열이 된다. 이미지는 원래 숫자이고, 단어는 학습된 표에서 벡터를 꺼내며, 취향은 사람이 정한 축의 점수다. 일단 벡터가 되면 '비슷함'을 거리나 각도로 잴 수 있다.</figcaption>
+    </figure>
+    <p>벡터의 각 성분이 사는 축들이 이루는 공간을 <span class="term">특징 공간</span><span class="en">(feature space)</span>이라 한다. 특징 공간의 진짜 힘은 <strong>기하학이 의미를 갖게 된다</strong>는 데 있다. 비슷한 사진은 가까운 점, 비슷한 단어는 비슷한 방향, 취향이 맞는 영화는 사용자 벡터와 각도가 작은 벡터다. 학습이란 결국 이 공간을 잘 만들어서 '의미상 가까운 것'이 '기하학적으로 가까운 것'이 되도록 숫자를 조정하는 과정이라고 봐도 좋다.</p>
+    <div class="callout"><strong>표기</strong>
+      <p>이 책에서 벡터는 굵은 소문자 \(\mathbf x\), 행렬은 대문자 \(W\), 스칼라는 보통 글씨 \(a\)로 쓴다. 벡터는 기본적으로 <strong>열벡터</strong>(세로)이며 \(\mathbf x \in \mathbb R^d\)는 "실수 \(d\)개로 된 벡터"라는 뜻이다. 코드(NumPy·PyTorch)에서는 벡터를 1차원 배열 <code>shape (d,)</code>로, 여러 벡터를 행으로 쌓은 2차원 배열 <code>shape (n, d)</code>로 다룬다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="ops">
+    <h2>벡터의 기본 연산: 덧셈, 스칼라배, 크기, 방향</h2>
+    <p>벡터 연산은 성분별로 한다. 두 벡터의 <strong>덧셈</strong>은 같은 위치 성분끼리 더하고, <strong>스칼라배</strong>는 모든 성분에 같은 수를 곱한다. 기하학적으로 덧셈은 화살표를 이어 붙이는 것(또는 평행사변형의 대각선), 스칼라배는 화살표를 늘이거나 줄이는 것이다. 음수를 곱하면 방향이 반대가 된다.</p>
+    <div class="formula">$$\mathbf a + \mathbf b = \begin{bmatrix} a_1 + b_1 \\ a_2 + b_2 \\ \vdots \\ a_d + b_d \end{bmatrix},\qquad c\,\mathbf a = \begin{bmatrix} c\,a_1 \\ c\,a_2 \\ \vdots \\ c\,a_d \end{bmatrix},\qquad \lVert \mathbf a \rVert = \sqrt{a_1^2 + a_2^2 + \cdots + a_d^2}$$
+      <div class="where">\(\lVert \mathbf a\rVert\)는 벡터의 <strong>크기</strong>(길이, L2 노름). 피타고라스 정리를 \(d\)차원으로 확장한 것이다. 크기로 나눈 \(\hat{\mathbf a} = \mathbf a / \lVert\mathbf a\rVert\)는 길이 1인 <strong>단위벡터</strong>로, 방향 정보만 남긴다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 290" role="img" aria-label="벡터 덧셈의 평행사변형과 스칼라배">
+        <defs>
+          <marker id="vc-ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="vc-mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+          <marker id="vc-mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ok)"/></marker>
+          <marker id="vc-mw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--warn)"/></marker>
+        </defs>
+        <text x="200" y="24" text-anchor="middle" class="t-acc">덧셈 = 이어 붙이기 (평행사변형)</text>
+        <path d="M60 250 H360 M60 250 V40" class="s-axis"/>
+        <path d="M260 210 L320 70 M120 110 L320 70" class="s-line" style="stroke-dasharray:5 4;opacity:.7"/>
+        <path d="M60 250 L256 211" style="stroke:var(--accent);stroke-width:2.6" marker-end="url(#vc-ma)"/>
+        <path d="M60 250 L118 115" style="stroke:var(--accent-2);stroke-width:2.6" marker-end="url(#vc-mb)"/>
+        <path d="M60 250 L316 73" style="stroke:var(--ok);stroke-width:2.8" marker-end="url(#vc-mo)"/>
+        <text x="170" y="250" class="t" style="fill:var(--accent)">a = (2.0, 0.4)</text>
+        <text x="40" y="160" class="t" style="fill:var(--accent-2)">b</text>
+        <text x="96" y="104" class="t-mono">(0.6, 1.4)</text>
+        <text x="300" y="60" class="t" style="fill:var(--ok)">a + b = (2.6, 1.8)</text>
+        <text x="268" y="160" class="t-dim">b를 a 끝에</text>
+        <text x="268" y="176" class="t-dim">이어 붙여도 같다</text>
+
+        <text x="600" y="24" text-anchor="middle" class="t-acc">스칼라배 = 늘이기·뒤집기</text>
+        <path d="M430 160 H780 M600 40 V280" class="s-axis"/>
+        <path d="M600 160 L736 92" style="stroke:var(--warn);stroke-width:2;opacity:.55" marker-end="url(#vc-mw)"/>
+        <path d="M600 160 L668 126" style="stroke:var(--accent);stroke-width:3" marker-end="url(#vc-ma)"/>
+        <path d="M600 160 L532 194" style="stroke:var(--accent-2);stroke-width:2.6" marker-end="url(#vc-mb)"/>
+        <path d="M600 160 L631 145" style="stroke:var(--ok);stroke-width:4"/>
+        <text x="740" y="86" class="t" style="fill:var(--warn)">2v</text>
+        <text x="672" y="122" class="t" style="fill:var(--accent)">v</text>
+        <text x="500" y="214" class="t" style="fill:var(--accent-2)">−v</text>
+        <text x="614" y="182" class="t-dim" style="fill:var(--ok)">v̂ (길이 1)</text>
+        <text x="600" y="262" text-anchor="middle" class="t-dim">2v는 방향이 같고 길이가 2배, −v는 정반대</text>
+      </svg>
+      <figcaption><b>그림 1-2.</b> 왼쪽: \(\mathbf a + \mathbf b\)는 \(\mathbf b\)를 \(\mathbf a\)의 끝에 이어 붙인 끝점이며, 두 벡터가 만드는 평행사변형의 대각선이다. 오른쪽: 스칼라배는 같은 직선 위에서 길이만 바꾼다. 크기로 나눈 단위벡터 \(\hat{\mathbf v}\)는 '방향'만 담는다.</figcaption>
+    </figure>
+    <p>뺄셈 \(\mathbf a - \mathbf b\)는 \(\mathbf b\)의 끝에서 \(\mathbf a\)의 끝으로 가는 화살표다. 그래서 두 점 사이의 <strong>거리</strong>는 \(\lVert\mathbf a - \mathbf b\rVert\)로 잰다. 언어 모델 임베딩에서 유명한 "king − man + woman ≈ queen" 같은 유추는, 두 벡터의 차이가 '성별'이라는 방향을 담고 있다는 가설을 뺄셈과 덧셈으로 확인하는 것이다(<a href="embedding.html">4장</a>).</p>
+    <p>아래 놀이터에서 두 벡터를 직접 움직여 보자. 덧셈·뺄셈뿐 아니라 다음 절의 주인공인 <strong>내적</strong>과 <strong>투영</strong>도 함께 계산해 둔다.</p>
+
+    <div class="sim" id="sim-vc-play">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 벡터 놀이터: 덧셈·뺄셈·투영·내적</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vc-cv-play" class="vc-drag"></canvas><span class="hint">a, b 끝점을 끌어 보세요</span></div>
+        <div class="sim-controls">
+          <label class="check"><input type="checkbox" id="vc-p-sum" checked> a + b (평행사변형)</label>
+          <label class="check"><input type="checkbox" id="vc-p-diff"> a − b</label>
+          <label class="check"><input type="checkbox" id="vc-p-proj" checked> a를 b 위로 투영</label>
+          <label class="check"><input type="checkbox" id="vc-p-ang" checked> 사잇각 θ</label>
+          <label class="check"><input type="checkbox" id="vc-p-snap"> 0.5 격자에 맞추기</label>
+          <div class="ctrl"><span>예시 배치</span><div class="vc-btns">
+            <button class="btn" data-vcp="same">비슷한 방향</button><button class="btn" data-vcp="orth">직교</button><button class="btn" data-vcp="opp">반대 방향</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">a · b</span><span class="v" id="vc-p-dot">—</span></div>
+        <div class="stat"><span class="k">|a|, |b|</span><span class="v" id="vc-p-norm">—</span></div>
+        <div class="stat"><span class="k">사잇각 θ</span><span class="v" id="vc-p-th">—</span></div>
+        <div class="stat"><span class="k">cos θ (코사인 유사도)</span><span class="v" id="vc-p-cos">—</span></div>
+        <div class="stat"><span class="k">투영 길이 a·b/|b|</span><span class="v" id="vc-p-pl">—</span></div>
+        <div class="stat"><span class="k">거리 |a − b|</span><span class="v" id="vc-p-dist">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① a를 b 둘레로 한 바퀴 돌려 보자. 내적은 θ &lt; 90°에서 양수(초록), 90°에서 0(회색), 90°를 넘으면 음수(빨강)로 바뀐다. 투영 그림자의 방향도 같이 뒤집힌다. ② b의 방향은 그대로 두고 길이만 두 배로 늘려 보자. 내적은 두 배가 되지만 cos θ와 투영 길이는 그대로다. 이것이 내적과 코사인 유사도의 차이다. ③ '직교'를 누르면 a·b = 0이고, 이때 |a − b|² = |a|² + |b|²가 되는지(피타고라스) 읽은 값으로 확인해 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="dot">
+    <h2>내적 = 유사도 = 투영</h2>
+    <p>이 책 전체에서 가장 많이 등장하는 연산 하나를 꼽으라면 <span class="term">내적</span><span class="en">(dot product, inner product)</span>이다. 정의는 단순하다. 같은 위치 성분끼리 곱해서 모두 더한다. 그런데 이 단순한 계산이 기하학적으로 두 가지 의미를 동시에 갖는다.</p>
+    <div class="formula">$$\mathbf a \cdot \mathbf b \;=\; \mathbf a^{\top}\mathbf b \;=\; \sum_{i=1}^{d} a_i b_i \;=\; \lVert\mathbf a\rVert\,\lVert\mathbf b\rVert\cos\theta$$
+      <div class="where">\(\theta\)는 두 벡터의 사잇각. 2·3차원에서는 코사인 법칙으로 증명되고, 고차원에서는 오른쪽 식이 거꾸로 '각도의 정의'가 된다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 280" role="img" aria-label="내적과 투영, 그리고 사잇각에 따른 부호">
+        <defs>
+          <marker id="vc-pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="vc-pb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <path d="M60 220 L500 220" style="stroke:var(--accent-2);stroke-width:2.6" marker-end="url(#vc-pb)"/>
+        <path d="M60 220 L296 74" style="stroke:var(--accent);stroke-width:2.6" marker-end="url(#vc-pa)"/>
+        <path d="M300 72 L300 220" class="s-line" style="stroke-dasharray:5 4"/>
+        <path d="M288 220 V208 H300" class="s-line" style="stroke-width:1.2"/>
+        <path d="M60 220 L300 220" style="stroke:var(--ok);stroke-width:7;opacity:.55"/>
+        <path d="M118 220 A58 58 0 0 0 109 189" class="s-line"/>
+        <text x="124" y="207" class="t">θ</text>
+        <text x="300" y="62" class="t" style="fill:var(--accent)">a</text>
+        <text x="508" y="225" class="t" style="fill:var(--accent-2)">b</text>
+        <text x="180" y="248" text-anchor="middle" class="t" style="fill:var(--ok)">|a| cos θ  =  a·b / |b|</text>
+        <text x="180" y="268" text-anchor="middle" class="t-dim">a가 b 방향으로 드리운 그림자</text>
+        <text x="320" y="150" class="t-dim">수직선</text>
+
+        <g transform="translate(560,30)">
+          <text x="100" y="0" text-anchor="middle" class="t-acc">θ에 따른 부호</text>
+          <g transform="translate(0,20)">
+            <path d="M10 50 H80" style="stroke:var(--accent-2);stroke-width:2"/><path d="M10 50 L60 18" style="stroke:var(--accent);stroke-width:2"/>
+            <text x="100" y="40" class="t" style="fill:var(--ok)">θ &lt; 90° → a·b &gt; 0</text><text x="100" y="58" class="t-dim">비슷한 방향</text>
+          </g>
+          <g transform="translate(0,90)">
+            <path d="M10 50 H80" style="stroke:var(--accent-2);stroke-width:2"/><path d="M10 50 L10 6" style="stroke:var(--accent);stroke-width:2"/>
+            <text x="100" y="40" class="t" style="fill:var(--text-dim)">θ = 90° → a·b = 0</text><text x="100" y="58" class="t-dim">직교 (무관)</text>
+          </g>
+          <g transform="translate(0,160)">
+            <path d="M40 50 H100" style="stroke:var(--accent-2);stroke-width:2"/><path d="M40 50 L4 20" style="stroke:var(--accent);stroke-width:2"/>
+            <text x="110" y="40" class="t" style="fill:var(--bad)">θ &gt; 90° → a·b &lt; 0</text><text x="110" y="58" class="t-dim">반대 경향</text>
+          </g>
+        </g>
+      </svg>
+      <figcaption><b>그림 1-3.</b> 내적의 두 얼굴. \(\mathbf a\cdot\mathbf b\)를 \(\lVert\mathbf b\rVert\)로 나누면 \(\mathbf a\)를 \(\mathbf b\) 방향으로 투영한 그림자의 (부호 있는) 길이가 된다. 크기를 모두 나누면 \(\cos\theta\), 곧 방향이 얼마나 비슷한지를 나타내는 −1~+1 사이의 수가 된다.</figcaption>
+    </figure>
+    <p>첫째, 내적은 <strong>투영</strong>이다. \(\mathbf b\)가 단위벡터라면 \(\mathbf a\cdot\mathbf b\)는 정확히 '\(\mathbf a\)가 \(\mathbf b\) 방향으로 얼마나 뻗어 있는가'다. 벡터의 \(i\)번째 성분 \(a_i\) 자체도 \(\mathbf a\)와 \(i\)번째 축 단위벡터의 내적이다. 둘째, 내적은 <strong>유사도</strong>다. 방향이 같으면 크고, 직교하면 0, 반대면 음수다. 신경망의 뉴런 하나는 입력 벡터와 가중치 벡터의 내적을 계산하는 장치이고(<a href="neuron.html">2장</a>), 어텐션의 점수 \(\mathbf q\cdot\mathbf k\)는 "이 질의(query)가 저 키(key)와 얼마나 맞는가"를 내적으로 잰 것이다(<a href="attention.html">5장</a>).</p>
+
+    <h3>세 가지 '가까움': 내적, 코사인 유사도, 유클리드 거리</h3>
+    <p>검색이나 추천에서 "가장 비슷한 것"을 고를 때 쓰는 척도는 보통 세 가지다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>척도</th><th>식</th><th>크기(노름)에 대한 반응</th><th>주로 쓰는 곳</th></tr></thead>
+      <tbody>
+        <tr><td>내적</td><td>\(\mathbf a\cdot\mathbf b\)</td><td>길수록 유리 (인기·강도까지 반영)</td><td>어텐션 점수, 행렬 분해 추천, MIPS 검색</td></tr>
+        <tr><td>코사인 유사도</td><td>\(\dfrac{\mathbf a\cdot\mathbf b}{\lVert\mathbf a\rVert\lVert\mathbf b\rVert}\)</td><td>무시 (방향만 본다)</td><td>문장 임베딩 검색, RAG (<a href="rag.html">10장</a>)</td></tr>
+        <tr><td>유클리드 거리</td><td>\(\lVert\mathbf a-\mathbf b\rVert\)</td><td>크기가 비슷해야 가깝다</td><td>k-NN, 군집화, 이미지 특징</td></tr>
+      </tbody>
+    </table></div>
+    <p>셋은 하나의 항등식으로 묶인다. 거리의 제곱을 전개하면</p>
+    <div class="formula">$$\lVert\mathbf a-\mathbf b\rVert^2 = \lVert\mathbf a\rVert^2 + \lVert\mathbf b\rVert^2 - 2\,\mathbf a\cdot\mathbf b \quad\xrightarrow{\;\lVert\mathbf a\rVert=\lVert\mathbf b\rVert=1\;}\quad 2 - 2\cos\theta$$
+      <div class="where">모든 벡터를 길이 1로 <strong>정규화</strong>하면 내적 = 코사인 유사도이고, 거리는 코사인의 단조 감소 함수다. 세 척도의 순위가 완전히 같아진다.</div>
+    </div>
+    <p>그래서 실무 벡터 DB는 임베딩을 미리 L2 정규화해 저장하고 내적만 계산하는 경우가 많다. 반대로 정규화하지 않으면 세 척도는 서로 다른 순위를 내놓는다. 내적은 '전반적으로 강한' 벡터를 선호하고(모든 장르 점수가 높은 대작), 거리는 '크기까지 비슷한' 벡터를 선호한다. 아래 시뮬레이터에서 직접 확인해 보자. 영화와 점수는 <strong>교육용으로 만든 작은 예시</strong>다.</p>
+
+    <div class="sim" id="sim-vc-rec">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>취향 벡터 추천: 척도에 따라 순위가 바뀐다</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vc-cv-rec" class="vc-drag"></canvas><span class="hint" style="top:6px;bottom:auto">막대를 위아래로 끌어 취향을 바꾸세요</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>취향 크기 바꾸기 (방향 유지)</span><div class="vc-btns"><button class="btn" id="vc-r-half">× 0.5</button><button class="btn" id="vc-r-dbl">× 2</button></div></div>
+          <div class="ctrl"><span>취향 프리셋</span><div class="vc-btns">
+            <button class="btn" data-vcr="0">SF 액션광</button><button class="btn" data-vcr="1">로맨틱 코미디</button><button class="btn" data-vcr="2">공포 마니아</button><button class="btn" data-vcr="3">뭐든 조금씩</button></div></div>
+          <label class="check"><input type="checkbox" id="vc-r-norm"> 모든 벡터를 L2 정규화</label>
+          <p style="margin:0;font-size:13px;color:var(--text-dim);line-height:1.5">순위 목록에서 영화를 누르면 그 영화의 벡터가 막대 위에 테두리로 겹쳐진다.</p>
+        </div>
+      </div>
+      <div class="sim-panel"><div class="vc-rank" id="vc-rank"></div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">사용자 벡터 u</span><span class="v" id="vc-r-u" style="font-size:14px">—</span></div>
+        <div class="stat"><span class="k">|u|</span><span class="v" id="vc-r-un">—</span></div>
+        <div class="stat"><span class="k">선택 영화 cos / 내적 / 거리</span><span class="v" id="vc-r-sel" style="font-size:14px">—</span></div>
+        <div class="stat"><span class="k">세 척도 1위가 일치?</span><span class="v" id="vc-r-agree">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 'SF 액션광'에서 내적 1위는 모든 장르가 강한 「종합선물 블록버스터」인데, 코사인 1위는 방향이 가장 닮은 영화다. ② '× 0.5'를 여러 번 눌러 취향 크기를 줄이면 코사인 순위는 꿈쩍도 하지 않지만 거리 순위는 점수가 작은 소품 영화 쪽으로 이동한다. ③ 'L2 정규화'를 켜면 세 목록의 순서가 완전히 같아진다 — 위의 항등식 \(\lVert\mathbf a-\mathbf b\rVert^2 = 2-2\cos\theta\) 그대로다.</div>
+    </div>
+    <div class="callout tip"><strong>왜 코사인이 기본값이 되었나</strong>
+      <p>문장 임베딩의 길이는 문장 길이·단어 빈도 같은 '의미와 무관한' 요인에 영향을 받기 쉽다. 방향만 보는 코사인 유사도는 이런 잡음에 덜 민감하다. 반면 어텐션의 \(\mathbf q\cdot\mathbf k\)처럼 크기에도 정보가 실린 경우(확신이 클수록 큰 점수)에는 정규화하지 않은 내적을 쓰고, 대신 \(\sqrt{d}\)로 나눠 크기를 다스린다(<a href="attention.html">5장</a>).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="matrix">
+    <h2>행렬 = 선형 변환</h2>
+    <p>행렬을 '숫자를 직사각형으로 늘어놓은 표'로만 보면 선형대수가 지루해진다. 더 좋은 관점은 행렬을 <strong>공간을 변형하는 함수</strong>로 보는 것이다. 2×2 행렬 \(A\)는 평면 위의 모든 점 \(\mathbf x\)를 새 점 \(A\mathbf x\)로 보낸다. 이 변환은 <span class="term">선형</span><span class="en">(linear)</span>이다. 즉 \(A(\mathbf x+\mathbf y) = A\mathbf x + A\mathbf y\), \(A(c\mathbf x) = cA\mathbf x\)가 성립하며, 기하학적으로는 "격자선이 직선으로 남고, 평행하고 등간격이며, 원점이 고정되는" 변환이다.</p>
+    <p>선형성 덕분에 변환 전체가 단 두 벡터로 결정된다. 기저 벡터 \(\hat\imath=(1,0)\)과 \(\hat\jmath=(0,1)\)이 어디로 가는지만 알면, 임의의 \(\mathbf x = x_1\hat\imath + x_2\hat\jmath\)는 \(A\mathbf x = x_1(A\hat\imath) + x_2(A\hat\jmath)\)로 간다. 그리고 \(A\hat\imath\)는 \(A\)의 첫 번째 열, \(A\hat\jmath\)는 두 번째 열이다.</p>
+    <div class="formula">$$A = \begin{bmatrix} a & b \\ c & d\end{bmatrix},\qquad A\begin{bmatrix}x_1\\x_2\end{bmatrix} = x_1\begin{bmatrix}a\\c\end{bmatrix} + x_2\begin{bmatrix}b\\d\end{bmatrix}$$
+      <div class="where"><strong>행렬의 열 = 기저 벡터의 도착지.</strong> 행렬-벡터 곱은 '열들의 가중합'이다. 같은 계산을 행 관점에서 보면 결과의 \(i\)번째 성분은 \(A\)의 \(i\)번째 행과 \(\mathbf x\)의 내적이다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="표준 격자와 행렬로 변환된 격자">
+        <defs>
+          <clipPath id="vc-clipR"><rect x="400" y="20" width="390" height="270"/></clipPath>
+          <marker id="vc-ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="vc-gb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+          <marker id="vc-gk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="200" y="20" text-anchor="middle" class="t-acc">변환 전 (항등)</text>
+        <path d="M104 246L104 54M104 246L296 246M136 246L136 54M104 214L296 214M168 246L168 54M104 182L296 182M200 246L200 54M104 150L296 150M232 246L232 54M104 118L296 118M264 246L264 54M104 86L296 86M296 246L296 54M104 54L296 54" style="stroke:var(--grid);stroke-width:1.2;fill:none"/>
+        <path d="M104 150 H296 M200 54 V246" class="s-axis"/>
+        <path d="M200 150 L232 150 L232 118 L200 118 Z" class="f-acc-soft" style="stroke-width:1"/>
+        <path d="M200 150 L230 150" style="stroke:var(--accent);stroke-width:2.6" marker-end="url(#vc-ga)"/>
+        <path d="M200 150 L200 120" style="stroke:var(--accent-2);stroke-width:2.6" marker-end="url(#vc-gb)"/>
+        <text x="236" y="166" class="t" style="fill:var(--accent)">î</text>
+        <text x="184" y="118" class="t" style="fill:var(--accent-2)">ĵ</text>
+        <text x="200" y="274" text-anchor="middle" class="t-dim">넓이 1인 단위 정사각형</text>
+        <path d="M322 150 H382" class="s-line" style="stroke-width:2" marker-end="url(#vc-gk)"/>
+        <text x="352" y="138" text-anchor="middle" class="t-mono">A</text>
+        <text x="600" y="20" text-anchor="middle" class="t-acc">변환 후  A = [[1.3, 0.6], [0.3, 1.0]]</text>
+        <g clip-path="url(#vc-clipR)">
+          <path d="M407.6 274.8L522.8 82.8M407.6 274.8L657.2 217.2M449.2 265.2L564.4 73.2M426.8 242.8L676.4 185.2M490.8 255.6L606 63.6M446 210.8L695.6 153.2M532.4 246L647.6 54M465.2 178.8L714.8 121.2M574 236.4L689.2 44.4M484.4 146.8L734 89.2M615.6 226.8L730.8 34.8M503.6 114.8L753.2 57.2M657.2 217.2L772.4 25.2M522.8 82.8L772.4 25.2" style="stroke:var(--text-faint);stroke-width:1;fill:none;opacity:.6"/>
+          <path d="M590 150 L631.6 140.4 L650.8 108.4 L609.2 118 Z" class="f-acc-soft" style="stroke-width:1"/>
+          <path d="M590 150 L629.6 140.9" style="stroke:var(--accent);stroke-width:2.6" marker-end="url(#vc-ga)"/>
+          <path d="M590 150 L608.4 120" style="stroke:var(--accent-2);stroke-width:2.6" marker-end="url(#vc-gb)"/>
+        </g>
+        <text x="636" y="156" class="t" style="fill:var(--accent)">Aî = (1.3, 0.3)</text>
+        <text x="540" y="108" class="t" style="fill:var(--accent-2)">Aĵ = (0.6, 1.0)</text>
+        <text x="600" y="274" text-anchor="middle" class="t-dim">넓이 = det A = 1.3·1.0 − 0.6·0.3 = 1.12</text>
+      </svg>
+      <figcaption><b>그림 1-4.</b> 행렬은 격자 전체를 한 번에 변형한다. 격자선은 직선·평행·등간격을 유지하고 원점은 제자리다. 행렬의 두 열이 곧 \(\hat\imath\)와 \(\hat\jmath\)의 새 위치이며, 단위 정사각형은 두 열이 만드는 평행사변형이 된다. 그 넓이가 행렬식이다.</figcaption>
+    </figure>
+    <h3>행렬식과 고유벡터</h3>
+    <p><span class="term">행렬식</span><span class="en">(determinant)</span> \(\det A = ad - bc\)는 변환이 넓이를 몇 배로 바꾸는지를 나타낸다. 단위 정사각형이 넓이 \(|\det A|\)의 평행사변형이 되고, 모든 도형의 넓이가 같은 비율로 변한다. 부호가 음수면 공간이 <strong>뒤집힌다</strong>(거울상: \(\hat\imath\)에서 \(\hat\jmath\)로 도는 방향이 반시계에서 시계로 바뀜). \(\det A = 0\)이면 평면이 직선이나 점으로 찌그러져 정보가 사라지고, 되돌리는 역행렬이 존재하지 않는다.</p>
+    <p><span class="term">고유벡터</span><span class="en">(eigenvector)</span>는 변환 후에도 <strong>자기 방향을 유지하는</strong> 특별한 벡터다. \(A\mathbf v = \lambda\mathbf v\)를 만족하며, \(\lambda\)(고유값)는 그 방향으로 늘어나는 배율이다. 2×2에서 고유값은 \(\lambda^2 - (\mathrm{tr}A)\lambda + \det A = 0\)의 근이다. 회전처럼 모든 방향이 돌아가 버리는 변환은 실수 고유벡터가 없다. 고유벡터는 이 장 끝의 PCA에서 '데이터가 가장 넓게 퍼진 방향'으로 다시 등장한다.</p>
+
+    <div class="sim" id="sim-vc-grid">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2×2 변환 격자: 기저를 끌어 공간을 변형하기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vc-cv-grid" class="vc-drag"></canvas><span class="hint">î, ĵ 끝점을 끌어 보세요</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>프리셋 (부드럽게 이동)</span><div class="vc-btns">
+            <button class="btn" data-vcg="id">항등</button><button class="btn" data-vcg="rot">회전 30°</button><button class="btn" data-vcg="shear">전단</button><button class="btn" data-vcg="scale">스케일</button><button class="btn" data-vcg="proj">투영</button><button class="btn" data-vcg="refl">반사</button><button class="btn" data-vcg="sym">대칭 늘이기</button></div></div>
+          <label class="check"><input type="checkbox" id="vc-g-eig" checked> 고유벡터 방향 표시</label>
+          <label class="check"><input type="checkbox" id="vc-g-orig" checked> 원래 격자·도형 표시</label>
+          <label class="check"><input type="checkbox" id="vc-g-snap" checked> 0.1 단위로 맞추기</label>
+          <div class="ctrl"><span>현재 행렬 A</span><div><span class="vc-matbox" id="vc-g-mat"></span></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">det A (넓이 배율)</span><span class="v" id="vc-g-det">—</span></div>
+        <div class="stat"><span class="k">방향</span><span class="v" id="vc-g-ori">—</span></div>
+        <div class="stat"><span class="k">고유값 λ₁, λ₂</span><span class="v" id="vc-g-lam" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">tr A</span><span class="v" id="vc-g-tr">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① ĵ 끝점을 î 쪽으로 끌어 두 벡터가 한 직선에 놓이게 해 보자. 평행사변형이 납작해지며 det → 0, 'F' 글자가 선분으로 뭉개진다(정보 손실). ② ĵ를 î의 반대편(시계 방향)으로 넘기면 det가 음수가 되고 'F'가 거울상으로 뒤집힌다 — '반사' 프리셋과 비교해 보자. ③ '대칭 늘이기'에서 점선(고유벡터) 위의 점은 변환 후에도 같은 직선 위에 있다. '회전 30°'에서는 고유벡터가 사라진다(복소 고유값). ④ '투영'은 det = 0이고 고유값이 1과 0이다: 한 방향은 그대로, 다른 방향은 완전히 사라진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="matmul">
+    <h2>행렬곱 = 변환의 합성 = 내적의 표</h2>
+    <p>변환 \(B\)를 하고 나서 변환 \(A\)를 하면, 결과도 하나의 선형 변환이고 그 행렬이 <span class="term">행렬곱</span> \(AB\)다. 적용 순서는 오른쪽에서 왼쪽이다: \((AB)\mathbf x = A(B\mathbf x)\). 일반적으로 \(AB \ne BA\)다 — 회전하고 전단하는 것과 전단하고 회전하는 것은 다른 결과를 낳는다.</p>
+    <p>계산 관점에서 \(A\)가 \(m\times k\), \(B\)가 \(k\times n\)이면 \(C = AB\)는 \(m\times n\)이고, 각 성분은 \(A\)의 행과 \(B\)의 열의 내적이다. 안쪽 차원 \(k\)가 맞아야 곱할 수 있고, 곱하고 나면 그 차원은 '소모'되어 사라진다.</p>
+    <div class="formula">$$C_{ij} = \sum_{p=1}^{k} A_{ip}\,B_{pj} \qquad (m\times k)\cdot(k\times n) \to (m\times n),\qquad \text{FLOPs} = 2mnk$$
+      <div class="where">결과 성분 \(mn\)개 각각에 곱셈 \(k\)번과 덧셈 \(k\)번(엄밀히는 \(k-1\)번)이 든다. 곱셈-덧셈 한 쌍(FMA, multiply-accumulate)을 2 FLOPs로 세는 것이 업계 관례다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="행렬곱에서 행과 열의 내적">
+        <text x="140" y="24" text-anchor="middle" class="t-mono">A  (m × k)</text>
+        <rect x="40" y="90" width="200" height="140" class="f-surface"/>
+        <rect x="40" y="148" width="200" height="26" class="f-acc-soft"/>
+        <text x="30" y="166" text-anchor="end" class="t" style="fill:var(--accent)">i행</text>
+        <text x="420" y="24" text-anchor="middle" class="t-mono">B  (k × n)</text>
+        <rect x="340" y="34" width="160" height="200" class="f-surface"/>
+        <rect x="430" y="34" width="26" height="200" class="f-acc2-soft"/>
+        <text x="443" y="250" text-anchor="middle" class="t" style="fill:var(--accent-2)">j열</text>
+        <text x="290" y="168" text-anchor="middle" class="t">×</text>
+        <text x="535" y="168" text-anchor="middle" class="t">=</text>
+        <text x="650" y="24" text-anchor="middle" class="t-mono">C  (m × n)</text>
+        <rect x="570" y="90" width="160" height="140" class="f-surface"/>
+        <rect x="660" y="148" width="26" height="26" style="fill:var(--warn);opacity:.85"/>
+        <text x="673" y="200" text-anchor="middle" class="t-mono">C_ij</text>
+        <text x="400" y="262" text-anchor="middle" class="t-dim">C_ij = (A의 i행) · (B의 j열) — 길이 k인 두 벡터의 내적</text>
+      </svg>
+      <figcaption><b>그림 1-5.</b> 행렬곱의 '행·열 내적' 관점. 결과 행렬의 칸 하나를 채우려면 \(A\)의 한 행 전체와 \(B\)의 한 열 전체가 필요하다. 모든 칸이 서로 독립적으로 계산되므로 수천 개의 연산기가 동시에 나눠 처리하기 좋다 — GPU가 잘하는 일이다.</figcaption>
+    </figure>
+    <p>아래에서 작은 \(A(3\times4)\cdot B(4\times2)\)를 직접 계산해 보자. 결과 칸을 누르면 그 칸에 쓰인 행과 열이 강조되고, '단계 재생'은 곱셈-덧셈을 하나씩 수행하며 FLOPs를 센다.</p>
+
+    <div class="sim" id="sim-vc-mm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>행렬곱 단계 시각화: C = A · B</h3></div>
+      <div class="sim-panel" style="border-top:0">
+        <div class="vc-mm">
+          <div></div>
+          <div><div class="lbl">B (4×2)</div><table class="mat b" id="vc-mm-b"></table></div>
+          <div><div class="lbl">A (3×4)</div><table class="mat a" id="vc-mm-a"></table></div>
+          <div><div class="lbl">C = AB (3×2)</div><table class="mat c" id="vc-mm-c"></table></div>
+        </div>
+      </div>
+      <div class="vc-expl" id="vc-mm-expl">C의 칸을 눌러 보세요.</div>
+      <div class="sim-controls">
+        <div class="ctrl"><span>단계 재생</span><div class="vc-btns"><button class="btn primary" id="vc-mm-play">▶ 재생</button><button class="btn" id="vc-mm-step">한 단계</button><button class="btn" id="vc-mm-reset">전체 보기</button></div></div>
+        <label class="ctrl"><span>재생 속도 <output id="vc-mm-spd-out"></output></span><input type="range" id="vc-mm-spd" min="1" max="20" step="1" value="4"></label>
+        <div class="ctrl"><span>값</span><div class="vc-btns"><button class="btn" id="vc-mm-rand">새 난수</button><button class="btn" id="vc-mm-eye">B를 [I; 0]로</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">현재 칸</span><span class="v" id="vc-mm-cur">—</span></div>
+        <div class="stat"><span class="k">누적 FLOPs</span><span class="v" id="vc-mm-fl">—</span></div>
+        <div class="stat"><span class="k">총 FLOPs = 2mnk</span><span class="v">2·3·2·4 = 48</span></div>
+      </div>
+      <div class="sim-panel">
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:8px">실제 크기로 세어 보기 — (m × k)·(k × n)</div>
+        <div class="vc-flops">
+          <label>m (토큰 수 등)<input class="ab-input" id="vc-fl-m" type="number" min="1" value="4096"></label>
+          <label>k (입력 차원)<input class="ab-input" id="vc-fl-k" type="number" min="1" value="4096"></label>
+          <label>n (출력 차원)<input class="ab-input" id="vc-fl-n" type="number" min="1" value="14336"></label>
+        </div>
+        <div class="vc-btns" style="margin-top:8px"><button class="btn" data-vcf="4096,4096,14336">Llama 3 8B FFN up (4096 토큰)</button><button class="btn" data-vcf="1024,768,2304">GPT-2 QKV 투영 (1024 토큰)</button><button class="btn" data-vcf="1,4096,4096">토큰 1개 × 4096²</button></div>
+        <div class="vc-flopsout" id="vc-fl-out"></div>
+      </div>
+      <div class="sim-note">해볼 것: ① A·B의 칸을 위아래로 끌면 값이 바뀌고 C가 즉시 다시 계산된다. A의 2행 값을 바꾸면 C의 2행만 변하는지 확인하자(행 i는 Aᵢ만 쓴다). ② 'B를 [I; 0]로'를 누르면 C는 A의 처음 두 열을 그대로 복사한다 — 행렬곱이 '열의 가중합'임을 보여 준다. ③ 아래 계산기에서 Llama 3 8B의 FFN 업 투영 하나만 해도 4096 토큰에 약 0.48 PFLOPs가 든다. H100 BF16 약 989 TFLOPS로도 이론상 최소 0.5 ms다.</div>
+    </div>
+    <div class="callout deep"><strong>왜 행렬곱 순서가 중요한가</strong>
+      <p>\((AB)C = A(BC)\)는 결과가 같지만 연산량은 다를 수 있다. \(A\)가 \(1\times 4096\), \(B\)가 \(4096\times4096\), \(C\)가 \(4096\times 4096\)이면 \((AB)C\)는 \(2\cdot4096^2\cdot2 \approx 67\)M FLOPs인데 \(A(BC)\)는 \(BC\)만으로 \(2\cdot4096^3\approx 137\)G FLOPs다. 2000배 차이다. LoRA(작은 행렬 두 개의 곱으로 가중치 변화를 표현)가 효율적인 이유도 이런 순서·랭크 계산에 있다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="layer">
+    <h2>신경망 층 = y = Wx + b, 그리고 텐서 shape</h2>
+    <p>이제 신경망의 기본 부품을 선형대수로 쓸 수 있다. <span class="term">완전연결층</span><span class="en">(fully-connected, Linear, Dense layer)</span>은 입력 벡터 \(\mathbf x\in\mathbb R^{d_\text{in}}\)를 받아 다음을 계산한다.</p>
+    <div class="formula">$$\mathbf y = W\mathbf x + \mathbf b,\qquad W\in\mathbb R^{d_\text{out}\times d_\text{in}},\;\; \mathbf b\in\mathbb R^{d_\text{out}}$$
+      <div class="where">\(W\)의 \(i\)번째 행 \(\mathbf w_i\)는 출력 뉴런 \(i\)의 가중치 벡터다. \(y_i = \mathbf w_i\cdot\mathbf x + b_i\) — 출력 하나하나가 입력과 '어떤 패턴'의 내적, 곧 '그 패턴과 얼마나 닮았나'다. 파라미터 수는 \(d_\text{out} d_\text{in} + d_\text{out}\).</div>
+    </div>
+    <p>여기에 비선형 활성화 함수를 끼워 쌓으면 신경망이 된다(<a href="neuron.html">2장</a>). 실제로는 입력을 하나씩 넣지 않는다. 여러 샘플을 행으로 쌓은 행렬 \(X\in\mathbb R^{B\times d_\text{in}}\)를 한 번에 넣어 \(Y = XW^\top + \mathbf b\)를 계산한다. 이것이 <span class="term">배치</span><span class="en">(batch)</span>다. 행렬-벡터 곱 여러 번이 행렬-행렬 곱 한 번이 되어, 가중치 \(W\)를 메모리에서 한 번 읽고 \(B\)번 재사용한다.</p>
+    <p>언어 모델에서는 차원이 하나 더 붙는다. 배치 \(B\)개의 문장 각각에 토큰이 \(T\)개 있고, 토큰마다 \(d\)차원 벡터가 있으니 데이터는 <code>(B, T, d)</code> 모양의 3차원 배열, 곧 <span class="term">텐서</span><span class="en">(tensor)</span>다. Linear 층은 <strong>마지막 축에만</strong> 작용한다. 앞의 \(B\times T\)는 그냥 '독립적인 벡터 \(BT\)개'로 펼쳐서 하나의 큰 행렬곱 \((BT\times d)\cdot(d\times d_\text{out})\)으로 처리된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="배치 시퀀스 차원 텐서에 선형층을 적용하는 모습">
+        <g transform="translate(60,70)">
+          <path d="M0 40 L40 0 L200 0 L160 40 Z" class="f-acc-soft" style="stroke-width:1"/>
+          <path d="M160 40 L200 0 L200 120 L160 160 Z" class="f-acc-soft" style="stroke-width:1;opacity:.8"/>
+          <rect x="0" y="40" width="160" height="120" class="f-acc-soft" style="stroke-width:1"/>
+          <path d="M0 70 H160 M0 100 H160 M0 130 H160" class="s-line" style="stroke-width:.6;opacity:.6"/>
+          <text x="80" y="185" text-anchor="middle" class="t-mono">d = 768</text>
+          <text x="-10" y="104" text-anchor="end" class="t-mono">T</text>
+          <text x="-10" y="120" text-anchor="end" class="t-mono">1024</text>
+          <text x="196" y="24" class="t-mono">B = 8</text>
+          <text x="100" y="-14" text-anchor="middle" class="t">X : (B, T, d)</text>
+        </g>
+        <text x="330" y="160" text-anchor="middle" class="t">· W<tspan baseline-shift="super" font-size="10">⊤</tspan> + b</text>
+        <g transform="translate(290,180)"><rect x="0" y="0" width="80" height="50" class="f-acc2-soft"/><text x="40" y="30" text-anchor="middle" class="t-mono">768×3072</text></g>
+        <path d="M395 150 H440" class="s-line" style="stroke-width:2"/>
+        <path d="M434 144 L444 150 L434 156" class="s-line" style="stroke-width:2"/>
+        <g transform="translate(470,70)">
+          <path d="M0 40 L40 0 L290 0 L250 40 Z" style="fill:color-mix(in srgb,var(--warn) 18%,transparent);stroke:var(--warn);stroke-width:1"/>
+          <path d="M250 40 L290 0 L290 120 L250 160 Z" style="fill:color-mix(in srgb,var(--warn) 14%,transparent);stroke:var(--warn);stroke-width:1"/>
+          <rect x="0" y="40" width="250" height="120" style="fill:color-mix(in srgb,var(--warn) 18%,transparent);stroke:var(--warn);stroke-width:1"/>
+          <text x="125" y="185" text-anchor="middle" class="t-mono">d_out = 3072</text>
+          <text x="145" y="-14" text-anchor="middle" class="t">Y : (B, T, d_out)</text>
+        </g>
+        <text x="400" y="262" text-anchor="middle" class="t-dim">(B·T × d) · (d × d_out) = 8192 × 768 × 3072 → 2·8192·768·3072 ≈ 38.7 GFLOPs</text>
+      </svg>
+      <figcaption><b>그림 1-6.</b> GPT-2 small의 FFN 첫 층을 예로 든 텐서 shape. 배치 8 × 시퀀스 1024 = 8192개의 토큰 벡터가 같은 가중치 행렬 하나를 공유한다. Linear 층은 마지막 축 \(d\)만 바꾸고 \(B\), \(T\) 축은 그대로 둔다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델 (공개 수치)</th><th class="num">d_model</th><th class="num">FFN 차원</th><th class="num">층 수</th><th class="num">토큰당 대략 FLOPs (순전파)</th></tr></thead>
+      <tbody>
+        <tr><td>GPT-2 small (2019)</td><td class="num">768</td><td class="num">3,072</td><td class="num">12</td><td class="num">약 0.25 GFLOPs</td></tr>
+        <tr><td>Llama 3 8B (2024)</td><td class="num">4,096</td><td class="num">14,336</td><td class="num">32</td><td class="num">약 16 GFLOPs</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 마지막 열은 '파라미터 수 × 2'라는 어림셈이다. 파라미터 하나당 토큰마다 곱셈-덧셈 한 번(2 FLOPs)을 하기 때문이다(GPT-2 small 약 124M, Llama 3 8B 약 8.03B 파라미터). 즉 <strong>LLM 추론 연산의 대부분은 행렬곱</strong>이고, 어텐션 점수 계산 \(QK^\top\)과 가중합 \(AV\)도 행렬곱이다(<a href="attention.html">5장</a>).</p>
+    <h3>GPU는 행렬곱 기계다</h3>
+    <p>행렬곱은 하드웨어 입장에서 이상적인 작업이다. 결과 칸들이 서로 독립이라 대규모 병렬화가 쉽고, 같은 데이터를 여러 번 재사용하므로 메모리에서 가져온 바이트당 연산이 많다. \(n\times n\) 행렬 두 개를 곱하면 데이터는 \(O(n^2)\)인데 연산은 \(O(n^3)\)이다. NVIDIA H100 SXM은 BF16 행렬곱 전용 유닛(Tensor Core)으로 약 989 TFLOPS(dense)를 내지만, 메모리 대역폭은 약 3.35 TB/s다. 바이트당 약 300 FLOPs 이상을 해야 연산기가 쉬지 않는다. 배치가 작은 LLM 디코딩은 이 조건을 못 채워 메모리 대역폭에 묶이는데, 이것이 <a href="generation.html">8장</a>의 KV 캐시와 <a href="design.html">12장</a> 루프라인 분석의 출발점이다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="highdim">
+    <h2>고차원의 직관: 거의 모든 것이 직교한다</h2>
+    <p>2차원과 3차원에서 기른 직관은 768차원이나 4096차원에서 종종 틀린다. 가장 중요한 차이는 이것이다: <strong>무작위로 뽑은 두 고차원 벡터는 거의 항상 거의 직교한다.</strong> 각 성분을 표준정규분포에서 독립으로 뽑은 두 벡터의 코사인 유사도는 평균 0, 분산 약 \(1/d\)인 분포를 따른다.</p>
+    <div class="formula">$$\cos\theta = \frac{\sum_i a_i b_i}{\lVert\mathbf a\rVert\lVert\mathbf b\rVert},\qquad \mathbb E[\cos\theta]=0,\quad \operatorname{Var}[\cos\theta] = \frac{1}{d},\qquad p(c)\propto (1-c^2)^{\frac{d-3}{2}}$$
+      <div class="where">분자는 평균 0인 항 \(d\)개의 합이라 표준편차가 \(\sqrt d\) 정도로 자라고, 분모는 \(\lVert\mathbf a\rVert\lVert\mathbf b\rVert\approx d\)로 자란다. 비율의 표준편차는 \(1/\sqrt d\). \(d=4096\)이면 약 0.016이다. 오른쪽은 정확한 분포의 밀도다.</div>
+    </div>
+    <p>이 사실은 두 가지 귀결을 낳는다. <strong>축복</strong>: 거의 직교하는 방향이 사실상 무한히 많다. \(d\)차원에는 정확히 직교하는 방향이 \(d\)개뿐이지만, 서로 코사인이 0.1 이하인 '거의 직교' 방향은 \(d\)에 대해 지수적으로 많이 넣을 수 있다. 그래서 4096차원 임베딩 하나에 수만 개의 개념을 서로 간섭 적게 담을 수 있다(이른바 superposition 가설). 또 무작위 투영으로 차원을 크게 줄여도 거리가 대략 보존된다(Johnson–Lindenstrauss 보조정리). <strong>저주</strong>: 거리가 집중된다. 무작위 점들 사이의 거리가 모두 비슷해져서, '가장 가까운 이웃'과 '가장 먼 이웃'의 차이가 상대적으로 작아진다. 단순 거리 기반 방법이 고차원에서 어려워지는 이유다.</p>
+    <p>부피도 이상하게 행동한다. 반지름 1인 \(d\)차원 공의 부피는 \(r^d\)에 비례하므로, 바깥 두께 \(\varepsilon\)짜리 껍질이 차지하는 비율은 \(1-(1-\varepsilon)^d\)다. \(d=1000\), \(\varepsilon=0.01\)이면 99.996%다. 고차원 공의 부피는 거의 전부 표면 근처에 있다. 고차원 가우시안 표본도 원점 근처가 아니라 반지름 \(\sqrt d\) 근처의 얇은 껍질에 몰려 있다.</p>
+
+    <div class="sim" id="sim-vc-dim">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>차원의 저주와 축복: 랜덤 벡터 실험</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vc-cv-dim1"></canvas><canvas id="vc-cv-dim2" style="border-top:1px solid var(--border)"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>차원 d <output id="vc-d-out"></output></span><input type="range" id="vc-d" min="0" max="12" step="1" value="0"></label>
+          <label class="ctrl"><span>껍질 두께 ε <output id="vc-eps-out"></output></span><input type="range" id="vc-eps" min="0.01" max="0.2" step="0.01" value="0.05"></label>
+          <label class="check"><input type="checkbox" id="vc-d-theory" checked> 이론 밀도 겹치기</label>
+          <button class="btn" id="vc-d-resample">다시 표본 뽑기</button>
+          <p style="margin:0;font-size:13px;color:var(--text-dim);line-height:1.5">위: 무작위 벡터 쌍의 코사인 유사도 히스토그램(성분 ~ N(0,1), 매번 실제로 표본을 뽑는다). 아래: 공 부피 중 바깥 껍질의 비율 1−(1−ε)<sup>d</sup>.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">cos 표본 표준편차</span><span class="v" id="vc-d-sd">—</span></div>
+        <div class="stat"><span class="k">이론 1/√d</span><span class="v" id="vc-d-th">—</span></div>
+        <div class="stat"><span class="k">|cos| &lt; 0.1 비율</span><span class="v" id="vc-d-near">—</span></div>
+        <div class="stat"><span class="k">거리 대비 (최대−최소)/최소</span><span class="v" id="vc-d-con">—</span></div>
+        <div class="stat"><span class="k">껍질 부피 비율</span><span class="v" id="vc-d-shell">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① d = 2에서 히스토그램은 양 끝(±1)이 높은 U자다 — 평면에서 무작위 두 방향은 직교하기보다 오히려 나란하기 쉽다. d = 3이면 평평해지고, d를 키울수록 0 근처의 좁은 종으로 바뀐다. ② d = 768(GPT-2)과 4096(Llama 3)에서 표준편차가 1/√d와 맞는지 확인하자. ③ '거리 대비'는 무작위 점 300개 중 질의 점에서 가장 먼 점과 가장 가까운 점의 거리 차를 최소 거리로 나눈 값이다. d = 2에서는 수십~수백 배지만 d = 4096에서는 0.1 남짓으로 떨어진다(거리 집중). ④ ε = 0.01이어도 d가 수백을 넘으면 부피의 대부분이 껍질에 있다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="norm">
+    <h2>노름, 단위벡터, 정규화</h2>
+    <p>벡터의 '크기'를 재는 방법은 하나가 아니다. 일반적인 \(L_p\) <span class="term">노름</span><span class="en">(norm)</span>은 다음과 같다.</p>
+    <div class="formula">$$\lVert\mathbf x\rVert_p = \Big(\sum_i |x_i|^p\Big)^{1/p},\qquad \lVert\mathbf x\rVert_1 = \sum_i|x_i|,\quad \lVert\mathbf x\rVert_2 = \sqrt{\textstyle\sum_i x_i^2},\quad \lVert\mathbf x\rVert_\infty = \max_i |x_i|$$
+      <div class="where">특별한 표시가 없으면 노름은 L2(유클리드 길이)를 뜻한다. L1은 '맨해튼 거리', L∞는 가장 큰 성분의 크기다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="L1, L2, L 무한대 노름의 단위 공" class="vc-narrow">
+        <path d="M200 30 V250 M90 140 H310" class="s-axis"/>
+        <path d="M200 60 L280 140 L200 220 L120 140 Z" style="fill:none;stroke:var(--accent-2);stroke-width:2.4"/>
+        <circle cx="200" cy="140" r="80" style="fill:none;stroke:var(--accent);stroke-width:2.4"/>
+        <rect x="120" y="60" width="160" height="160" style="fill:none;stroke:var(--warn);stroke-width:2.4"/>
+        <text x="286" y="134" class="t-mono">1</text><text x="206" y="56" class="t-mono">1</text>
+        <g transform="translate(360,60)">
+          <rect x="0" y="0" width="16" height="4" class="f-acc2"/><text x="26" y="7" class="t">L1: |x₁| + |x₂| = 1 (마름모)</text>
+          <text x="26" y="27" class="t-dim">꼭짓점이 축 위 → 희소한 해를 선호 (Lasso)</text>
+          <rect x="0" y="60" width="16" height="4" class="f-acc"/><text x="26" y="67" class="t">L2: x₁² + x₂² = 1 (원)</text>
+          <text x="26" y="87" class="t-dim">회전해도 같다 → 방향에 공평 (weight decay)</text>
+          <rect x="0" y="120" width="16" height="4" style="fill:var(--warn)"/><text x="26" y="127" class="t">L∞: max(|x₁|, |x₂|) = 1 (정사각형)</text>
+          <text x="26" y="147" class="t-dim">가장 큰 성분만 본다 → 양자화의 absmax 스케일</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 1-7.</b> 세 노름의 '단위 공'(노름이 1인 점들의 집합). 같은 벡터라도 어떤 노름으로 재느냐에 따라 크기가 다르다. L∞는 <a href="quantization.html">9장</a>에서 양자화 스케일을 정할 때, L1·L2는 <a href="training.html">3장</a>에서 정규화(regularization) 항으로 다시 만난다.</figcaption>
+    </figure>
+    <p>벡터를 자기 L2 노름으로 나누는 것을 <span class="term">L2 정규화</span><span class="en">(L2 normalization)</span>라 한다. 결과는 단위 구 위의 점이고, 크기 정보는 버리고 방향만 남는다. 앞에서 본 대로 정규화된 벡터끼리는 내적 = 코사인 유사도다.</p>
+    <p>신경망 내부에서도 비슷한 정규화가 끊임없이 일어난다. 층을 수십 개 거치는 동안 벡터의 크기가 폭주하거나 소멸하지 않도록, Transformer는 각 블록 앞에서 토큰 벡터의 크기를 다시 맞춘다. Llama 계열이 쓰는 <span class="term">RMSNorm</span>은 이름 그대로 성분의 제곱평균제곱근(RMS)으로 나눈다.</p>
+    <div class="formula">$$\operatorname{RMSNorm}(\mathbf x) = \frac{\mathbf x}{\sqrt{\frac{1}{d}\sum_i x_i^2 + \epsilon}} \odot \mathbf g = \frac{\sqrt d\,\mathbf x}{\lVert\mathbf x\rVert_2}\odot\mathbf g\quad(\epsilon\to0)$$
+      <div class="where">결국 L2 정규화 후 \(\sqrt d\)를 곱하고, 학습되는 성분별 배율 \(\mathbf g\)를 곱한 것이다(\(\odot\)는 성분별 곱). LayerNorm은 여기에 평균 빼기가 더해진다. 자세한 역할은 <a href="transformer.html">6장</a>에서 다룬다.</div>
+    </div>
+    <div class="callout warn"><strong>고차원에서의 크기 감각</strong>
+      <p>성분이 대략 표준정규분포인 \(d\)차원 벡터의 길이는 약 \(\sqrt d\)다. 768차원이면 약 27.7, 4096차원이면 약 64다. 그래서 두 벡터의 내적은 \(d\)가 클수록 표준편차 \(\sqrt d\)로 커진다. 어텐션이 \(\mathbf q\cdot\mathbf k\)를 \(\sqrt{d_k}\)로 나누는 이유가 바로 이것이다 — 나누지 않으면 소프트맥스가 한 토큰에만 몰린다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="proj">
+    <h2>투영과 차원 축소: PCA 맛보기</h2>
+    <p>3차원 물체의 그림자는 2차원 평면으로의 <span class="term">투영</span><span class="en">(projection)</span>이다. 서로 직교하는 단위벡터 \(\mathbf u_1,\mathbf u_2\)가 만드는 평면으로 점 \(\mathbf x\)를 투영하면 평면 위 좌표는 \((\mathbf u_1\cdot\mathbf x,\;\mathbf u_2\cdot\mathbf x)\)다. 이것을 행렬로 쓰면 \(U^\top\mathbf x\)이고(\(U=[\mathbf u_1\;\mathbf u_2]\)는 \(3\times2\)), 원래 공간 안의 그림자 위치는 \(P\mathbf x = UU^\top\mathbf x\)다. \(P\)를 <strong>투영 행렬</strong>이라 하며 \(P^2=P\)(두 번 투영해도 같다)를 만족한다. 앞의 변환 격자 시뮬레이터의 '투영' 프리셋이 2D 버전이었다.</p>
+    <p>그렇다면 데이터를 잘 보여 주는 '좋은 그림자'는 어느 방향일까? 정보를 가장 많이 남기는 투영은 투영 후에도 점들이 <strong>가장 넓게 퍼져 있는</strong>(분산이 큰) 방향이다. 데이터를 평균이 0이 되게 옮긴 뒤 공분산 행렬 \(C = \frac1n X^\top X\)를 구하면, 단위벡터 \(\mathbf u\) 방향으로 투영한 분산은 \(\mathbf u^\top C\mathbf u\)다. 이를 최대화하는 \(\mathbf u\)가 \(C\)의 가장 큰 고유값에 해당하는 고유벡터이고, 그 고유값이 곧 그 방향의 분산이다. 이것이 <span class="term">주성분 분석</span><span class="en">(PCA, Principal Component Analysis)</span>이다.</p>
+    <div class="formula">$$C\mathbf u_k = \lambda_k\mathbf u_k,\quad \lambda_1\ge\lambda_2\ge\cdots,\qquad \text{상위 } r\text{개 성분이 보존하는 분산 비율} = \frac{\lambda_1+\cdots+\lambda_r}{\lambda_1+\cdots+\lambda_d}$$</div>
+
+    <div class="sim" id="sim-vc-pca">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>3D 점구름을 2D로: 가장 좋은 그림자 찾기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vc-cv-pca" class="vc-drag" style="cursor:grab"></canvas><span class="hint">끌어서 시점(투영 평면)을 돌리세요</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>시점으로 이동</span><div class="vc-btns"><button class="btn primary" id="vc-pca-best">PCA 최적 (PC1–PC2 평면)</button><button class="btn" id="vc-pca-worst">최악 (PC1을 정면으로)</button></div></div>
+          <div class="ctrl"><span>데이터 모양</span><div class="seg" id="vc-pca-data"><button data-value="cigar" class="on">시가형</button><button data-value="pancake">팬케이크</button><button data-value="ball">공</button></div></div>
+          <label class="check"><input type="checkbox" id="vc-pca-axes" checked> 주성분 축 표시 (길이 = 2√λ)</label>
+          <p style="margin:0;font-size:13px;color:var(--text-dim);line-height:1.5">화면 자체가 3D → 2D 투영이다. 점 색은 PC1 좌표(제1주성분 방향 위치).</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">고유값 λ₁, λ₂, λ₃</span><span class="v" id="vc-pca-lam" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">현재 시점이 보존한 분산</span><span class="v" id="vc-pca-cur">—</span></div>
+        <div class="stat"><span class="k">PCA 최댓값 (λ₁+λ₂)/Σλ</span><span class="v" id="vc-pca-max">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 마우스로 돌려 가며 '현재 보존 분산'을 최대로 만들어 보자. 아무리 돌려도 PCA 최댓값을 넘지 못한다. ② '최악'을 누르면 길쭉한 시가를 정면에서 보게 되어 점들이 작은 원반으로 겹쳐 보인다 — 가장 큰 변화 방향을 버린 그림자다. ③ '팬케이크'는 λ₃가 매우 작아 2D 투영으로 거의 100%가 보존된다. 진짜 데이터도 이렇게 '얇은' 경우가 많아, 수백 차원 임베딩을 2~3차원으로 줄여 시각화할 수 있다(<a href="embedding.html">4장</a>). ④ '공'은 모든 고유값이 비슷해 어떤 시점도 약 67%만 남긴다.</div>
+    </div>
+    <p>PCA는 '선형' 차원 축소다. 투영은 행렬곱 하나이므로 빠르고 되돌리기도 쉽다(\(UU^\top\)로 복원). 신경망의 많은 부분도 이렇게 해석할 수 있다. 어텐션 헤드는 \(d\)차원 토큰 벡터를 \(d_k = d/h\)차원 부분공간으로 투영해서 그 안에서만 비교하고(<a href="attention.html">5장</a>), LoRA는 가중치 변화가 낮은 랭크 부분공간에 있다고 가정한다. 이후 장에서 "투영"이라는 말이 나오면 <strong>행렬곱으로 다른(대개 더 작은) 공간의 좌표를 구하는 것</strong>이라고 읽으면 된다.</p>
+  </section>
+
+  <!-- ============================================================ precision -->
+  <section id="precision">
+    <h2>실전의 벡터: 몇 비트로 저장하고 계산할까</h2>
+    <p>지금까지 벡터의 성분은 그냥 "실수"였다. 하지만 컴퓨터에서 실수 하나는 정해진 비트 수로 저장되고, 그 비트 수가 곧 메모리·대역폭·연산 속도를 정한다. 이 장의 연산들이 실제 시스템에서 어떤 정밀도로 돌아가는지 짧게 짚어 두자. 자세한 비트 구조와 양자화 방법은 <a href="quantization.html">9장</a>에서 다룬다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>성분 형식</th><th class="num">성분당</th><th class="num">1,024차원 벡터 하나</th><th class="num">벡터 100만 개</th><th>내적은 이렇게 계산</th></tr></thead>
+      <tbody>
+        <tr><td>FP32</td><td class="num">32비트</td><td class="num">4,096 B</td><td class="num">약 4.1 GB</td><td>곱셈·덧셈 그대로</td></tr>
+        <tr><td>FP16 / BF16</td><td class="num">16비트</td><td class="num">2,048 B</td><td class="num">약 2.0 GB</td><td>곱은 16비트, 합은 보통 FP32로 누적</td></tr>
+        <tr><td>INT8 (스케일 1개 + 정수)</td><td class="num">8비트</td><td class="num">1,024 B</td><td class="num">약 1.0 GB</td><td>정수 곱을 INT32로 누적한 뒤 스케일을 한 번 곱함</td></tr>
+        <tr><td>이진(부호 1비트)</td><td class="num">1비트</td><td class="num">128 B</td><td class="num">약 128 MB</td><td>XOR 후 1의 개수 세기(popcount) = 해밍 거리</td></tr>
+      </tbody>
+    </table></div>
+    <p>핵심 관찰은 두 가지다. 첫째, <strong>내적은 저정밀 입력에 꽤 관대하다.</strong> 내적은 많은 곱의 합이라, 성분마다 생긴 작은 반올림 오차가 서로 다른 부호로 섞이며 상당 부분 상쇄된다(고차원에서 랜덤 오차 벡터가 거의 직교하는 것과 같은 이유다). 그래서 곱하는 입력은 8비트·4비트로 줄이고, <strong>합은 더 넓은 형식(INT32·FP32)으로 누적</strong>하는 것이 표준 설계다. 둘째, 정규화된 임베딩을 이진화하면 \(\mathbf a\cdot\mathbf b\) 대신 해밍 거리를 쓰게 되는데, 1,024비트 해밍 거리는 64비트 popcount 16번이면 끝나서 CPU에서도 매우 빠르다. 이진 벡터로 후보를 넓게 뽑고 원래 정밀도로 다시 점수를 매기는(rescoring) 2단 구조가 벡터 검색에서 흔하다(<a href="embedding.html">4장</a>, <a href="rag.html">10장</a>).</p>
+    <div class="callout deep"><strong>행렬곱 하드웨어도 같은 방향으로 간다</strong>
+      <p>GPU 텐서 코어는 세대마다 더 짧은 입력 형식을 지원해 왔다. H100(Hopper)은 FP8 행렬곱을 BF16 대비 약 2배 처리량으로 돌리고, Blackwell(B200 등, 2024~25)과 그 뒤의 Vera Rubin(2026)은 4비트 부동소수점(MXFP4·NVFP4) 행렬곱을 텐서 코어에서 직접 수행한다. 원리는 위 INT8과 같다. 16~32개 성분마다 스케일 하나를 붙인 4비트 블록끼리 곱하고, 결과는 FP32로 누적한다. 앞에서 본 "\(2mnk\) FLOPs짜리 행렬곱"을 바이트를 덜 읽고 더 많이 동시에 하려는 것이다. 형식의 세부(E2M1, 블록 크기, 스케일 형식)는 <a href="quantization.html">9장</a>에 있다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>이미지·소리·단어·취향은 모두 고정 길이 숫자 배열, 곧 특징 공간의 점이 된다. 학습은 의미상 가까운 것이 기하학적으로 가까워지도록 공간을 만드는 일이다.</li>
+      <li>내적 \(\mathbf a\cdot\mathbf b = \sum a_ib_i = \lVert\mathbf a\rVert\lVert\mathbf b\rVert\cos\theta\)는 투영이자 유사도다. 정규화하면 내적 = 코사인이고 \(\lVert\mathbf a-\mathbf b\rVert^2 = 2-2\cos\theta\)라 세 척도의 순위가 같아진다.</li>
+      <li>행렬은 선형 변환이며 열은 기저 벡터의 도착지다. \(\det\)는 넓이 배율(음수면 뒤집힘, 0이면 정보 손실), 고유벡터는 방향이 유지되는 축이다.</li>
+      <li>행렬곱은 변환의 합성이고 각 칸은 행·열 내적이다. \((m\times k)(k\times n)\)의 비용은 2mnk FLOPs이며, LLM 연산의 대부분이 이것이다.</li>
+      <li>신경망 층은 \(\mathbf y = W\mathbf x+\mathbf b\)이고, 실제로는 <code>(B, T, d)</code> 텐서의 마지막 축에 작용하는 큰 행렬곱이다. 데이터 재사용이 높은 행렬곱은 GPU Tensor Core에 이상적이다.</li>
+      <li>고차원에서 랜덤 벡터는 거의 직교하며(\(\cos\)의 표준편차 \(\approx 1/\sqrt d\)), 거리는 집중되고 부피는 껍질에 몰린다.</li>
+      <li>노름은 크기, L2 정규화는 방향만 남기기, RMSNorm은 \(\sqrt d\)배 된 L2 정규화다. 투영은 행렬곱이고, PCA는 공분산의 고유벡터로 분산을 최대한 보존하는 투영을 찾는다.</li>
+      <li>실제 시스템은 벡터를 FP16·INT8·이진·FP4처럼 짧은 형식으로 저장·계산한다. 내적은 입력 오차에 관대해서 "입력은 짧게, 누적은 넓게(INT32·FP32)"가 표준이며, 1,024차원 이진 벡터는 128바이트로 FP32의 1/32이다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 벡터 b의 방향은 그대로 두고 길이만 3배로 늘렸다. a·b와 코사인 유사도는 각각 어떻게 되는가?</p><div class="opts">
+        <button class="opt">둘 다 3배</button><button class="opt" data-correct>a·b는 3배, 코사인 유사도는 그대로</button><button class="opt">a·b는 그대로, 코사인 유사도는 3배</button><button class="opt">a·b는 9배, 코사인 유사도는 그대로</button>
+      </div><div class="quiz-exp">\(\mathbf a\cdot(3\mathbf b) = 3(\mathbf a\cdot\mathbf b)\)이지만 코사인은 분모의 \(\lVert 3\mathbf b\rVert = 3\lVert\mathbf b\rVert\)가 이를 상쇄한다. 코사인 유사도는 방향만 본다.</div></div>
+      <div class="quiz-q"><p>2. 행렬 \(A = \begin{bmatrix}2 & 1\\ 1 & -1\end{bmatrix}\)이 평면에 하는 일로 옳은 것은?</p><div class="opts">
+        <button class="opt">넓이를 3배로 늘리고 방향은 유지</button><button class="opt" data-correct>넓이를 3배로 늘리고 공간을 뒤집음</button><button class="opt">넓이를 1배로 유지 (회전)</button><button class="opt">평면을 직선으로 찌그러뜨림</button>
+      </div><div class="quiz-exp">\(\det A = 2\cdot(-1) - 1\cdot1 = -3\). 절댓값 3이 넓이 배율, 음수 부호는 방향(손잡이)이 뒤집힌다는 뜻이다.</div></div>
+      <div class="quiz-q"><p>3. \((128\times512)\)와 \((512\times256)\) 행렬을 곱하는 데 드는 FLOPs는?</p><div class="opts">
+        <button class="opt">약 1.7M</button><button class="opt">약 16.8M</button><button class="opt" data-correct>약 33.6M</button><button class="opt">약 67.1M</button>
+      </div><div class="quiz-exp">\(2mnk = 2\times128\times256\times512 = 33{,}554{,}432\). 결과 칸 \(128\times256\)개 각각에 길이 512짜리 내적(곱셈·덧셈 각 512번)이 든다.</div></div>
+      <div class="quiz-q"><p>4. shape <code>(32, 128, 768)</code>인 텐서 X에 가중치 \(W\in\mathbb R^{3072\times768}\)인 Linear 층(\(XW^\top+\mathbf b\))을 적용한 결과의 shape은?</p><div class="opts">
+        <button class="opt">(32, 3072, 768)</button><button class="opt">(3072, 128, 768)</button><button class="opt" data-correct>(32, 128, 3072)</button><button class="opt">(32, 128, 768) — 그대로</button>
+      </div><div class="quiz-exp">Linear 층은 마지막 축에만 작용한다. 내부적으로 \((32\cdot128)\times768\) 행렬과 \(768\times3072\) 행렬의 곱이 되고, 다시 (32, 128, 3072)로 접힌다.</div></div>
+      <div class="quiz-q"><p>5. 성분이 독립 표준정규분포인 1024차원 랜덤 벡터 두 개의 코사인 유사도는 대략 어느 범위에 몰려 있는가?</p><div class="opts">
+        <button class="opt">−1 또는 +1 근처</button><button class="opt">−0.5 ~ +0.5 사이에 고르게</button><button class="opt" data-correct>0 근처, 표준편차 약 0.03</button><button class="opt">정확히 0</button>
+      </div><div class="quiz-exp">분산이 \(1/d\)이므로 표준편차는 \(1/\sqrt{1024} = 1/32 \approx 0.031\)이다. 대부분 ±0.1 안에 들어간다 — 고차원에서 랜덤 벡터는 거의 직교한다.</div></div>
+      <div class="quiz-q"><p>6. 모든 임베딩을 L2 정규화해 두었다. 질의와의 '유클리드 거리가 작은 순'과 '코사인 유사도가 큰 순' 순위의 관계는?</p><div class="opts">
+        <button class="opt">관계가 없다</button><button class="opt">정확히 반대다</button><button class="opt" data-correct>완전히 같다</button><button class="opt">상위 1개만 같다</button>
+      </div><div class="quiz-exp">단위벡터끼리는 \(\lVert\mathbf a-\mathbf b\rVert^2 = 2 - 2\cos\theta\)다. 거리는 코사인의 단조 감소 함수이므로 순위가 완전히 같다. 내적 순위도 같다. 그래서 벡터 DB는 정규화 후 내적만 계산하곤 한다.</div></div>
+      <div class="quiz-q"><p>7. 1,024차원 임베딩 100만 개를 FP32 대신 부호만 남긴 이진 벡터로 저장하면 저장량과 유사도 계산은 어떻게 되는가?</p><div class="opts">
+        <button class="opt">약 4.1 GB → 약 1 GB, 내적을 그대로 계산</button><button class="opt" data-correct>약 4.1 GB → 약 128 MB, XOR + popcount로 해밍 거리를 계산</button><button class="opt">약 4.1 GB → 약 512 MB, 코사인을 FP4로 계산</button><button class="opt">저장량은 같고 계산만 빨라진다</button>
+      </div><div class="quiz-exp">FP32는 성분당 4바이트라 \(10^6\times1024\times4\) B ≈ 4.1 GB, 이진은 성분당 1비트라 1/32인 128 B/벡터, 합계 약 128 MB다. ±1 벡터의 내적은 \(d - 2\times\)해밍 거리이므로, 비트 XOR 후 1의 개수만 세면 된다. 정밀도 손실은 원래 벡터로 상위 후보만 다시 점수 매기는 rescoring으로 보완한다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ======================================================== 공통 헬퍼 */
+  function ptr(cv, e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  // 포인터 드래그: h.down(p,e) → false면 캡처 안 함, h.move(p,e), h.up(p,e), h.hover(p) → cursor
+  function dragger(cv, h) {
+    var active = false;
+    cv.style.touchAction = "none";
+    cv.addEventListener("pointerdown", function (e) {
+      var p = ptr(cv, e);
+      if (h.down(p, e) === false) return;
+      active = true; try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    cv.addEventListener("pointermove", function (e) {
+      var p = ptr(cv, e);
+      if (active) { h.move && h.move(p, e); e.preventDefault(); }
+      else if (h.hover) cv.style.cursor = h.hover(p) || "";
+    });
+    function end(e) { if (!active) return; active = false; h.up && h.up(ptr(cv, e), e); }
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  }
+  function arrow(ctx, x0, y0, x1, y1, col, lw, head) {
+    var dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy); if (L < 1) return;
+    var hs = head || 10, ux = dx / L, uy = dy / L;
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw || 2.5;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * hs * 0.8, y1 - uy * hs * 0.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * hs - uy * hs * 0.45, y1 - uy * hs + ux * hs * 0.45); ctx.lineTo(x1 - ux * hs + uy * hs * 0.45, y1 - uy * hs - ux * hs * 0.45); ctx.closePath(); ctx.fill();
+  }
+  function font(ctx, px, mono, bold) { ctx.font = (bold ? "600 " : "") + px + "px " + (mono ? "JetBrains Mono, ui-monospace, monospace" : getComputedStyle(document.body).getPropertyValue("--font")); }
+  function label(ctx, txt, x, y, col, bg) {
+    var w = ctx.measureText(txt).width;
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(x - 3, y - 9, w + 6, 18); }
+    ctx.fillStyle = col; ctx.textBaseline = "middle"; ctx.fillText(txt, x, y);
+  }
+  function f2(x) { return (Math.abs(x) < 0.005 ? 0 : x).toFixed(2); }
+  function signCol(P, v, eps) { return Math.abs(v) < (eps || 0.05) ? P.dim : v > 0 ? P.ok : P.bad; }
+
+  /* ======================================================== SIM 1: 2D 벡터 놀이터 */
+  (function () {
+    var el = document.getElementById("vc-cv-play");
+    var st = { a: [3, 1], b: [1, 2.5], drag: null };
+    var V = { ox: 0, oy: 0, s: 1 };
+    var ck = function (id) { return document.getElementById(id).checked; };
+    function W2S(v) { return [V.ox + v[0] * V.s, V.oy - v[1] * V.s]; }
+    function S2W(p) { return [(p.x - V.ox) / V.s, (V.oy - p.y) / V.s]; }
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      var P = AB.palette();
+      V.ox = w / 2; V.oy = h / 2; V.s = Math.min(w, h) / 10.5;
+      var nx = Math.ceil(w / 2 / V.s), ny = Math.ceil(h / 2 / V.s);
+      ctx.lineWidth = 1; ctx.strokeStyle = P.grid;
+      for (var i = -nx; i <= nx; i++) { var x = V.ox + i * V.s; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      for (var j = -ny; j <= ny; j++) { var y = V.oy + j * V.s; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(0, V.oy); ctx.lineTo(w, V.oy); ctx.moveTo(V.ox, 0); ctx.lineTo(V.ox, h); ctx.stroke();
+      var a = st.a, b = st.b, d = AB.dot(a, b), na = AB.norm(a), nb = AB.norm(b), c = AB.cos(a, b);
+      var sc = signCol(P, c, 0.02);
+      var O = W2S([0, 0]), A = W2S(a), B = W2S(b);
+      font(ctx, 13, true, true);
+      if (ck("vc-p-ang") && na > 1e-6 && nb > 1e-6) {
+        var ta = Math.atan2(a[1], a[0]), tb = Math.atan2(b[1], b[0]);
+        var dt = tb - ta; while (dt > Math.PI) dt -= 2 * Math.PI; while (dt < -Math.PI) dt += 2 * Math.PI;
+        var R = 34;
+        ctx.fillStyle = AB.alpha(sc, 0.18); ctx.strokeStyle = sc; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(O[0], O[1]); ctx.arc(O[0], O[1], R, -ta, -ta - dt, dt > 0); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.arc(O[0], O[1], R, -ta, -ta - dt, dt > 0); ctx.stroke();
+        var tm = ta + dt / 2; label(ctx, "θ", O[0] + Math.cos(tm) * (R + 12) - 4, O[1] - Math.sin(tm) * (R + 12), sc);
+      }
+      if (ck("vc-p-sum")) {
+        var S = W2S(AB.add(a, b));
+        ctx.setLineDash([5, 4]); ctx.strokeStyle = P.faint; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(S[0], S[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.setLineDash([]);
+        arrow(ctx, O[0], O[1], S[0], S[1], P.ok, 2.2);
+        label(ctx, "a+b", S[0] + 8, S[1] - 8, P.ok);
+      }
+      if (ck("vc-p-diff")) {
+        arrow(ctx, B[0], B[1], A[0], A[1], P.warn, 2.2);
+        var M = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+        label(ctx, "a−b", M[0] + 8, M[1] + 4, P.warn);
+      }
+      if (ck("vc-p-proj") && nb > 1e-6) {
+        var k = d / (nb * nb), pr = AB.scale(b, k), PR = W2S(pr);
+        // b 방향 연장선
+        var ub = [b[0] / nb, b[1] / nb], far = 30;
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1.2; ctx.setLineDash([2, 4]);
+        var e1 = W2S([-ub[0] * far, -ub[1] * far]), e2 = W2S([ub[0] * far, ub[1] * far]);
+        ctx.beginPath(); ctx.moveTo(e1[0], e1[1]); ctx.lineTo(e2[0], e2[1]); ctx.stroke();
+        ctx.strokeStyle = P.dim; ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(PR[0], PR[1]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = AB.alpha(sc, 0.7); ctx.lineWidth = 7; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(O[0], O[1]); ctx.lineTo(PR[0], PR[1]); ctx.stroke(); ctx.lineCap = "butt";
+        // 직각 표시
+        var perp = AB.sub(a, pr), np = AB.norm(perp);
+        if (np > 0.15 && Math.abs(k) * nb > 0.15) {
+          var q = 0.22, u1 = AB.scale(ub, -Math.sign(k) * q), u2 = AB.scale(perp, q / np);
+          var c1 = W2S(AB.add(pr, u1)), c2 = W2S(AB.add(AB.add(pr, u1), u2)), c3 = W2S(AB.add(pr, u2));
+          ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(c1[0], c1[1]); ctx.lineTo(c2[0], c2[1]); ctx.lineTo(c3[0], c3[1]); ctx.stroke();
+        }
+      }
+      arrow(ctx, O[0], O[1], A[0], A[1], P.accent, 3);
+      arrow(ctx, O[0], O[1], B[0], B[1], P.accent2, 3);
+      [[A, P.accent, "a"], [B, P.accent2, "b"]].forEach(function (t) {
+        ctx.fillStyle = P.bg; ctx.strokeStyle = t[1]; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(t[0][0], t[0][1], 7, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+        font(ctx, 14, false, true); label(ctx, t[2], t[0][0] + 11, t[0][1] - 12, t[1]);
+      });
+      // 판독
+      AB.stat("vc-p-dot", '<span style="color:' + sc + '">' + f2(d) + "</span>");
+      AB.stat("vc-p-norm", f2(na) + ", " + f2(nb));
+      AB.stat("vc-p-th", na > 1e-6 && nb > 1e-6 ? (Math.acos(AB.clamp(c, -1, 1)) * 180 / Math.PI).toFixed(1) + "°" : "—");
+      AB.stat("vc-p-cos", '<span style="color:' + sc + '">' + c.toFixed(3) + "</span>");
+      AB.stat("vc-p-pl", nb > 1e-6 ? f2(d / nb) : "—");
+      AB.stat("vc-p-dist", f2(AB.norm(AB.sub(a, b))));
+    }, { aspect: 0.66, maxHeight: 480, minHeight: 300 });
+    function near(p) {
+      var A = W2S(st.a), B = W2S(st.b);
+      var da = Math.hypot(p.x - A[0], p.y - A[1]), db = Math.hypot(p.x - B[0], p.y - B[1]);
+      if (Math.min(da, db) > 28) return null;
+      return da <= db ? "a" : "b";
+    }
+    dragger(el, {
+      down: function (p) { st.drag = near(p); if (!st.drag) return false; },
+      move: function (p) {
+        var v = S2W(p), lx = V.ox / V.s - 0.3, ly = V.oy / V.s - 0.3;
+        v = [AB.clamp(v[0], -lx, lx), AB.clamp(v[1], -ly, ly)];
+        if (ck("vc-p-snap")) v = [Math.round(v[0] * 2) / 2, Math.round(v[1] * 2) / 2];
+        st[st.drag] = v; cv.redraw();
+      },
+      up: function () { st.drag = null; },
+      hover: function (p) { return near(p) ? "grab" : "crosshair"; },
+    });
+    ["vc-p-sum", "vc-p-diff", "vc-p-proj", "vc-p-ang", "vc-p-snap"].forEach(function (id) { document.getElementById(id).addEventListener("change", cv.redraw); });
+    var pres = { same: [[3, 1], [2.5, 2]], orth: [[3, 1.5], [-1, 2]], opp: [[3, 1], [-2.5, 0.5]] };
+    document.querySelectorAll("[data-vcp]").forEach(function (b) {
+      b.addEventListener("click", function () { var p = pres[b.dataset.vcp]; st.a = p[0].slice(); st.b = p[1].slice(); cv.redraw(); });
+    });
+  })();
+
+  /* ======================================================== SIM 2: 취향 벡터 추천 */
+  (function () {
+    var G = ["액션", "로맨스", "SF", "코미디", "공포"];
+    var ITEMS = [
+      ["은하 함대 3", [5, 1, 5, 1, 0]], ["봄날의 편지", [0, 5, 0, 2, 0]], ["로봇과 소녀", [1, 4, 4, 1, 0]],
+      ["좀비 아파트", [3, 0, 1, 1, 5]], ["웃음 택시", [1, 1, 0, 5, 0]], ["조용한 별 (독립영화)", [0.5, 0.5, 1.5, 0, 0]],
+      ["분노의 추격", [5, 0, 1, 2, 0]], ["시간 여행 로맨스", [0, 4, 3, 2, 0]], ["유령의 집", [0, 0, 0, 1, 4]],
+      ["우주 코미디 대작전", [2, 1, 4, 4, 0]], ["종합선물 블록버스터", [4.5, 4, 4.5, 4, 3]], ["소품 드라마", [0.5, 1, 0, 1, 0]],
+    ];
+    var PRE = [[4, 0, 3, 1, 0], [0, 4, 0, 3.5, 0], [1, 0, 0.5, 0.5, 4.5], [1, 1, 1, 1, 1]];
+    var u = PRE[0].slice(), sel = 0, drag = -1, MAX = 5;
+    var el = document.getElementById("vc-cv-rec"), rankEl = document.getElementById("vc-rank");
+    var lay = {};
+    function nrm(v) { var n = AB.norm(v); return n > 1e-9 ? v.map(function (x) { return x / n; }) : v.slice(); }
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      var P = AB.palette();
+      var L = 40, R = 14, T = 18, Bt = 40, bw = (w - L - R) / G.length;
+      lay = { L: L, T: T, H: h - T - Bt, bw: bw, h: h };
+      var Y = function (v) { return T + lay.H * (1 - v / MAX); };
+      font(ctx, 11, true);
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      for (var g = 0; g <= MAX; g++) { ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(L, Y(g)); ctx.lineTo(w - R, Y(g)); ctx.stroke(); ctx.fillStyle = P.dim; ctx.fillText(g, L - 8, Y(g)); }
+      var it = ITEMS[sel][1];
+      for (var i = 0; i < G.length; i++) {
+        var x = L + i * bw + bw * 0.18, bwi = bw * 0.64;
+        ctx.fillStyle = AB.alpha(P.accent, 0.85); ctx.fillRect(x, Y(u[i]), bwi, Y(0) - Y(u[i]));
+        ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x - 3, Y(it[i]), bwi + 6, Y(0) - Y(it[i])); ctx.setLineDash([]);
+        ctx.fillStyle = P.text; font(ctx, 12, true, true); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.fillText(u[i].toFixed(1), x + bwi / 2, Y(u[i]) - 3);
+        font(ctx, 13); ctx.fillStyle = P.dim; ctx.textBaseline = "top"; ctx.fillText(G[i], x + bwi / 2, Y(0) + 8);
+        font(ctx, 11, true);
+      }
+      ctx.textAlign = "left"; ctx.textBaseline = "top"; font(ctx, 12);
+      ctx.fillStyle = P.accent; ctx.fillText("■ 사용자 u", L + 4, 2);
+      ctx.fillStyle = P.accent2; ctx.fillText("┅ " + ITEMS[sel][0], L + 84, 2);
+    }, { aspect: 0.55, maxHeight: 330, minHeight: 240 });
+    function hitBar(p) {
+      if (!lay.bw) return -1;
+      var i = Math.floor((p.x - lay.L) / lay.bw);
+      return i >= 0 && i < G.length ? i : -1;
+    }
+    function setFromY(i, p) { var v = (1 - (p.y - lay.T) / lay.H) * MAX; u[i] = Math.round(AB.clamp(v, 0, MAX) * 10) / 10; update(); }
+    dragger(el, {
+      down: function (p) { drag = hitBar(p); if (drag < 0) return false; setFromY(drag, p); },
+      move: function (p) { if (drag >= 0) setFromY(drag, p); },
+      up: function () { drag = -1; },
+      hover: function (p) { return hitBar(p) >= 0 ? "ns-resize" : ""; },
+    });
+    function update() {
+      var useN = document.getElementById("vc-r-norm").checked;
+      var uu = useN ? nrm(u) : u;
+      var sc = ITEMS.map(function (it, k) {
+        var v = useN ? nrm(it[1]) : it[1];
+        return { k: k, cos: AB.cos(uu, v), dot: AB.dot(uu, v), dist: AB.norm(AB.sub(uu, v)) };
+      });
+      var cols = [
+        ["코사인 유사도 ↓", "cos", -1, function (s) { return s.cos.toFixed(3); }],
+        ["내적 ↓", "dot", -1, function (s) { return AB.fmt(s.dot, 3); }],
+        ["유클리드 거리 ↑", "dist", 1, function (s) { return AB.fmt(s.dist, 3); }],
+      ];
+      var tops = [];
+      rankEl.innerHTML = cols.map(function (c) {
+        var arr = sc.slice().sort(function (x, y) { return c[2] * (x[c[1]] - y[c[1]]); });
+        tops.push(arr[0].k);
+        var vals = arr.map(function (s) { return s[c[1]]; }), mx = Math.max.apply(null, vals), mn = Math.min.apply(null, vals);
+        return "<div><h4>" + c[0] + "</h4><ol>" + arr.slice(0, 8).map(function (s, r) {
+          var t = c[2] < 0 ? (s[c[1]] - Math.min(0, mn)) / ((mx - Math.min(0, mn)) || 1) : 1 - (s[c[1]] - mn) / ((mx - mn) || 1) * 0.85;
+          return '<li data-k="' + s.k + '" class="' + (s.k === sel ? "sel" : "") + '"><i class="bar" style="width:' + (AB.clamp(t, 0.03, 1) * 100).toFixed(0) + '%"></i><span class="n">' + (r + 1) + "</span><span>" + ITEMS[s.k][0] + '</span><span class="s">' + c[3](s) + "</span></li>";
+        }).join("") + "</ol></div>";
+      }).join("");
+      rankEl.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () { sel = +li.dataset.k; update(); }); });
+      var s = sc[sel];
+      AB.stat("vc-r-u", "[" + u.map(function (x) { return x.toFixed(1); }).join(", ") + "]");
+      AB.stat("vc-r-un", AB.norm(u).toFixed(2));
+      AB.stat("vc-r-sel", s.cos.toFixed(2) + " / " + AB.fmt(s.dot, 3) + " / " + AB.fmt(s.dist, 3));
+      var agree = tops[0] === tops[1] && tops[1] === tops[2];
+      AB.stat("vc-r-agree", agree ? '<span style="color:var(--ok)">예</span>' : '<span style="color:var(--warn)">아니오</span>');
+      cv.redraw();
+    }
+    document.getElementById("vc-r-norm").addEventListener("change", update);
+    document.getElementById("vc-r-half").addEventListener("click", function () { u = u.map(function (x) { return Math.round(x * 5) / 10; }); update(); });
+    document.getElementById("vc-r-dbl").addEventListener("click", function () { var m = Math.max.apply(null, u); var k = m * 2 > MAX ? MAX / m : 2; u = u.map(function (x) { return Math.round(x * k * 10) / 10; }); update(); });
+    document.querySelectorAll("[data-vcr]").forEach(function (b) { b.addEventListener("click", function () { u = PRE[+b.dataset.vcr].slice(); update(); }); });
+    update();
+  })();
+
+  /* ======================================================== SIM 3: 2×2 변환 격자 */
+  (function () {
+    var el = document.getElementById("vc-cv-grid");
+    var M = [[1, 0.5], [0, 1]]; // M[0] = [a, b], M[1] = [c, d]; î → (a, c), ĵ → (b, d)
+    var V = { ox: 0, oy: 0, s: 1 }, drag = null, anim = null;
+    var F = [[0.4, 0.2], [0.75, 0.2], [0.75, 0.95], [1.35, 0.95], [1.35, 1.25], [0.75, 1.25], [0.75, 1.65], [1.55, 1.65], [1.55, 1.95], [0.4, 1.95]];
+    function app(v) { return [M[0][0] * v[0] + M[0][1] * v[1], M[1][0] * v[0] + M[1][1] * v[1]]; }
+    function W2S(v) { return [V.ox + v[0] * V.s, V.oy - v[1] * V.s]; }
+    function eig() {
+      var a = M[0][0], b = M[0][1], c = M[1][0], d = M[1][1], tr = a + d, det = a * d - b * c, disc = tr * tr - 4 * det;
+      if (disc < -1e-9) return { tr: tr, det: det, complex: true, re: tr / 2, im: Math.sqrt(-disc) / 2 };
+      var sq = Math.sqrt(Math.max(0, disc)), ls = [(tr + sq) / 2, (tr - sq) / 2], vs = [];
+      ls.forEach(function (l) {
+        var v;
+        if (Math.abs(b) > 1e-6) v = [b, l - a];
+        else if (Math.abs(c) > 1e-6) v = [l - d, c];
+        else v = Math.abs(l - a) < 1e-9 ? [1, 0] : [0, 1];
+        var n = AB.norm(v); vs.push([v[0] / n, v[1] / n]);
+      });
+      if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && Math.abs(a - d) < 1e-9) vs = [[1, 0], [0, 1]];
+      return { tr: tr, det: det, complex: false, l: ls, v: vs };
+    }
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      var P = AB.palette();
+      V.ox = w / 2; V.oy = h / 2; V.s = Math.min(w, h) / 8.5;
+      var showO = document.getElementById("vc-g-orig").checked;
+      var R = 12, i, p1, p2;
+      // 원래 격자
+      ctx.lineWidth = 1;
+      if (showO) {
+        ctx.strokeStyle = P.grid;
+        for (i = -R; i <= R; i++) {
+          p1 = W2S([i, -R]); p2 = W2S([i, R]); ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+          p1 = W2S([-R, i]); p2 = W2S([R, i]); ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+        }
+      }
+      // 변환된 격자
+      ctx.strokeStyle = AB.alpha(P.accent, 0.28);
+      for (i = -R; i <= R; i++) {
+        p1 = W2S(app([i, -R])); p2 = W2S(app([i, R])); ctx.lineWidth = i === 0 ? 1.8 : 1; ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+        p1 = W2S(app([-R, i])); p2 = W2S(app([R, i])); ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+      }
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, V.oy); ctx.lineTo(w, V.oy); ctx.moveTo(V.ox, 0); ctx.lineTo(V.ox, h); ctx.stroke();
+      var E = eig(), dc = E.det > 1e-6 ? P.ok : E.det < -1e-6 ? P.bad : P.warn;
+      // 단위 정사각형 → 평행사변형
+      var sq = [[0, 0], [1, 0], [1, 1], [0, 1]].map(function (v) { return W2S(app(v)); });
+      ctx.fillStyle = AB.alpha(dc, 0.16); ctx.strokeStyle = dc; ctx.lineWidth = 1.5;
+      ctx.beginPath(); sq.forEach(function (p, k) { k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.closePath(); ctx.fill(); ctx.stroke();
+      // F 도형
+      function poly(pts, fill, stroke, dash) {
+        ctx.beginPath(); pts.forEach(function (p, k) { k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        ctx.setLineDash(dash || []); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+      }
+      var Fo = F.map(function (v) { return W2S([v[0] - 2.6, v[1] + 0.6]); });
+      var Ft = F.map(function (v) { return W2S(app([v[0] - 2.6, v[1] + 0.6])); });
+      if (showO) poly(Fo, null, P.faint, [4, 3]);
+      poly(Ft, AB.alpha(P.warn, 0.35), P.warn);
+      // 고유벡터
+      if (document.getElementById("vc-g-eig").checked && !E.complex) {
+        E.v.forEach(function (v, k) {
+          if (k === 1 && Math.abs(E.l[0] - E.l[1]) < 1e-9 && Math.abs(v[0] - E.v[0][0]) < 1e-9 && Math.abs(v[1] - E.v[0][1]) < 1e-9) return;
+          var e1 = W2S([-v[0] * 20, -v[1] * 20]), e2 = W2S([v[0] * 20, v[1] * 20]);
+          ctx.strokeStyle = P.text; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.5; ctx.setLineDash([7, 5]);
+          ctx.beginPath(); ctx.moveTo(e1[0], e1[1]); ctx.lineTo(e2[0], e2[1]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+          var lp = W2S([v[0] * 3.3, v[1] * 3.3]);
+          font(ctx, 12, true, true);
+          var tx = AB.clamp(lp[0] + 6, 4, w - 70), ty = AB.clamp(lp[1] - 10, 12, h - 12);
+          label(ctx, "λ=" + E.l[k].toFixed(2), tx, ty, P.text, AB.alpha(P.bg, 0.8));
+        });
+      }
+      // 기저 벡터
+      var O = W2S([0, 0]), I = W2S([M[0][0], M[1][0]]), J = W2S([M[0][1], M[1][1]]);
+      arrow(ctx, O[0], O[1], I[0], I[1], P.accent, 3);
+      arrow(ctx, O[0], O[1], J[0], J[1], P.accent2, 3);
+      [[I, P.accent, "î"], [J, P.accent2, "ĵ"]].forEach(function (t) {
+        ctx.fillStyle = P.bg; ctx.strokeStyle = t[1]; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(t[0][0], t[0][1], 7, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+        font(ctx, 15, false, true); label(ctx, t[2], t[0][0] + 10, t[0][1] - 12, t[1]);
+      });
+      // 판독
+      document.getElementById("vc-g-mat").innerHTML =
+        '<span class="ci">' + f2(M[0][0]) + '</span><span class="cj">' + f2(M[0][1]) + '</span><span class="ci">' + f2(M[1][0]) + '</span><span class="cj">' + f2(M[1][1]) + "</span>";
+      AB.stat("vc-g-det", '<span style="color:' + dc + '">' + f2(E.det) + "</span>");
+      AB.stat("vc-g-ori", Math.abs(E.det) < 1e-6 ? "찌그러짐" : E.det > 0 ? "유지" : "뒤집힘");
+      AB.stat("vc-g-tr", f2(E.tr));
+      AB.stat("vc-g-lam", E.complex ? f2(E.re) + " ± " + f2(E.im) + "i" : f2(E.l[0]) + ", " + f2(E.l[1]));
+    }, { aspect: 0.72, maxHeight: 500, minHeight: 320 });
+    function near(p) {
+      var I = W2S([M[0][0], M[1][0]]), J = W2S([M[0][1], M[1][1]]);
+      var di = Math.hypot(p.x - I[0], p.y - I[1]), dj = Math.hypot(p.x - J[0], p.y - J[1]);
+      if (Math.min(di, dj) > 28) return null;
+      return di <= dj ? 0 : 1;
+    }
+    dragger(el, {
+      down: function (p) { drag = near(p); if (drag == null) return false; anim = null; },
+      move: function (p) {
+        var v = [(p.x - V.ox) / V.s, (V.oy - p.y) / V.s];
+        if (document.getElementById("vc-g-snap").checked) v = v.map(function (x) { return Math.round(x * 10) / 10; });
+        v = [AB.clamp(v[0], -4, 4), AB.clamp(v[1], -4, 4)];
+        M[0][drag] = v[0]; M[1][drag] = v[1]; cv.redraw();
+      },
+      up: function () { drag = null; },
+      hover: function (p) { return near(p) != null ? "grab" : ""; },
+    });
+    var c30 = Math.cos(Math.PI / 6), s30 = Math.sin(Math.PI / 6);
+    var PR = { id: [[1, 0], [0, 1]], rot: [[c30, -s30], [s30, c30]], shear: [[1, 1], [0, 1]], scale: [[2, 0], [0, 0.5]], proj: [[0.5, 0.5], [0.5, 0.5]], refl: [[-1, 0], [0, 1]], sym: [[1.5, 0.5], [0.5, 1.5]] };
+    var loop = AB.loop(el, function (dt) {
+      if (!anim) return;
+      anim.t = Math.min(1, anim.t + dt / 0.6);
+      var e = anim.t < 0.5 ? 2 * anim.t * anim.t : 1 - Math.pow(-2 * anim.t + 2, 2) / 2;
+      for (var r = 0; r < 2; r++) for (var c = 0; c < 2; c++) M[r][c] = AB.lerp(anim.from[r][c], anim.to[r][c], e);
+      cv.redraw();
+      if (anim.t >= 1) { anim = null; loop.stop(); }
+    });
+    loop.stop();
+    document.querySelectorAll("[data-vcg]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        anim = { from: M.map(function (r) { return r.slice(); }), to: PR[b.dataset.vcg], t: 0 }; loop.start();
+      });
+    });
+    ["vc-g-eig", "vc-g-orig"].forEach(function (id) { document.getElementById(id).addEventListener("change", cv.redraw); });
+  })();
+
+  /* ======================================================== SIM 4: 행렬곱 단계 */
+  (function () {
+    var m = 3, k = 4, n = 2, A, B, sel = null, step = -1, playing = false, acc = 0;
+    var tA = document.getElementById("vc-mm-a"), tB = document.getElementById("vc-mm-b"), tC = document.getElementById("vc-mm-c");
+    var expl = document.getElementById("vc-mm-expl"), playBtn = document.getElementById("vc-mm-play");
+    var spd = AB.range("vc-mm-spd", function (v) { return v + " 단계/초"; });
+    function rand(seed) {
+      var r = AB.rng(seed);
+      A = []; B = [];
+      for (var i = 0; i < m; i++) { A.push([]); for (var p = 0; p < k; p++) A[i].push(Math.floor(r() * 7) - 3); }
+      for (p = 0; p < k; p++) { B.push([]); for (var j = 0; j < n; j++) B[p].push(Math.floor(r() * 7) - 3); }
+    }
+    var seed = 7; rand(seed);
+    var TOTAL = m * n * k;
+    function C() { return AB.matmul(A, B); }
+    function cellCol(v, scale) { return AB.diverge(AB.clamp(v / scale, -1, 1) * 0.75); }
+    function build() {
+      var Cm = C(), cMax = Math.max.apply(null, Cm.map(function (r) { return Math.max.apply(null, r.map(Math.abs)); })) || 1;
+      var cur = step >= 0 && step < TOTAL ? { i: Math.floor(step / (n * k)), j: Math.floor(step / k) % n, p: step % k } : null;
+      var hi = cur || sel;
+      function cellA(i, p) {
+        var cls = hi && hi.i === i ? "hi" : ""; if (cur && cur.i === i && cur.p === p) cls += " cur";
+        return '<td class="' + cls + '" data-m="A" data-r="' + i + '" data-c="' + p + '" style="background:' + cellCol(A[i][p], 3) + '">' + A[i][p] + "</td>";
+      }
+      function cellB(p, j) {
+        var cls = hi && hi.j === j ? "hi" : ""; if (cur && cur.j === j && cur.p === p) cls += " cur";
+        return '<td class="' + cls + '" data-m="B" data-r="' + p + '" data-c="' + j + '" style="background:' + cellCol(B[p][j], 3) + '">' + B[p][j] + "</td>";
+      }
+      var i, p, j, s = "";
+      for (i = 0; i < m; i++) { s += "<tr>"; for (p = 0; p < k; p++) s += cellA(i, p); s += "</tr>"; } tA.innerHTML = s;
+      s = ""; for (p = 0; p < k; p++) { s += "<tr>"; for (j = 0; j < n; j++) s += cellB(p, j); s += "</tr>"; } tB.innerHTML = s;
+      s = "";
+      for (i = 0; i < m; i++) {
+        s += "<tr>";
+        for (j = 0; j < n; j++) {
+          var idx = (i * n + j) * k, done = step < 0 || idx + k <= step, partial = cur && cur.i === i && cur.j === j;
+          var val = done ? Cm[i][j] : partial ? acc : "·";
+          var bg = done ? cellCol(Cm[i][j], cMax) : partial ? AB.alpha(AB.color("warn"), 0.25) : "transparent";
+          var cls = (hi && hi.i === i && hi.j === j) ? "hi" : "";
+          s += '<td class="' + cls + '" data-m="C" data-r="' + i + '" data-c="' + j + '" style="background:' + bg + '">' + val + "</td>";
+        }
+        s += "</tr>";
+      }
+      tC.innerHTML = s;
+      // 설명
+      var t = hi, txt;
+      if (!t) txt = "C의 칸을 눌러 보세요. A·B 칸은 위아래로 끌어 값을 바꿀 수 있습니다.";
+      else {
+        var terms = [], upto = cur ? cur.p : k - 1;
+        for (p = 0; p < k; p++) {
+          var term = "(" + A[t.i][p] + ")·(" + B[p][t.j] + ")";
+          terms.push(p <= upto ? (cur && p === cur.p ? "<b>" + term + "</b>" : term) : '<span style="opacity:.35">' + term + "</span>");
+        }
+        var val2 = cur ? acc : Cm[t.i][t.j];
+        txt = "C<sub>" + (t.i + 1) + (t.j + 1) + "</sub> = A<sub>" + (t.i + 1) + "·</sub> · B<sub>·" + (t.j + 1) + "</sub> = " + terms.join(" + ") + " = <b>" + val2 + "</b>" + (cur ? " (진행 중)" : "");
+      }
+      expl.innerHTML = txt;
+      AB.stat("vc-mm-cur", hi ? "C" + (hi.i + 1) + "," + (hi.j + 1) : "—");
+      var fl = step >= TOTAL ? 2 * TOTAL : (step + 1) * 2;
+      AB.stat("vc-mm-fl", step < 0 ? (sel ? "8 (이 칸)" : "—") : fl + " / 48");
+    }
+    function doStep() {
+      if (step < 0) { step = 0; acc = 0; }
+      else if (step < TOTAL) { step++; }
+      if (step >= TOTAL) { playing = false; playBtn.textContent = "▶ 재생"; loop.stop(); step = TOTAL; build(); return; }
+      var i = Math.floor(step / (n * k)), j = Math.floor(step / k) % n, p = step % k;
+      if (p === 0) acc = 0;
+      acc += A[i][p] * B[p][j];
+      build();
+    }
+    // 첫 단계(step=0)는 doStep에서 acc를 계산하도록 정리
+    function startSteps() { step = -1; acc = 0; sel = null; }
+    var tacc = 0;
+    var loop = AB.loop(tC, function (dt) {
+      if (!playing) return;
+      tacc += dt;
+      var per = 1 / spd();
+      while (tacc >= per && playing) { tacc -= per; doStep(); }
+    });
+    loop.stop();
+    playBtn.addEventListener("click", function () {
+      if (playing) { playing = false; playBtn.textContent = "▶ 재생"; loop.stop(); return; }
+      if (step < 0 || step >= TOTAL) { startSteps(); doStep(); }
+      playing = true; playBtn.textContent = "❚❚ 일시정지"; tacc = 0; loop.start();
+    });
+    document.getElementById("vc-mm-step").addEventListener("click", function () {
+      if (playing) { playing = false; playBtn.textContent = "▶ 재생"; loop.stop(); }
+      if (step < 0 || step >= TOTAL) { startSteps(); }
+      doStep();
+    });
+    document.getElementById("vc-mm-reset").addEventListener("click", function () { playing = false; playBtn.textContent = "▶ 재생"; loop.stop(); step = -1; build(); });
+    document.getElementById("vc-mm-rand").addEventListener("click", function () { seed++; rand(seed); step = -1; build(); });
+    document.getElementById("vc-mm-eye").addEventListener("click", function () { B = [[1, 0], [0, 1], [0, 0], [0, 0]]; step = -1; build(); });
+    // 클릭(C) / 드래그(A, B)
+    var dragS = null;
+    function onDown(e) {
+      var td = e.target.closest("td"); if (!td) return;
+      var M = td.dataset.m, r = +td.dataset.r, c = +td.dataset.c;
+      if (M === "C") { if (playing) return; step = -1; sel = sel && sel.i === r && sel.j === c ? null : { i: r, j: c }; build(); return; }
+      var tbl = M === "A" ? A : B;
+      dragS = { tbl: tbl, r: r, c: c, y0: e.clientY, v0: tbl[r][c], el: td.parentElement.parentElement };
+      try { dragS.el.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    }
+    function onMove(e) {
+      if (!dragS) return;
+      var v = AB.clamp(Math.round(dragS.v0 + (dragS.y0 - e.clientY) / 14), -9, 9);
+      if (v !== dragS.tbl[dragS.r][dragS.c]) { dragS.tbl[dragS.r][dragS.c] = v; if (step >= 0 && !playing) step = -1; build(); }
+    }
+    function onUp() { dragS = null; }
+    [tA, tB, tC].forEach(function (t) {
+      t.addEventListener("pointerdown", onDown); t.addEventListener("pointermove", onMove);
+      t.addEventListener("pointerup", onUp); t.addEventListener("pointercancel", onUp);
+    });
+    build();
+    // 실제 크기 FLOPs 계산기
+    var fm = document.getElementById("vc-fl-m"), fk = document.getElementById("vc-fl-k"), fn = document.getElementById("vc-fl-n"), fo = document.getElementById("vc-fl-out");
+    function calc() {
+      var M_ = Math.max(1, +fm.value || 1), K = Math.max(1, +fk.value || 1), N = Math.max(1, +fn.value || 1);
+      var fl = 2 * M_ * N * K, bytes = 2 * (M_ * K + K * N + M_ * N), ai = fl / bytes;
+      var tc = fl / 989e12, tm = bytes / 3.35e12;
+      fo.innerHTML = "FLOPs = 2·" + M_.toLocaleString() + "·" + N.toLocaleString() + "·" + K.toLocaleString() + " = <b>" + AB.si(fl, "FLOP") + "</b><br>" +
+        "BF16 데이터(A+B+C) ≈ " + AB.si(bytes, "B") + " · 산술 강도 ≈ " + AB.fmt(ai, 3) + " FLOP/B<br>" +
+        "H100 이상적 시간: 연산 " + AB.si(tc, "s") + " vs 메모리 " + AB.si(tm, "s") + " → <b>" + (tc >= tm ? "연산 한계" : "메모리 한계") + "</b>";
+    }
+    [fm, fk, fn].forEach(function (x) { x.addEventListener("input", calc); });
+    document.querySelectorAll("[data-vcf]").forEach(function (b) { b.addEventListener("click", function () { var v = b.dataset.vcf.split(","); fm.value = v[0]; fk.value = v[1]; fn.value = v[2]; calc(); }); });
+    calc();
+  })();
+
+  /* ======================================================== SIM 5: 차원의 저주/축복 */
+  (function () {
+    var DS = [2, 3, 4, 8, 16, 32, 64, 128, 256, 512, 768, 1024, 4096];
+    var dIdx = AB.range("vc-d", function (v) { return DS[v]; }, schedule);
+    var eps = AB.range("vc-eps", function (v) { return v.toFixed(2); }, function () { cv2.redraw(); stats(); });
+    var seed = 11, hist = null, res = {};
+    var NB = 60;
+    function sample() {
+      var d = DS[dIdx()], r = AB.rng(seed * 1000 + d), N = d >= 1024 ? 800 : 2000;
+      var bins = new Array(NB).fill(0), s2 = 0, near = 0, a = new Float64Array(d), b = new Float64Array(d), i, t;
+      for (t = 0; t < N; t++) {
+        var ab = 0, aa = 0, bb = 0;
+        for (i = 0; i < d; i++) { var x = r.n(), y = r.n(); ab += x * y; aa += x * x; bb += y * y; }
+        var c = ab / Math.sqrt(aa * bb);
+        s2 += c * c; if (Math.abs(c) < 0.1) near++;
+        bins[Math.min(NB - 1, Math.floor((c + 1) / 2 * NB))]++;
+      }
+      // 거리 집중: 질의 1개 vs 점 300개
+      var q = new Float64Array(d); for (i = 0; i < d; i++) q[i] = r.n();
+      var mn = Infinity, mx = 0;
+      for (t = 0; t < 300; t++) { var s = 0; for (i = 0; i < d; i++) { var z = r.n() - q[i]; s += z * z; } s = Math.sqrt(s); if (s < mn) mn = s; if (s > mx) mx = s; }
+      hist = bins.map(function (v) { return v / N / (2 / NB); });
+      res = { d: d, sd: Math.sqrt(s2 / N), near: near / N, con: (mx - mn) / mn };
+    }
+    var pend = 0;
+    function schedule() { if (pend) return; pend = requestAnimationFrame(function () { pend = 0; sample(); cv1.redraw(); cv2.redraw(); stats(); }); }
+    function lgamma(z) { // Lanczos
+      var g = 7, c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+      if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
+      z -= 1; var x = c[0]; for (var i = 1; i < g + 2; i++) x += c[i] / (z + i);
+      var t = z + g + 0.5; return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+    }
+    function dens(c, d) { // 정확한 밀도 p(c) = Γ(d/2)/(√π Γ((d−1)/2)) (1−c²)^((d−3)/2)
+      if (Math.abs(c) >= 1) return d === 2 ? Infinity : d === 3 ? 0.5 : 0;
+      return Math.exp(lgamma(d / 2) - 0.5 * Math.log(Math.PI) - lgamma((d - 1) / 2) + (d - 3) / 2 * Math.log(1 - c * c));
+    }
+    var cv1 = AB.canvas(document.getElementById("vc-cv-dim1"), function (ctx, w, h) {
+      if (!hist) return;
+      var P = AB.palette(), d = res.d;
+      var ymax = Math.max.apply(null, hist) * 1.15;
+      if (d === 2) ymax = Math.min(ymax, 3); else ymax = Math.max(ymax, 0.8);
+      var ch = AB.chart(ctx, { x: 50, y: 22, w: w - 66, h: h - 64 }, { x: [-1, 1], y: [0, ymax], xLabel: "두 랜덤 벡터의 코사인 유사도", yLabel: "밀도" });
+      var bw = (ch.X(1) - ch.X(-1)) / NB;
+      ctx.fillStyle = AB.alpha(P.accent, 0.55);
+      hist.forEach(function (v, i) { var x = ch.X(-1) + i * bw, y = ch.Y(Math.min(v, ymax)); ctx.fillRect(x + 0.5, y, bw - 1, ch.Y(0) - y); });
+      if (document.getElementById("vc-d-theory").checked) {
+        ctx.save(); ctx.beginPath(); ctx.rect(ch.box.x, ch.box.y, ch.box.w, ch.box.h); ctx.clip();
+        ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath();
+        for (var t = 0; t <= 400; t++) { var c = -0.999 + 1.998 * t / 400, y = ch.Y(Math.min(dens(c, d), ymax * 2)); t ? ctx.lineTo(ch.X(c), y) : ctx.moveTo(ch.X(c), y); }
+        ctx.stroke(); ctx.restore();
+      }
+      font(ctx, 12, true, true); ctx.textAlign = "left"; ctx.fillStyle = P.text; ctx.textBaseline = "top";
+      ctx.fillText("d = " + d, ch.box.x + 8, ch.box.y + 4);
+    }, { aspect: 0.5, maxHeight: 280, minHeight: 210 });
+    var cv2 = AB.canvas(document.getElementById("vc-cv-dim2"), function (ctx, w, h) {
+      var P = AB.palette(), e = eps(), d = DS[dIdx()];
+      var data = []; for (var t = 0; t <= 120; t++) { var dd = Math.pow(10, Math.log10(2) + (Math.log10(4096) - Math.log10(2)) * t / 120); data.push([dd, 1 - Math.pow(1 - e, dd)]); }
+      AB.chart(ctx, { x: 50, y: 16, w: w - 66, h: h - 58 }, { x: [2, 4096], y: [0, 1], logX: true, xLabel: "차원 d (로그)", yLabel: "껍질 비율",
+        xFmt: function (v) { return v >= 1000 ? (v / 1000) + "k" : String(v); },
+        series: [{ data: data, color: P.warn, width: 2.2 }], points: [{ x: d, y: 1 - Math.pow(1 - e, d), color: P.accent2, r: 5, label: (100 * (1 - Math.pow(1 - e, d))).toFixed(1) + "%" }] });
+    }, { aspect: 0.36, maxHeight: 200, minHeight: 160 });
+    function stats() {
+      var d = DS[dIdx()];
+      AB.stat("vc-d-sd", res.sd ? res.sd.toFixed(4) : "—");
+      AB.stat("vc-d-th", (1 / Math.sqrt(d)).toFixed(4));
+      AB.stat("vc-d-near", res.near != null ? (res.near * 100).toFixed(1) + "%" : "—");
+      AB.stat("vc-d-con", res.con != null ? AB.fmt(res.con, 3) : "—");
+      AB.stat("vc-d-shell", (100 * (1 - Math.pow(1 - eps(), d))).toFixed(2) + "%");
+    }
+    document.getElementById("vc-d-theory").addEventListener("change", function () { cv1.redraw(); });
+    document.getElementById("vc-d-resample").addEventListener("click", function () { seed++; schedule(); });
+    sample(); cv1.redraw(); cv2.redraw(); stats();
+  })();
+
+  /* ======================================================== SIM 6: PCA 시점 */
+  (function () {
+    var el = document.getElementById("vc-cv-pca");
+    var cam = { th: 0.6, ph: 0.35 }, pts = [], C = null, E = null, anim = null;
+    function rotM(a, b, c) { // Rz(c)·Ry(b)·Rx(a)
+      var ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cc = Math.cos(c), sc = Math.sin(c);
+      var Rx = [[1, 0, 0], [0, ca, -sa], [0, sa, ca]], Ry = [[cb, 0, sb], [0, 1, 0], [-sb, 0, cb]], Rz = [[cc, -sc, 0], [sc, cc, 0], [0, 0, 1]];
+      return AB.matmul(Rz, AB.matmul(Ry, Rx));
+    }
+    function jacobi(S) { // 3×3 대칭 고유분해
+      var a = S.map(function (r) { return r.slice(); }), v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      for (var sweep = 0; sweep < 50; sweep++) {
+        var off = Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]); if (off < 1e-12) break;
+        for (var p = 0; p < 2; p++) for (var q = p + 1; q < 3; q++) {
+          if (Math.abs(a[p][q]) < 1e-15) continue;
+          var th = (a[q][q] - a[p][p]) / (2 * a[p][q]), t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), s = t * c;
+          for (var k = 0; k < 3; k++) { var akp = a[k][p], akq = a[k][q]; a[k][p] = c * akp - s * akq; a[k][q] = s * akp + c * akq; }
+          for (k = 0; k < 3; k++) { var apk = a[p][k], aqk = a[q][k]; a[p][k] = c * apk - s * aqk; a[q][k] = s * apk + c * aqk; }
+          for (k = 0; k < 3; k++) { var vkp = v[k][p], vkq = v[k][q]; v[k][p] = c * vkp - s * vkq; v[k][q] = s * vkp + c * vkq; }
+        }
+      }
+      var res = [0, 1, 2].map(function (i) { return { l: a[i][i], v: [v[0][i], v[1][i], v[2][i]] }; });
+      res.sort(function (x, y) { return y.l - x.l; });
+      return res;
+    }
+    function gen(kind) {
+      var r = AB.rng(5), sd = kind === "cigar" ? [1.6, 0.45, 0.3] : kind === "pancake" ? [1.4, 1.0, 0.08] : [0.8, 0.8, 0.8];
+      var R = rotM(0.7, -0.5, 0.9);
+      pts = [];
+      for (var i = 0; i < 220; i++) pts.push(AB.matvec(R, [r.n() * sd[0], r.n() * sd[1], r.n() * sd[2]]));
+      var mu = [0, 0, 0]; pts.forEach(function (p) { for (var k = 0; k < 3; k++) mu[k] += p[k] / pts.length; });
+      pts = pts.map(function (p) { return AB.sub(p, mu); });
+      C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      pts.forEach(function (p) { for (var a = 0; a < 3; a++) for (var b = 0; b < 3; b++) C[a][b] += p[a] * p[b] / pts.length; });
+      E = jacobi(C);
+    }
+    function basis() {
+      var ct = Math.cos(cam.th), st = Math.sin(cam.th), cp = Math.cos(cam.ph), sp = Math.sin(cam.ph);
+      return { f: [cp * st, sp, cp * ct], r: [ct, 0, -st], u: [-sp * st, cp, -sp * ct] };
+    }
+    function preserved(Bs) {
+      var tot = C[0][0] + C[1][1] + C[2][2];
+      var q = function (v) { return AB.dot(v, AB.matvec(C, v)); };
+      return (q(Bs.r) + q(Bs.u)) / tot;
+    }
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      if (!E) return;
+      var P = AB.palette(), Bs = basis(), s = Math.min(w, h) / 8.2, ox = w / 2, oy = h / 2;
+      var Sx = function (p) { return ox + s * AB.dot(p, Bs.r); }, Sy = function (p) { return oy - s * AB.dot(p, Bs.u); };
+      // 원래 좌표축
+      font(ctx, 11, true);
+      [[1, 0, 0], [0, 1, 0], [0, 0, 1]].forEach(function (ax, k) {
+        var p = ax.map(function (x) { return x * 2.6; }), q = ax.map(function (x) { return -x * 2.6; });
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(Sx(q), Sy(q)); ctx.lineTo(Sx(p), Sy(p)); ctx.stroke();
+        ctx.fillStyle = P.faint; ctx.fillText(["x", "y", "z"][k], Sx(p) + 4, Sy(p));
+      });
+      var bg = AB.rgb(P.bg), c1 = AB.rgb(P.accent), c2 = AB.rgb(P.accent2);
+      var e1 = E[0].v, mx = 2.2 * Math.sqrt(E[0].l);
+      var ord = pts.map(function (p, i) { return [AB.dot(p, Bs.f), i]; }).sort(function (a, b) { return a[0] - b[0]; });
+      ord.forEach(function (o) {
+        var p = pts[o[1]], t = AB.clamp(AB.dot(p, e1) / mx, -1, 1), cc = t >= 0 ? c1 : c2, a = Math.abs(t) * 0.85 + 0.15;
+        var col = "rgb(" + [0, 1, 2].map(function (k) { return Math.round(bg[k] + (cc[k] - bg[k]) * a); }).join(",") + ")";
+        var rad = 3.2 + 0.5 * AB.clamp(o[0], -2, 2);
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(Sx(p), Sy(p), Math.max(1.5, rad), 0, 2 * Math.PI); ctx.fill();
+      });
+      if (document.getElementById("vc-pca-axes").checked) {
+        [P.ok, P.warn, P.dim].forEach(function (col, k) {
+          var v = E[k].v.map(function (x) { return x * 2 * Math.sqrt(Math.max(0, E[k].l)); });
+          var nv = v.map(function (x) { return -x; });
+          ctx.strokeStyle = col; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(Sx(nv), Sy(nv)); ctx.lineTo(Sx(v), Sy(v)); ctx.stroke();
+          font(ctx, 12, true, true); ctx.fillStyle = col; ctx.fillText("PC" + (k + 1), Sx(v) + 5, Sy(v) - 4);
+        });
+      }
+      var pr = preserved(Bs), best = (E[0].l + E[1].l) / (E[0].l + E[1].l + E[2].l);
+      // 막대 미터
+      var bx = 12, by = h - 22, bw = Math.min(220, w - 24);
+      ctx.fillStyle = P.surface; ctx.fillRect(bx, by, bw, 10);
+      ctx.fillStyle = P.accent; ctx.fillRect(bx, by, bw * pr, 10);
+      ctx.strokeStyle = P.ok; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(bx + bw * best, by - 4); ctx.lineTo(bx + bw * best, by + 14); ctx.stroke();
+      font(ctx, 11, true); ctx.fillStyle = P.dim; ctx.textBaseline = "bottom"; ctx.fillText("보존 분산 " + (pr * 100).toFixed(1) + "% (초록 = PCA 최대)", bx, by - 4);
+      AB.stat("vc-pca-lam", E.map(function (e) { return e.l.toFixed(2); }).join(", "));
+      AB.stat("vc-pca-cur", (pr * 100).toFixed(1) + "%");
+      AB.stat("vc-pca-max", (best * 100).toFixed(1) + "%");
+    }, { aspect: 0.7, maxHeight: 460, minHeight: 300 });
+    var last = null;
+    dragger(el, {
+      down: function (p) { last = p; anim = null; el.style.cursor = "grabbing"; },
+      move: function (p) { cam.th += (p.x - last.x) * 0.01; cam.ph = AB.clamp(cam.ph + (p.y - last.y) * 0.01, -1.5, 1.5); last = p; cv.redraw(); },
+      up: function () { el.style.cursor = "grab"; },
+    });
+    function goto(n) {
+      if (n[1] < 0 && Math.abs(n[1]) > 0.999) n = n.map(function (x) { return -x; });
+      var ph = Math.asin(AB.clamp(n[1], -1, 1)), th = Math.atan2(n[0], n[2]);
+      if (Math.abs(ph) > 1.5) ph = Math.sign(ph) * 1.5;
+      // 가까운 쪽으로 (반대 방향 법선도 같은 투영)
+      var cands = [[th, ph], [th + Math.PI, -ph]].map(function (c) { var d = c[0] - cam.th; d = Math.atan2(Math.sin(d), Math.cos(d)); return [cam.th + d, c[1], Math.abs(d) + Math.abs(c[1] - cam.ph)]; });
+      var c = cands[0][2] <= cands[1][2] ? cands[0] : cands[1];
+      anim = { th0: cam.th, ph0: cam.ph, th1: c[0], ph1: c[1], t: 0 }; loop.start();
+    }
+    var loop = AB.loop(el, function (dt) {
+      if (!anim) return;
+      anim.t = Math.min(1, anim.t + dt / 0.8);
+      var e = 1 - Math.pow(1 - anim.t, 3);
+      cam.th = AB.lerp(anim.th0, anim.th1, e); cam.ph = AB.lerp(anim.ph0, anim.ph1, e); cv.redraw();
+      if (anim.t >= 1) { anim = null; loop.stop(); }
+    });
+    loop.stop();
+    document.getElementById("vc-pca-best").addEventListener("click", function () { goto(E[2].v.slice()); });
+    document.getElementById("vc-pca-worst").addEventListener("click", function () { goto(E[0].v.slice()); });
+    document.getElementById("vc-pca-axes").addEventListener("change", cv.redraw);
+    AB.seg("vc-pca-data", function (v) { gen(v); cv.redraw(); });
+    gen("cigar"); cv.redraw();
+  })();
+})();
+</script>
+</body>
+</html>

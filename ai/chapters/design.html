@@ -1,0 +1,2054 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>LLM 서빙 설계 플레이그라운드 · AIBook</title>
+<meta name="description" content="TTFT·TPOT·처리량, GPU 메모리 예산과 KV 캐시, 루프라인과 산술 강도, 배치와 연속 배칭, 텐서·파이프라인·전문가 병렬, MoE 서빙, 프리필/디코드 분리 서빙, 토큰당 비용까지 — LLM 서빙을 숫자로 설계하는 플레이그라운드.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .ds-drag { touch-action: none; cursor: crosshair; }
+  .ds-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ds-diag { padding: 10px 18px; border-top: 1px solid var(--border); background: var(--surface); font-size: 15px; line-height: 1.6; }
+  .ds-diag b { color: var(--accent); }
+  .ds-diag .bad { color: var(--bad); font-weight: 700; }
+  .ds-diag .ok { color: var(--ok); font-weight: 700; }
+  .ds-diag .warn { color: var(--warn); font-weight: 700; }
+  .ds-legend i.sq { width: 12px; height: 12px; border-radius: 3px; }
+  table.ds-gpu td:nth-child(n+2), table.ds-gpu th:nth-child(n+2) { text-align: right; white-space: nowrap; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="design">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 12</div>
+    <h1>LLM 서빙 설계 플레이그라운드</h1>
+    <p class="lead">모델을 학습시키는 것은 한 번이지만 서빙은 매일, 매초 일어난다. "Llama 3 70B를 하루 수백만 명에게 보여 주려면 GPU가 몇 장 필요하고, 응답은 얼마나 빠르며, 토큰 백만 개에 얼마가 드는가?" 이 질문에 답하는 데 필요한 것은 의외로 몇 개의 숫자뿐이다 — 메모리 용량, 메모리 대역폭, 연산 성능, 그리고 모델의 크기와 KV 캐시. 이 장에서는 그 숫자들을 손으로 계산하고, 시뮬레이터에서 직접 조립해 보면서 서빙 시스템을 설계하는 감각을 기른다.</p>
+    <ul class="objectives">
+      <li>TTFT·TPOT·처리량의 의미와 서로 부딪히는 이유를 설명할 수 있다.</li>
+      <li>가중치·KV 캐시·작업 공간으로 GPU 메모리 예산을 세우고, 동시에 처리할 수 있는 요청 수를 계산한다.</li>
+      <li>루프라인 모델로 디코딩이 왜 메모리 대역폭 바운드이고 프리필은 왜 계산 바운드인지 산술 강도로 설명한다.</li>
+      <li>배치 크기에 따른 처리량–지연 트레이드오프와 연속 배칭(continuous batching)의 이점을 시뮬레이션으로 확인한다.</li>
+      <li>텐서·파이프라인·데이터·전문가 병렬의 역할과 NVLink, 파이프라인 버블을 이해한다.</li>
+      <li>MoE 모델에서 메모리는 총 파라미터, 토큰당 계산·대역폭은 활성 파라미터로 따지는 이유와 전문가 병렬·all-to-all의 역할을 설명한다.</li>
+      <li>프리필/디코드 분리 서빙이 TTFT·TPOT 분포와 SLA 굿풋을 어떻게 바꾸는지 시뮬레이션으로 확인한다.</li>
+      <li>$/1M 토큰 비용과 학습 연산량 \(C \approx 6ND\)를 직접 추정할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="requirements">
+    <h2>서빙의 요구: 지연과 처리량</h2>
+    <p><a href="generation.html">8장</a>에서 본 것처럼 LLM 응답은 두 단계로 만들어진다. 프롬프트 전체를 한 번에 통과시켜 KV 캐시를 채우는 <span class="term">프리필</span><span class="en">(prefill)</span>과, 토큰을 하나씩 뽑아내는 <span class="term">디코드</span><span class="en">(decode)</span>다. 사용자가 느끼는 속도는 이 두 단계에 각각 대응하는 두 숫자로 요약된다.</p>
+    <ul>
+      <li><strong>TTFT</strong><span class="en">(Time To First Token)</span>: 요청을 보낸 뒤 첫 토큰이 보일 때까지의 시간. 대기열에서 기다린 시간 + 프리필 시간이다. 채팅에서는 보통 수백 ms~1~2초 안을 목표로 한다.</li>
+      <li><strong>TPOT</strong><span class="en">(Time Per Output Token, ITL이라고도 한다)</span>: 이어지는 토큰 사이의 간격. 사람이 읽는 속도(초당 5~10 단어)보다 빠르면 충분하다는 관점에서 보통 20~50 ms(사용자당 20~50 tok/s)를 목표로 잡는다.</li>
+      <li><strong>처리량</strong><span class="en">(throughput)</span>: GPU 한 대(또는 클러스터)가 초당 만들어 내는 전체 토큰 수. 사업자 입장의 숫자이며, 곧바로 비용이 된다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="요청 하나의 타임라인: 대기, 프리필, 디코드 토큰">
+        <defs>
+          <marker id="ds-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <path d="M30 120 H740" class="s-axis"/>
+        <text x="740" y="140" text-anchor="end" class="t-dim">시간 →</text>
+        <!-- arrival -->
+        <path d="M40 70 V120" style="stroke:var(--accent-2);stroke-width:2"/>
+        <text x="40" y="62" text-anchor="middle" class="t" style="fill:var(--accent-2)">요청 도착</text>
+        <!-- queue -->
+        <rect x="42" y="92" width="66" height="24" rx="4" class="f-surface" style="stroke:var(--border);stroke-dasharray:4 3"/>
+        <text x="75" y="109" text-anchor="middle" class="t-dim">대기</text>
+        <!-- prefill -->
+        <rect x="110" y="88" width="150" height="30" rx="5" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="185" y="108" text-anchor="middle" class="t">프리필 (프롬프트 전체)</text>
+        <!-- decode tokens -->
+        <g>
+          <rect x="262" y="94" width="22" height="22" rx="4" class="f-acc"/>
+          <rect x="296" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="330" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="364" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="398" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="432" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="466" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="500" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="534" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="568" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="602" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="636" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <rect x="670" y="94" width="22" height="22" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        </g>
+        <text x="273" y="86" text-anchor="middle" class="t-mono" style="font-size:11px">1번째</text>
+        <text x="480" y="86" text-anchor="middle" class="t-dim">디코드: 한 스텝에 한 토큰</text>
+        <!-- TTFT bracket -->
+        <path d="M40 40 H284" class="s-line" marker-start="url(#ds-ar)" marker-end="url(#ds-ar)"/>
+        <text x="162" y="32" text-anchor="middle" class="t-acc">TTFT</text>
+        <!-- TPOT bracket -->
+        <path d="M296 158 H330" class="s-line" marker-start="url(#ds-ar)" marker-end="url(#ds-ar)"/>
+        <text x="313" y="176" text-anchor="middle" class="t-acc">TPOT</text>
+        <!-- E2E -->
+        <path d="M40 206 H692" class="s-line" marker-start="url(#ds-ar)" marker-end="url(#ds-ar)"/>
+        <text x="366" y="198" text-anchor="middle" class="t">종단 지연 = TTFT + (n − 1) × TPOT</text>
+        <text x="366" y="236" text-anchor="middle" class="t-dim">프리필은 연산량이 크고 한 번, 디코드는 연산량이 작고 n번 — 병목이 서로 다르다</text>
+      </svg>
+      <figcaption><b>그림 12-1.</b> 요청 하나의 타임라인. TTFT는 대기와 프리필, TPOT은 디코드 한 스텝의 길이로 정해진다. 출력이 500 토큰이고 TPOT이 30 ms면 디코드에만 15초가 걸리므로, 긴 답변에서는 TPOT이 체감 속도를 좌우한다.</figcaption>
+    </figure>
+    <p>지연과 처리량은 서로 부딪힌다. 요청 여러 개를 묶어(배치) 한 번에 처리하면 GPU가 바쁘게 일해 처리량이 오르지만, 한 스텝이 길어져 각 사용자의 TPOT은 늘어난다. 그래서 서빙 설계는 보통 <span class="term">SLA</span><span class="en">(Service Level Agreement)</span> 또는 SLO 형태로 "TTFT p95 ≤ 1 s, TPOT p95 ≤ 50 ms"처럼 지연 상한을 먼저 정하고, 그 안에서 처리량(= 비용)을 최대화하는 문제로 정리된다. 이 장의 시뮬레이터는 모두 이 한 문장을 다른 각도에서 들여다본다.</p>
+    <div class="callout tip"><strong>오프라인 vs 온라인</strong>대량 문서 요약, 합성 데이터 생성 같은 <em>오프라인 배치</em> 작업은 지연 제약이 거의 없으므로 배치를 메모리가 허락하는 한 키워 처리량만 최대화한다. 채팅·코딩 보조 같은 <em>온라인</em> 서비스는 TTFT·TPOT 제약 아래에서 처리량을 짜낸다. 같은 GPU, 같은 모델이라도 두 경우의 최적 설정과 토큰 단가는 몇 배씩 차이 난다.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="gpus">
+    <h2>하드웨어 숫자: GPU 표</h2>
+    <p>서빙 설계에 필요한 GPU 숫자는 세 개다. <strong>메모리 용량</strong>(가중치와 KV 캐시가 들어가는가), <strong>메모리 대역폭</strong>(디코드 한 스텝에 가중치를 얼마나 빨리 읽는가), <strong>연산 성능</strong>(프리필과 큰 배치를 얼마나 빨리 계산하는가). 여기에 여러 GPU를 묶을 때의 <strong>GPU 간 대역폭</strong>(NVLink)이 더해진다. 아래 표는 이 장의 시뮬레이터가 쓰는 값이다.</p>
+    <div class="table-wrap"><table class="ds-gpu">
+      <thead><tr><th>GPU</th><th>메모리</th><th>대역폭</th><th>BF16 dense</th><th>FP8 dense</th><th>리지 포인트 (BF16)</th><th>GPU 간 연결</th></tr></thead>
+      <tbody>
+        <tr><td>A100 SXM 80GB</td><td>80 GB HBM2e</td><td>약 2.0 TB/s</td><td>312 TFLOPS</td><td>— (미지원)</td><td>≈ 156 FLOP/B</td><td>NVLink 600 GB/s</td></tr>
+        <tr><td>H100 SXM</td><td>80 GB HBM3</td><td>약 3.35 TB/s</td><td>약 989 TFLOPS</td><td>약 1,979</td><td>≈ 295 FLOP/B</td><td>NVLink 900 GB/s</td></tr>
+        <tr><td>H200</td><td>141 GB HBM3e</td><td>약 4.8 TB/s</td><td>약 989</td><td>약 1,979</td><td>≈ 206 FLOP/B</td><td>NVLink 900 GB/s</td></tr>
+        <tr><td>B200 (2024~25 발표치)</td><td>약 180~192 GB HBM3e</td><td>약 8 TB/s</td><td>약 2,250</td><td>약 4,500</td><td>≈ 281 FLOP/B</td><td>NVLink 약 1.8 TB/s</td></tr>
+        <tr><td>B300 / GB300 (Blackwell Ultra, 2025 하반기)</td><td>288 GB HBM3e</td><td>약 8 TB/s</td><td>약 2,500</td><td>약 5,000</td><td>≈ 313 FLOP/B</td><td>NVLink 약 1.8 TB/s</td></tr>
+        <tr><td>Rubin (Vera Rubin, 2026 하반기 공급)</td><td>288 GB HBM4</td><td>약 19~22 TB/s</td><td>약 4,000</td><td>약 17,500</td><td>≈ 208 FLOP/B</td><td>NVLink 6 약 3 TB/s</td></tr>
+        <tr><td>RTX 4090</td><td>24 GB GDDR6X</td><td>약 1.0 TB/s</td><td>약 165 (FP16 텐서)</td><td>약 330</td><td>≈ 165 FLOP/B</td><td>PCIe 4.0 약 32 GB/s</td></tr>
+        <tr><td>Apple M2 Ultra</td><td>최대 192 GB 통합 메모리</td><td>약 0.8 TB/s</td><td>약 27 (GPU, 추정)</td><td>—</td><td>≈ 34 FLOP/B</td><td>— (단일 칩)</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 FLOPS는 희소성(sparsity)을 쓰지 않은 <em>dense</em> 텐서 코어 최대치이고, 대역폭도 사양서 최대치다. 실제 커널은 대역폭의 70~90%, 연산의 40~70% 정도를 낸다. B200 수치는 2024~25년 발표 기준이며 제품 구성(공랭/수랭, HGX/GB200)에 따라 다르고, RTX 4090의 텐서 FLOPS는 FP16 누산 기준 약 165 TFLOPS(FP32 누산이면 그 절반)이다. Apple 통합 메모리는 macOS가 기본적으로 GPU에 전체의 약 75%만 할당한다. B300 수치는 NVIDIA의 GB300 NVL72 랙 사양(GPU 72개, 희소성 포함 표기)을 GPU 하나·dense로 환산한 값이다. Rubin은 NVIDIA 제품 페이지(2026) 기준 BF16 dense 약 4 PFLOPS, FP8 dense 약 17.5 PFLOPS이고, 대역폭은 초기 발표(2026 초)의 약 22 TB/s와 현재 제품 페이지의 19.2 TB/s가 함께 보여 "약 19~22"로 적었다(시뮬레이터는 19.2 TB/s 사용). 4비트 연산은 별도 칸으로 넣지 않았다: B300은 dense FP4 약 15 PFLOPS, Rubin은 NVFP4 추론 약 50 PFLOPS(NVIDIA 발표치, 희소성 기준 표기)다. FP4로 가중치까지 계산하는 경로(<a href="quantization.html">9장</a>의 NVFP4/MXFP4)는 이 장의 단순 모델에 넣지 않았으므로, 4비트 가중치를 골라도 연산은 BF16(또는 FP8) 피크로 계산한다. 이런 불확실성 때문에 이 장의 모든 계산은 "자릿수가 맞는 추정"으로 읽어야 한다.</p>
+    <div class="callout"><strong>표에서 바로 읽히는 것</strong>세대가 바뀔 때 연산 성능은 대역폭보다 빨리 늘어난다(A100→B200: FLOPS 약 7배, 대역폭 약 4배. Rubin의 FP8은 A100 BF16의 50배가 넘지만 대역폭은 약 10배). 메모리 용량과 대역폭이 상대적으로 귀해진다는 뜻이고, 그래서 <a href="quantization.html">9장</a>의 양자화나 KV 캐시 압축처럼 "읽을 바이트를 줄이는" 기법의 가치가 계속 커진다. Apple 칩은 연산은 약하지만 용량이 커서, 배치 1로 큰 모델을 "돌려 보는" 데에는 의외로 좋은 선택이 된다.</div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="memory">
+    <h2>메모리 예산: 가중치 + KV 캐시 + 작업 공간</h2>
+    <p>서빙 GPU 메모리는 세 덩어리로 나뉜다. 첫째는 <strong>가중치</strong>로, 파라미터 수 × 파라미터당 바이트다. Llama 3 70B(약 70.6B 파라미터)를 BF16(2바이트)으로 올리면 141 GB, FP8이면 71 GB, 4비트(그룹 스케일 포함 약 4.125비트)면 약 36 GB다.</p>
+    <div class="formula">$$M_{\text{weight}} = N_{\text{param}} \times \frac{b_w}{8}\ \text{바이트}$$<div class="where">여기서 \(b_w\)는 가중치 비트 수(BF16 = 16, FP8 = 8, INT4 ≈ 4.125)다.</div></div>
+    <p>둘째는 <strong>KV 캐시</strong>다. <a href="generation.html">8장</a>에서 본 대로 각 층은 지나간 모든 토큰의 키와 값을 저장한다. GQA(Grouped-Query Attention)로 KV 헤드가 \(n_{kv}\)개라면 토큰 하나당 크기는 다음과 같다.</p>
+    <div class="formula">$$M_{\text{KV/token}} = 2 \times L \times n_{kv} \times d_{\text{head}} \times b_{kv}$$<div class="where">2는 K와 V, \(L\)은 층 수, \(d_\text{head}\)는 헤드 차원, \(b_{kv}\)는 원소당 바이트(BF16 = 2, FP8 = 1)다.</div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모델</th><th>파라미터</th><th>층 \(L\)</th><th>\(d_\text{model}\)</th><th>KV 헤드 × \(d_\text{head}\)</th><th>KV/토큰 (BF16)</th><th>8K 컨텍스트 1요청</th></tr></thead>
+      <tbody>
+        <tr><td>Llama 3 8B</td><td>8.03B</td><td>32</td><td>4,096</td><td>8 × 128</td><td>128 KiB</td><td>1.07 GB</td></tr>
+        <tr><td>Llama 3 70B</td><td>70.6B</td><td>80</td><td>8,192</td><td>8 × 128</td><td>320 KiB</td><td>2.68 GB</td></tr>
+        <tr><td>Llama 3.1 405B</td><td>405.9B</td><td>126</td><td>16,384</td><td>8 × 128</td><td>504 KiB</td><td>4.23 GB</td></tr>
+        <tr><td>Mixtral 8x7B (MoE)</td><td>46.7B (활성 약 12.9B)</td><td>32</td><td>4,096</td><td>8 × 128</td><td>128 KiB</td><td>1.07 GB</td></tr>
+        <tr><td>gpt-oss-120b (MoE, 2025)</td><td>116.8B (활성 5.1B)</td><td>36 (풀 18 + 창 128 18)</td><td>2,880</td><td>8 × 64</td><td>36 KiB (+ 요청당 고정 약 4.7 MB)</td><td>0.31 GB</td></tr>
+        <tr><td>Qwen3.5-397B-A17B (MoE, 2026)</td><td>397B (활성 17B)</td><td>60 (풀 15 + 선형 45)</td><td>4,096</td><td>2 × 256</td><td>30 KiB (+ 요청당 상태 약 192 MB)</td><td>0.44 GB</td></tr>
+        <tr><td>DeepSeek-V4-Flash (MoE, 2026)</td><td>284B (활성 13B)</td><td>43 (CSA 21 + HCA 20 + 창 2)</td><td>4,096</td><td>압축 KV</td><td>약 3.4 KiB*</td><td>약 0.03 GB</td></tr>
+        <tr><td>DeepSeek-V4-Pro (MoE, 2026)</td><td>1.6T (활성 49B)</td><td>61 (CSA 30 + HCA 31)</td><td>7,168</td><td>압축 KV</td><td>약 4.9 KiB*</td><td>약 0.04 GB</td></tr>
+      </tbody>
+    </table></div>
+    <p>아래 네 줄은 구조가 Llama와 다르다(층 구성은 각 모델의 Hugging Face <code>config.json</code> 기준). <strong>gpt-oss-120b</strong>는 풀 어텐션과 윈도우 128 슬라이딩 어텐션을 한 층씩 번갈아 쓰므로, 길이에 비례해 자라는 KV는 풀 어텐션 18층분뿐이고 슬라이딩 층은 요청당 128토큰어치(약 4.7 MB)로 고정된다. <strong>Qwen3.5</strong>는 60층 중 45층이 Gated DeltaNet 선형 어텐션이라 KV 대신 고정 크기 상태(층당 64헤드 × 128 × 128)를 갖는다. 상태를 FP32로 저장한다고 가정하면(config의 <code>mamba_ssm_dtype</code>) 요청당 약 192 MB로, 짧은 요청에서는 오히려 KV보다 크지만 컨텍스트가 길어져도 늘지 않는다. 풀 어텐션 15층은 KV 헤드 2개 × 256차원이다. <strong>DeepSeek-V4</strong>는 KV를 시퀀스 방향으로 4배(CSA) 또는 128배(HCA) 압축하고 대부분을 FP8로 저장하는데, 층마다 구조가 달라 위 식 하나로 쓰기 어렵다. 그래서 *표의 값은 공개된 상대 수치 "8헤드 GQA(BF16) 대비 약 2%"(Hugging Face 블로그, 2026)를 같은 층 수의 8 × 128 GQA에 곱해서 얻었다. 슬라이딩 창 분기와 인덱서 키도 이 근사 안에 들어 있다고 본다. 시뮬레이터도 이 값을 쓰며, V4에서는 KV 정밀도 선택을 무시한다.</p>
+    <div class="callout"><strong>MoE의 메모리와 속도는 다른 파라미터로 센다</strong>MoE(<a href="transformer.html">6장</a>)는 토큰마다 전문가 몇 개만 쓴다. 하지만 어느 토큰이 어느 전문가로 갈지 미리 모르므로 <em>모든 전문가를 메모리에 올려 두어야 한다.</em> 그래서 메모리 예산은 <strong>총 파라미터</strong>(gpt-oss-120b 116.8B, V4-Pro 1.6T)로 세고, 토큰당 연산은 <strong>활성 파라미터</strong>(5.1B, 49B)로 센다. 대역폭은 그 중간이다. 배치 1이면 활성 전문가만 읽는다. 배치 \(b\)의 토큰이 각각 \(E\)개 중 \(k\)개를 고르면, 한 스텝에 건드리는 전문가 비율은 무작위 라우팅 가정에서 \(1-(1-k/E)^{b}\)이고 빠르게 1에 다가간다. 큰 배치에서는 결국 거의 모든 전문가 가중치를 매 스텝 읽게 된다. '공개 형식' 버튼은 각 모델이 공개된 정밀도다. gpt-oss는 MoE 가중치가 MXFP4(블록 스케일 포함 약 4.25비트)이고 나머지는 BF16이라 약 65 GB로 80 GB GPU 한 장에 들어간다. V4는 전문가가 FP4(약 4.25비트로 가정)이고 나머지는 FP8이라 Flash 약 154 GB, Pro 약 875 GB다. Llama·Mixtral·Qwen3.5의 공개 형식은 BF16으로 두었다.</div>
+    <p>셋째는 <strong>작업 공간</strong>이다. CUDA 컨텍스트, cuBLAS·어텐션 커널의 임시 버퍼, 프리필 중간 활성값, 메모리 단편화를 합쳐 GPU당 수 GB가 든다. vLLM 같은 서빙 엔진은 기본으로 전체 메모리의 90%만 쓰고(<code>gpu_memory_utilization=0.9</code>), 그 안에서 가중치와 작업 공간을 뺀 나머지를 전부 KV 캐시 블록으로 미리 잡아 둔다(PagedAttention). 결국 <em>동시에 처리할 수 있는 요청 수</em>는 다음처럼 정해진다.</p>
+    <div class="formula">$$B_{\max} = \left\lfloor \frac{0.9\,C_{\text{GPU}} \cdot N_{\text{GPU}} - M_{\text{weight}} - M_{\text{work}}}{(\,\text{프롬프트} + \text{출력}\,) \times M_{\text{KV/token}}} \right\rfloor$$</div>
+    <p>H100 한 장(80 GB)에 Llama 3 8B BF16을 올리면 가중치 16 GB, 작업 공간 2 GB를 빼고 약 54 GB가 KV 캐시 몫이다. 컨텍스트 8K 요청은 요청당 1.07 GB이므로 약 50개를 동시에 처리할 수 있다. 같은 GPU에 70B를 BF16으로는 아예 올릴 수 없다. 아래 시뮬레이터에서 막대 위쪽을 끌어 올리면 동시 요청 수가 늘어나며 KV 캐시가 차오른다.</p>
+
+    <div class="sim" id="sim-mem">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GPU 메모리 적재</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-mem" class="ds-drag"></canvas><span class="hint">막대를 위아래로 끌어 동시 요청 수 조절</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델</span><select id="mem-model"><option value="l8">Llama 3 8B</option><option value="l70" selected>Llama 3 70B</option><option value="l405">Llama 3.1 405B</option><option value="mx">Mixtral 8x7B</option><option value="gpt">gpt-oss-120b (MoE)</option><option value="qw">Qwen3.5-397B-A17B (MoE)</option><option value="v4f">DeepSeek-V4-Flash (MoE)</option><option value="v4p">DeepSeek-V4-Pro (MoE)</option></select></label>
+          <div class="ctrl"><span>가중치 정밀도</span><div class="seg" id="mem-w"><button data-value="16" class="on">BF16</button><button data-value="8">FP8</button><button data-value="4">INT4</button><button data-value="n">공개 형식</button></div></div>
+          <div class="ctrl"><span>KV 캐시 정밀도</span><div class="seg" id="mem-kv"><button data-value="2" class="on">BF16</button><button data-value="1">FP8</button></div></div>
+          <label class="ctrl"><span>GPU</span><select id="mem-gpu"><option value="a100">A100 80GB</option><option value="h100" selected>H100 SXM</option><option value="h200">H200</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option><option value="r4090">RTX 4090</option><option value="m2u">Apple M2 Ultra</option></select></label>
+          <div class="ctrl"><span>GPU 개수 (텐서 병렬)</span><div class="seg" id="mem-n"><button data-value="1">1</button><button data-value="2" class="on">2</button><button data-value="4">4</button><button data-value="8">8</button><button data-value="16">16</button></div></div>
+          <label class="ctrl"><span>컨텍스트 (프롬프트+출력) <output id="mem-ctx-out"></output></span><input type="range" id="mem-ctx" min="0" max="8" step="1" value="4"></label>
+          <label class="ctrl"><span>동시 요청 수 <output id="mem-u-out"></output></span><input type="range" id="mem-u" min="1" max="256" step="1" value="16"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가중치 (전체)</span><span class="v" id="mem-o-w">—</span></div>
+        <div class="stat"><span class="k">요청당 KV</span><span class="v" id="mem-o-kvr">—</span></div>
+        <div class="stat"><span class="k">GPU당 사용</span><span class="v" id="mem-o-use">—</span></div>
+        <div class="stat"><span class="k">최대 동시 요청</span><span class="v" id="mem-o-max">—</span></div>
+      </div>
+      <div class="ds-diag" id="mem-diag">—</div>
+      <div class="sim-note">해볼 것: ① Llama 3 70B BF16을 H100 1장에 올려 보자 — 가중치만으로 넘친다. 2장(텐서 병렬)이면 들어가지만 KV 여유가 얼마 없다. ② 가중치를 FP8로 바꾸면 최대 동시 요청이 몇 배가 되는지, 다시 KV까지 FP8로 바꾸면 또 몇 배가 되는지 보자. ③ 컨텍스트를 128K로 올리면 요청 하나의 KV가 수십 GB가 되어 동시 요청이 한 자릿수로 떨어진다. ④ 405B를 BF16/FP8/INT4로 바꿔 가며 H100 8장에 들어가는 조합을 찾아보자. ⑤ gpt-oss-120b를 '공개 형식'으로 H100 1장에 올려 보자. 다음으로 DeepSeek-V4-Pro를 공개 형식으로 B300 8장에 올리고 컨텍스트를 128K로 늘려 보자. 압축 KV 덕분에 128K 요청 하나가 약 0.65 GB라 동시 요청 256개를 다 채워도 KV 예산이 한참 남는다(같은 길이에서 Llama 3 70B는 요청당 약 43 GB). ⑥ Qwen3.5는 컨텍스트 512에서도 요청당 약 0.2 GB다(선형 어텐션 상태). 128K로 늘려도 약 4 GB로 완만하게만 는다. GPU당 작업 공간 2 GB, 사용 상한 90%(Apple은 75%)로 가정했다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="roofline">
+    <h2>루프라인: 메모리 한계인가, 연산 한계인가</h2>
+    <p>메모리에 올렸다면 다음 질문은 "얼마나 빠른가"다. 커널 하나의 실행 시간은 두 가지 중 느린 쪽으로 정해진다. 필요한 바이트를 메모리에서 읽어 오는 시간 \(Q/\beta\)와, 필요한 연산을 수행하는 시간 \(W/\pi\)다(\(\beta\): 대역폭, \(\pi\): 최대 FLOPS). 둘을 가르는 기준은 <span class="term">산술 강도</span><span class="en">(arithmetic intensity)</span> — 읽어 온 바이트 하나당 몇 번 연산하는가 — 이다.</p>
+    <div class="formula">$$I = \frac{W\ (\text{FLOPs})}{Q\ (\text{바이트})},\qquad P_{\text{attainable}} = \min(\pi,\ \beta \cdot I),\qquad I_{\text{ridge}} = \frac{\pi}{\beta}$$<div class="where">H100 SXM: \(I_\text{ridge} = 989\times10^{12} / 3.35\times10^{12} \approx 295\) FLOP/B. 산술 강도가 이보다 작으면 메모리 바운드, 크면 계산 바운드다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="루프라인 모델 개념도">
+        <path d="M80 40 V260 H720" class="s-axis"/>
+        <path d="M80 234 L524 64 H720" style="stroke:var(--accent);stroke-width:3;fill:none"/>
+        <path d="M524 64 V260" class="s-line" style="stroke-dasharray:4 4"/>
+        <text x="528" y="278" class="t-mono" style="fill:var(--accent)">I_ridge ≈ 295</text>
+        <text x="200" y="150" class="t" transform="rotate(-21 200 150)">메모리 바운드: P = β × I</text>
+        <text x="620" y="54" text-anchor="middle" class="t">계산 바운드: P = π</text>
+        <!-- points -->
+        <circle cx="208" cy="185" r="7" style="fill:var(--accent-2)"/>
+        <text x="220" y="204" class="t" style="fill:var(--accent-2)">디코드 배치 1 (I ≈ 1)</text>
+        <circle cx="439" cy="97" r="7" style="fill:var(--accent-2)"/>
+        <text x="446" y="120" class="t" style="fill:var(--accent-2)">디코드 배치 64</text>
+        <circle cx="630" cy="64" r="7" style="fill:var(--warn)"/>
+        <text x="630" y="92" text-anchor="middle" class="t" style="fill:var(--warn)">프리필 2K 토큰</text>
+        <text x="400" y="296" text-anchor="middle" class="t-dim">산술 강도 I (FLOP/바이트, 로그)</text>
+        <text x="40" y="150" text-anchor="middle" class="t-dim" transform="rotate(-90 40 150)">성능 (FLOP/s, 로그)</text>
+        <text x="86" y="276" class="t-mono" style="font-size:11px">0.1</text>
+        <text x="208" y="276" text-anchor="middle" class="t-mono" style="font-size:11px">1</text>
+        <text x="336" y="276" text-anchor="middle" class="t-mono" style="font-size:11px">10</text>
+        <text x="464" y="276" text-anchor="middle" class="t-mono" style="font-size:11px">100</text>
+        <text x="720" y="276" text-anchor="middle" class="t-mono" style="font-size:11px">10⁴</text>
+      </svg>
+      <figcaption><b>그림 12-2.</b> 루프라인 모델(H100 SXM BF16 기준 모식도). 비스듬한 지붕은 대역폭 한계, 평평한 지붕은 연산 한계다. 배치 1 디코딩은 지붕의 왼쪽 끝 근처에 있어 최대 FLOPS의 0.3%만 쓴다. 배치를 키우면 점이 오른쪽 위로 올라간다.</figcaption>
+    </figure>
+    <h3>디코드와 프리필의 산술 강도</h3>
+    <p>디코드 한 스텝을 보자. 파라미터 \(P\)개짜리 모델에서 토큰 하나는 대략 \(2P\) FLOPs(곱셈 + 덧셈)를 쓴다(<a href="transformer.html">6장</a>). 배치에 토큰이 \(b\)개 있으면 연산은 \(2Pb\)지만, 가중치는 <em>한 번만</em> 읽어서 \(b\)개 토큰이 같이 쓴다. BF16이면 읽는 바이트는 \(2P\)다.</p>
+    <div class="formula">$$I_{\text{decode}} \approx \frac{2Pb}{2P + b \cdot c \cdot M_{\text{KV/token}}} \;\xrightarrow{\ c\,\text{작을 때}\ }\; b\ \ \text{FLOP/B}$$<div class="where">\(c\)는 각 요청의 현재 컨텍스트 길이. KV 캐시는 요청마다 따로 읽어야 하므로 배치로 나눠 쓸 수 없다.</div></div>
+    <p>배치 1이면 \(I \approx 1\) FLOP/B로, H100의 리지 포인트 295와 비교하면 300배 가까이 부족하다. 즉 배치 1 디코딩은 거의 순수하게 "가중치를 읽는 속도"로 결정된다. 토큰당 걸리는 시간의 하한은 \(2P/\beta\)이고, Llama 3 8B BF16을 H100에서 돌리면 \(16\,\text{GB} / 3.35\,\text{TB/s} \approx 4.8\) ms, 즉 사용자 1명 기준 약 210 tok/s가 이론 상한이다. 반면 프리필은 프롬프트 \(p\)개 토큰을 한 번에 처리하므로 \(I \approx p\)가 되어, 프롬프트가 수백 토큰만 넘어도 계산 바운드 영역에 들어간다.</p>
+    <p>하나 더 중요한 점: <strong>KV 캐시 읽기는 배치로 나눠 쓸 수 없다.</strong> 어텐션 부분만 떼어 보면 토큰당 연산 \(4 L d\, c\)에 비해 읽는 KV는 \(c \cdot 2 L n_{kv} d_\text{head} \cdot 2\) 바이트라서, 산술 강도가 \(d/(n_{kv} d_\text{head})\) = Llama 3 8B 기준 약 4 FLOP/B로 배치와 무관하게 고정된다. 컨텍스트가 길수록 디코드는 배치를 키워도 계산 바운드로 넘어가지 못한다.</p>
+
+    <div class="sim" id="sim-roof">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>루프라인 플레이그라운드</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-roof" class="ds-drag"></canvas><span class="hint">점을 좌우로 끌기</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>GPU</span><select id="roof-gpu"><option value="a100">A100 80GB</option><option value="h100" selected>H100 SXM</option><option value="h200">H200</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option><option value="r4090">RTX 4090</option><option value="m2u">Apple M2 Ultra</option></select></label>
+          <div class="ctrl"><span>모델 (BF16)</span><div class="seg" id="roof-model"><button data-value="l8" class="on">Llama 3 8B</button><button data-value="l70">Llama 3 70B</button></div></div>
+          <label class="ctrl"><span>디코드 배치 b <output id="roof-b-out"></output></span><input type="range" id="roof-b" min="0" max="10" step="0.05" value="0"></label>
+          <label class="ctrl"><span>프롬프트 길이 p <output id="roof-p-out"></output></span><input type="range" id="roof-p" min="2" max="15" step="0.05" value="11"></label>
+          <label class="check"><input type="checkbox" id="roof-kv" checked> 디코드에 KV 캐시 읽기 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">리지 포인트</span><span class="v" id="roof-o-ridge">—</span></div>
+        <div class="stat"><span class="k">디코드 I / 달성</span><span class="v" id="roof-o-dec">—</span></div>
+        <div class="stat"><span class="k">디코드 한 스텝</span><span class="v" id="roof-o-dt">—</span></div>
+        <div class="stat"><span class="k">프리필 I / 시간</span><span class="v" id="roof-o-pre">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 배치 1에서 디코드 점이 지붕의 비스듬한 부분 아래쪽에 있는 것을 확인하자 — 달성 FLOPS가 최대치의 1%도 안 된다. ② 'KV 포함'을 끄고 배치를 키우면 \(I \approx b\)로 거의 정확히 따라가며, b ≈ 295에서 H100의 지붕 모서리에 닿는다. ③ KV 포함을 켜고 프롬프트를 32K로 늘리면 배치를 아무리 키워도 디코드 점이 리지 포인트에 못 미친다(KV 읽기는 배치로 공유되지 않으므로). ④ GPU를 A100 → B200으로 바꾸며 리지 포인트가 어떻게 움직이는지 보자. 흐린 선은 다른 GPU의 지붕이다. 최대치(이상적 상한) 기준이며 용량 제한은 무시했다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="batching">
+    <h2>배치: 처리량과 지연의 트레이드오프</h2>
+    <p>루프라인을 시간으로 바꿔 쓰면 디코드 한 스텝(= TPOT)의 길이를 바로 계산할 수 있다. 배치 \(b\), 평균 컨텍스트 \(c\)일 때</p>
+    <div class="formula">$$t_{\text{step}}(b) \approx \max\!\left(\frac{M_{\text{weight}} + b\,c\,M_{\text{KV/token}}}{\beta},\ \frac{b\,(2P + 4 L d\, c)}{\pi}\right),\qquad \text{총 처리량} = \frac{b}{t_{\text{step}}},\quad \text{사용자당} = \frac{1}{t_{\text{step}}}$$</div>
+    <p>배치가 작을 때는 가중치 읽기가 지배하므로 \(t_\text{step}\)이 거의 일정하다 — 배치를 2배로 늘려도 TPOT은 그대로이고 총 처리량만 2배가 된다. 사실상 공짜 점심이다. 배치가 커지면 두 가지 일이 생긴다. KV 캐시 읽기 \(b\,c\,M_\text{KV}\)가 가중치 읽기를 넘어서며 \(t_\text{step}\)이 \(b\)에 비례해 늘기 시작하고, 결국 연산 시간 항이 지붕에 닿는다. 그 지점부터는 배치를 키워도 총 처리량이 더 이상 늘지 않고 사용자당 속도만 떨어진다. 그리고 그 전에 메모리 용량(최대 동시 요청)이 한계를 긋는 경우가 많다.</p>
+
+    <div class="sim" id="sim-batch">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>배치 크기 스윕</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-batch" class="ds-drag"></canvas><span class="hint">그래프를 끌어 배치 선택</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>GPU</span><select id="bt-gpu"><option value="a100">A100 80GB</option><option value="h100" selected>H100 SXM</option><option value="h200">H200</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option><option value="r4090">RTX 4090</option></select></label>
+          <div class="ctrl"><span>모델 · 정밀도</span><div class="seg" id="bt-model"><button data-value="l8" class="on">8B BF16</button><button data-value="l8f">8B FP8</button></div></div>
+          <label class="ctrl"><span>평균 컨텍스트 c <output id="bt-c-out"></output></span><input type="range" id="bt-c" min="7" max="15" step="0.1" value="11"></label>
+          <label class="check"><input type="checkbox" id="bt-cap" checked> 메모리 용량 한계 표시</label>
+        </div>
+      </div>
+      <div class="legend ds-legend"><span><i style="background:var(--accent)"></i>TPOT</span><span><i style="background:var(--accent-2)"></i>총 처리량</span><span><i style="background:var(--warn)"></i>사용자당 tok/s</span><span><i style="background:var(--text-faint)"></i>KV 읽기 무시</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">배치 b</span><span class="v" id="bt-o-b">—</span></div>
+        <div class="stat"><span class="k">TPOT</span><span class="v" id="bt-o-tpot">—</span></div>
+        <div class="stat"><span class="k">총 / 사용자당</span><span class="v" id="bt-o-tp">—</span></div>
+        <div class="stat"><span class="k">병목</span><span class="v" id="bt-o-reg">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① b = 1 → 16으로 끌어 보자. TPOT은 거의 그대로인데 총 처리량은 16배가 된다. ② 컨텍스트를 512로 줄이면 KV 읽기가 작아져 '무시' 곡선과 거의 겹치고, 전환점이 리지 포인트 근처(b ≈ 수백)로 간다. ③ 컨텍스트 32K에서는 배치 수십 개부터 KV 읽기가 가중치 읽기를 넘어서고, 그 전에 메모리 용량(세로 점선)이 먼저 끝난다. ④ FP8로 바꾸면 가중치·KV 바이트가 반으로 줄어 같은 배치에서 TPOT이 짧아지고 용량 한계는 오른쪽으로 간다. 이상적 상한(최대 대역폭·FLOPS) 기준이다.</div>
+    </div>
+    <div class="callout warn"><strong>TPOT SLA가 배치를 정한다</strong>"TPOT ≤ 30 ms"라는 목표가 있으면, 그래프에서 TPOT 곡선이 30 ms를 넘지 않는 가장 큰 \(b\)가 곧 최적 배치다. 이 배치에서의 총 처리량이 GPU 한 대가 그 SLA로 벌 수 있는 최대 토큰 수이고, 토큰 단가를 결정한다. 지연 목표를 느슨하게 할수록 처리량이 오르고 단가가 떨어진다.</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="continuous">
+    <h2>연속 배칭: 빈자리를 즉시 채우기</h2>
+    <p>배치가 처리량의 열쇠라면, 실제 서비스에서 문제는 요청이 제각각의 시각에 도착하고 출력 길이도 제각각이라는 점이다. 전통적인 <span class="term">정적 배칭</span><span class="en">(static batching)</span>은 요청 몇 개를 묶어 시작한 뒤 <em>가장 긴 요청이 끝날 때까지</em> 배치를 유지한다. 10 토큰만에 끝난 요청의 자리는 500 토큰짜리 요청이 끝날 때까지 비어 있고, 그 사이 도착한 요청은 대기열에서 기다린다.</p>
+    <p><span class="term">연속 배칭</span><span class="en">(continuous batching, iteration-level scheduling)</span>은 스케줄링 단위를 "요청"에서 "디코드 한 스텝"으로 바꾼다(Orca, 2022). 매 스텝마다 끝난 요청을 빼고 대기 중인 요청을 빈 슬롯에 넣는다. 디코드 스텝 비용은 배치 크기에 크게 의존하지 않으므로(앞 절), 슬롯을 늘 채워 두는 것이 곧 처리량이다. vLLM, TensorRT-LLM, SGLang 등 현대 서빙 엔진은 모두 이 방식이며, 새 요청의 프리필을 디코드 스텝에 잘게 끼워 넣는 <em>chunked prefill</em>도 함께 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="정적 배칭과 연속 배칭 비교">
+        <text x="20" y="28" class="t-acc">정적 배칭</text>
+        <text x="20" y="168" class="t-acc">연속 배칭</text>
+        <!-- static: slots y=40,62,84,106 ; unit 26px from x=90 -->
+        <g>
+          <text x="80" y="55" text-anchor="end" class="t-mono" style="font-size:11px">슬롯0</text>
+          <text x="80" y="77" text-anchor="end" class="t-mono" style="font-size:11px">슬롯1</text>
+          <text x="80" y="99" text-anchor="end" class="t-mono" style="font-size:11px">슬롯2</text>
+          <text x="80" y="121" text-anchor="end" class="t-mono" style="font-size:11px">슬롯3</text>
+          <rect x="90" y="42" width="156" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="168" y="55" text-anchor="middle" class="t-mono" style="font-size:11px">A</text>
+          <rect x="246" y="42" width="208" height="18" rx="3" class="f-surface" style="stroke:var(--border);stroke-dasharray:3 3"/>
+          <rect x="90" y="64" width="78" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="129" y="77" text-anchor="middle" class="t-mono" style="font-size:11px">B</text>
+          <rect x="168" y="64" width="286" height="18" rx="3" class="f-surface" style="stroke:var(--border);stroke-dasharray:3 3"/>
+          <text x="311" y="77" text-anchor="middle" class="t-dim" style="font-size:11px">비어 있지만 못 씀</text>
+          <rect x="90" y="86" width="364" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="272" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">C (가장 긺)</text>
+          <rect x="90" y="108" width="104" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="142" y="121" text-anchor="middle" class="t-mono" style="font-size:11px">D</text>
+          <rect x="194" y="108" width="260" height="18" rx="3" class="f-surface" style="stroke:var(--border);stroke-dasharray:3 3"/>
+          <path d="M454 36 V132" class="s-line" style="stroke-dasharray:4 3"/>
+          <text x="458" y="140" class="t-dim" style="font-size:11px">배치 종료 → 다음 배치 E, F, G, H 시작</text>
+          <rect x="456" y="42" width="130" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="521" y="55" text-anchor="middle" class="t-mono" style="font-size:11px">E</text>
+          <rect x="456" y="64" width="182" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="547" y="77" text-anchor="middle" class="t-mono" style="font-size:11px">F</text>
+          <rect x="456" y="86" width="78" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="495" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">G</text>
+          <rect x="456" y="108" width="234" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="573" y="121" text-anchor="middle" class="t-mono" style="font-size:11px">H</text>
+        </g>
+        <g>
+          <text x="80" y="195" text-anchor="end" class="t-mono" style="font-size:11px">슬롯0</text>
+          <text x="80" y="217" text-anchor="end" class="t-mono" style="font-size:11px">슬롯1</text>
+          <text x="80" y="239" text-anchor="end" class="t-mono" style="font-size:11px">슬롯2</text>
+          <text x="80" y="261" text-anchor="end" class="t-mono" style="font-size:11px">슬롯3</text>
+          <rect x="90" y="182" width="156" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="168" y="195" text-anchor="middle" class="t-mono" style="font-size:11px">A</text>
+          <rect x="246" y="182" width="78" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="285" y="195" text-anchor="middle" class="t-mono" style="font-size:11px">G</text>
+          <rect x="90" y="204" width="78" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="129" y="217" text-anchor="middle" class="t-mono" style="font-size:11px">B</text>
+          <rect x="168" y="204" width="130" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="233" y="217" text-anchor="middle" class="t-mono" style="font-size:11px">E</text>
+          <rect x="298" y="204" width="234" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="415" y="217" text-anchor="middle" class="t-mono" style="font-size:11px">H</text>
+          <rect x="90" y="226" width="364" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/><text x="272" y="239" text-anchor="middle" class="t-mono" style="font-size:11px">C</text>
+          <rect x="90" y="248" width="104" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="142" y="261" text-anchor="middle" class="t-mono" style="font-size:11px">D</text>
+          <rect x="194" y="248" width="182" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="285" y="261" text-anchor="middle" class="t-mono" style="font-size:11px">F</text>
+          <path d="M532 176 V272" class="s-line" style="stroke-dasharray:4 3;stroke:var(--ok)"/>
+          <text x="538" y="232" class="t" style="fill:var(--ok)">같은 8개 요청이</text>
+          <text x="538" y="250" class="t" style="fill:var(--ok)">훨씬 일찍 끝난다</text>
+        </g>
+        <text x="380" y="292" text-anchor="middle" class="t-dim">가로 = 디코드 스텝(시간). 정적 배칭의 점선 칸은 슬롯은 잡혀 있지만 아무 일도 하지 않는 시간이다.</text>
+      </svg>
+      <figcaption><b>그림 12-3.</b> 정적 배칭(위)과 연속 배칭(아래). 같은 요청 A~H를 처리할 때 연속 배칭은 끝난 슬롯에 대기 중인 요청을 즉시 넣는다. 출력 길이의 편차가 클수록 차이가 커진다.</figcaption>
+    </figure>
+    <p>아래 시뮬레이터는 실제로 요청을 생성해(포아송 도착, 시드 고정) 두 스케줄러를 같은 입력으로 돌린다. 시간 단위는 디코드 한 스텝이고, 한 스텝의 비용은 배치 크기와 무관하다고 가정했다(메모리 바운드 영역). 프리필 시간은 생략했다.</p>
+
+    <div class="sim" id="sim-sched">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스케줄러 타임라인: 정적 vs 연속 배칭</h3></div>
+      <div class="sim-body">
+        <div class="sim-view"><canvas id="ds-cv-sched" class="ds-drag"></canvas><span class="hint">끌어서 시점 이동 · 막대 클릭으로 요청 강조</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>도착률 λ <output id="sc-lam-out"></output></span><input type="range" id="sc-lam" min="0.03" max="0.4" step="0.01" value="0.14"></label>
+          <label class="ctrl"><span>배치 슬롯 S <output id="sc-s-out"></output></span><input type="range" id="sc-s" min="4" max="16" step="1" value="8"></label>
+          <label class="ctrl"><span>출력 길이 분포</span><select id="sc-len"><option value="skew" selected>짧은 답이 많음 (8~160)</option><option value="uni">균등 (8~160)</option><option value="fixed">모두 같음 (60)</option></select></label>
+          <div class="ctrl"><span>재생</span><div class="ds-btns"><button class="btn primary" id="sc-play">일시정지</button><button class="btn" id="sc-reset">처음부터</button><button class="btn" id="sc-seed">새 시드</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">슬롯 활용률 (정적 / 연속)</span><span class="v" id="sc-o-util">—</span></div>
+        <div class="stat"><span class="k">평균 대기 (스텝)</span><span class="v" id="sc-o-wait">—</span></div>
+        <div class="stat"><span class="k">평균 완료 시간 (스텝)</span><span class="v" id="sc-o-lat">—</span></div>
+        <div class="stat"><span class="k">전체 소요 (스텝)</span><span class="v" id="sc-o-span">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본 설정에서 정적 배칭의 회색 칸(끝났는데 비워 둔 슬롯)과 위 삼각형(도착) 아래로 쌓이는 대기열을 보자. ② 출력 길이를 '모두 같음'으로 바꾸면 두 방식의 차이가 크게 줄어든다 — 연속 배칭의 이득은 길이 편차에서 나온다. ③ 도착률을 0.05로 낮추면 둘 다 한가해 차이가 작고, 0.3 이상으로 올리면 정적 배칭의 대기 시간이 폭발한다. ④ 슬롯 S를 16으로 늘리면 같은 부하에서 대기가 줄어든다(메모리가 허락한다면). 막대를 누르면 같은 요청이 두 레인에서 강조된다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="parallel">
+    <h2>병렬화: 한 GPU를 넘어서</h2>
+    <p>모델이 GPU 하나에 안 들어가거나, 하나로는 지연 목표를 맞출 수 없으면 여러 GPU로 나눈다. 나누는 방법은 크게 네 가지다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 340" role="img" aria-label="텐서, 파이프라인, 데이터, 전문가 병렬">
+        <defs>
+          <marker id="ds-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <!-- TP -->
+        <text x="100" y="24" text-anchor="middle" class="t-acc">텐서 병렬 (TP)</text>
+        <rect x="30" y="40" width="140" height="80" rx="4" class="f-surface" style="stroke:var(--border)"/>
+        <rect x="30" y="40" width="35" height="80" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="65" y="40" width="35" height="80" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <rect x="100" y="40" width="35" height="80" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="135" y="40" width="35" height="80" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="47" y="84" text-anchor="middle" class="t-mono" style="font-size:11px">G0</text>
+        <text x="82" y="84" text-anchor="middle" class="t-mono" style="font-size:11px">G1</text>
+        <text x="117" y="84" text-anchor="middle" class="t-mono" style="font-size:11px">G2</text>
+        <text x="152" y="84" text-anchor="middle" class="t-mono" style="font-size:11px">G3</text>
+        <text x="100" y="140" text-anchor="middle" class="t-dim" style="font-size:12px">층 하나의 행렬을 쪼갬</text>
+        <text x="100" y="158" text-anchor="middle" class="t-dim" style="font-size:12px">층마다 all-reduce</text>
+        <text x="100" y="176" text-anchor="middle" class="t-dim" style="font-size:12px">→ NVLink 필수 (노드 안)</text>
+        <!-- PP -->
+        <text x="290" y="24" text-anchor="middle" class="t-acc">파이프라인 병렬 (PP)</text>
+        <rect x="230" y="40" width="120" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="290" y="53" text-anchor="middle" class="t-mono" style="font-size:11px">층 1–20 · G0</text>
+        <rect x="230" y="68" width="120" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="290" y="81" text-anchor="middle" class="t-mono" style="font-size:11px">층 21–40 · G1</text>
+        <rect x="230" y="96" width="120" height="18" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="290" y="109" text-anchor="middle" class="t-mono" style="font-size:11px">층 41–60 · G2</text>
+        <rect x="230" y="124" width="120" height="18" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="290" y="137" text-anchor="middle" class="t-mono" style="font-size:11px">층 61–80 · G3</text>
+        <path d="M360 50 V132" class="s-line" marker-end="url(#ds-ar2)"/>
+        <text x="290" y="160" text-anchor="middle" class="t-dim" style="font-size:12px">층을 단계로 나눔</text>
+        <text x="290" y="178" text-anchor="middle" class="t-dim" style="font-size:12px">경계에서만 활성값 전달 · 버블</text>
+        <!-- DP -->
+        <text x="470" y="24" text-anchor="middle" class="t-acc">데이터 병렬 (DP)</text>
+        <rect x="410" y="40" width="54" height="40" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="476" y="40" width="54" height="40" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="410" y="92" width="54" height="40" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="476" y="92" width="54" height="40" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="437" y="64" text-anchor="middle" class="t-mono" style="font-size:11px">모델</text>
+        <text x="503" y="64" text-anchor="middle" class="t-mono" style="font-size:11px">모델</text>
+        <text x="437" y="116" text-anchor="middle" class="t-mono" style="font-size:11px">모델</text>
+        <text x="503" y="116" text-anchor="middle" class="t-mono" style="font-size:11px">모델</text>
+        <text x="470" y="160" text-anchor="middle" class="t-dim" style="font-size:12px">모델 통째로 복제</text>
+        <text x="470" y="178" text-anchor="middle" class="t-dim" style="font-size:12px">요청을 나눠 받음 (복제본)</text>
+        <!-- EP -->
+        <text x="655" y="24" text-anchor="middle" class="t-acc">전문가 병렬 (EP)</text>
+        <rect x="625" y="40" width="60" height="22" rx="4" class="f-surface" style="stroke:var(--warn)"/>
+        <text x="655" y="56" text-anchor="middle" class="t-mono" style="font-size:11px">라우터</text>
+        <rect x="585" y="104" width="34" height="30" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="625" y="104" width="34" height="30" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <rect x="665" y="104" width="34" height="30" rx="4" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="705" y="104" width="34" height="30" rx="4" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="602" y="124" text-anchor="middle" class="t-mono" style="font-size:10px">E0,1</text>
+        <text x="642" y="124" text-anchor="middle" class="t-mono" style="font-size:10px">E2,3</text>
+        <text x="682" y="124" text-anchor="middle" class="t-mono" style="font-size:10px">E4,5</text>
+        <text x="722" y="124" text-anchor="middle" class="t-mono" style="font-size:10px">E6,7</text>
+        <path d="M640 62 L605 102 M650 62 L642 102 M660 62 L680 102 M670 62 L718 102" class="s-line" marker-end="url(#ds-ar2)"/>
+        <text x="662" y="160" text-anchor="middle" class="t-dim" style="font-size:12px">MoE 전문가를 GPU에 분산</text>
+        <text x="662" y="178" text-anchor="middle" class="t-dim" style="font-size:12px">토큰을 all-to-all로 배달</text>
+        <!-- bottom: combined -->
+        <rect x="30" y="214" width="700" height="100" rx="8" class="f-surface" style="stroke:var(--border)"/>
+        <text x="380" y="238" text-anchor="middle" class="t">실제 배치 예: Llama 3.1 405B (FP8 ≈ 406 GB)</text>
+        <text x="380" y="262" text-anchor="middle" class="t-dim">노드 1개 = H100 8장 (640 GB) → TP = 8로 한 노드 안에 · KV 여유 약 150 GB</text>
+        <text x="380" y="284" text-anchor="middle" class="t-dim">BF16 (≈ 812 GB)이면 H100 16장 → 노드 2개: 노드 안 TP 8 × 노드 사이 PP 2</text>
+        <text x="380" y="304" text-anchor="middle" class="t-dim">처리량을 늘릴 때는 이 묶음 전체를 DP로 복제</text>
+      </svg>
+      <figcaption><b>그림 12-4.</b> 네 가지 병렬화. 통신이 잦은 TP는 NVLink로 묶인 노드 안에서, 통신이 드문 PP와 DP는 노드 사이(InfiniBand 등)에 쓰는 것이 기본 원칙이다.</figcaption>
+    </figure>
+    <p><strong>텐서 병렬</strong><span class="en">(Tensor Parallelism)</span>은 각 층의 가중치 행렬을 열/행 방향으로 쪼개 GPU마다 일부를 계산하게 한다(Megatron-LM 방식). 어텐션은 헤드 단위로, FFN은 중간 차원 단위로 나누면 층 하나에 all-reduce 두 번이면 된다. 장점은 가중치와 KV가 \(N\)등분되고 <em>대역폭도 \(N\)배</em>가 되어 디코드 TPOT이 실제로 짧아진다는 점이다. 대신 토큰 하나마다 층당 두 번씩, 80층이면 160번의 all-reduce가 필요하다. 각 all-reduce는 \(b \cdot d\) 원소로 작지만 횟수가 많아 <em>지연</em>이 쌓이므로, GPU 사이가 수백 GB/s~TB/s급 NVLink로 묶여 있지 않으면(PCIe는 약 32 GB/s) 이득이 금방 사라진다. KV 헤드가 8개인 모델은 TP 8까지가 자연스럽다.</p>
+    <p><strong>파이프라인 병렬</strong><span class="en">(Pipeline Parallelism)</span>은 층을 몇 단계로 잘라 GPU마다 연속된 층 묶음을 맡긴다. 경계에서 활성값만 넘기면 되므로 통신은 적지만, 한 요청의 한 토큰은 단계를 순서대로 지나가므로 <em>단일 요청의 지연은 줄지 않는다.</em> 여러 마이크로배치를 흘려 넣어야 모든 단계가 동시에 바쁘고, 시작과 끝에 일부 단계가 노는 <span class="term">파이프라인 버블</span>이 생긴다. GPipe 방식에서 버블 비율은 다음과 같다.</p>
+    <div class="formula">$$\text{버블 비율} = \frac{p - 1}{m + p - 1}$$<div class="where">\(p\): 파이프라인 단계 수, \(m\): 마이크로배치 수. 학습에서는 1F1B, interleaved 스케줄로 버블을 더 줄인다.</div></div>
+
+    <div class="sim" id="sim-pp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>파이프라인 버블</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-pp"></canvas><span class="hint">칸을 누르면 같은 마이크로배치 강조</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>단계 수 p <output id="pp-p-out"></output></span><input type="range" id="pp-p" min="1" max="8" step="1" value="4"></label>
+          <label class="ctrl"><span>마이크로배치 m <output id="pp-m-out"></output></span><input type="range" id="pp-m" min="1" max="16" step="1" value="4"></label>
+          <div class="ctrl"><span>작업</span><div class="seg" id="pp-mode"><button data-value="train" class="on">학습 (F + B)</button><button data-value="infer">추론 (F만)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">버블 비율</span><span class="v" id="pp-o-bub">—</span></div>
+        <div class="stat"><span class="k">전체 시간</span><span class="v" id="pp-o-t">—</span></div>
+        <div class="stat"><span class="k">단일 GPU 대비 속도</span><span class="v" id="pp-o-sp">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① p = 4, m = 1이면 버블이 75% — GPU 네 대 중 늘 세 대가 논다. ② m을 16으로 늘리면 버블이 약 16%로 줄어든다. ③ p를 8로 늘리면 같은 m에서 버블이 커진다. F는 한 칸, B는 두 칸(역전파가 순전파의 약 2배)으로 그린 GPipe 스케줄이다. 추론 서빙에서는 요청이 계속 흘러 들어오므로 마이크로배치가 사실상 무한히 이어져 버블은 작지만, 단일 요청의 지연은 p단계를 모두 지나야 해서 줄지 않는다.</div>
+    </div>
+    <p><strong>데이터 병렬</strong>은 모델 전체를 복제해 요청을 나눠 받는다. 서빙에서는 가장 단순하고 확장성이 좋은 방법이다 — 모델이 한 묶음(예: H100 2장)에 들어가면, 그 묶음을 여러 벌 띄우고 로드 밸런서로 나누면 된다. <strong>전문가 병렬</strong>은 MoE(<a href="transformer.html">6장</a>)의 전문가들을 GPU마다 나눠 두고 라우터가 고른 전문가 쪽으로 토큰을 all-to-all로 보낸다. 전문가 수가 많은 대형 MoE(예: 수백 개 전문가)에서 필수적이다.</p>
+    <div class="callout deep"><strong>405B를 올리려면 GPU 몇 장?</strong>Llama 3.1 405B는 BF16 가중치만 약 812 GB, FP8이면 약 406 GB다. H100(80 GB) 8장 = 640 GB 노드 하나에 BF16은 들어가지 않는다. FP8로는 들어가고 KV 캐시에 약 150 GB가 남는다(작업 공간 제외 전). 실제로 Meta는 405B를 FP8로 양자화해 단일 8-GPU 노드에서 서빙할 수 있게 공개했다. BF16을 고집하면 H100 16장(노드 2개, TP 8 × PP 2), 또는 H200(141 GB) 8장 = 1,128 GB 한 노드가 필요하다.</div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="cost">
+    <h2>비용: $/1M 토큰</h2>
+    <p>서빙 비용은 결국 "GPU 시간을 몇 개의 토큰으로 나눠 갖느냐"다. GPU \(N\)장을 시간당 \(c_\text{GPU}\) 달러에 빌렸고 총 처리량이 \(T\) tok/s라면</p>
+    <div class="formula">$$\text{비용 (\$/1M 토큰)} = \frac{N \cdot c_{\text{GPU}}\ (\$/\text{h})}{T\ (\text{tok/s}) \times 3600} \times 10^6$$</div>
+    <p>예를 들어 시간당 $2.5짜리 H100 한 장이 Llama 3 8B를 배치 1로 약 200 tok/s 낸다면 약 $3.5/1M 토큰이지만, 배치를 키워 2,500 tok/s를 내면 약 $0.28/1M 토큰으로 열 배 이상 싸진다. 같은 하드웨어, 같은 모델인데 단가를 정하는 것은 배치(= 처리량)다. 여기서 GPU 시간당 가격은 클라우드·약정·시기에 따라 크게 다르므로 <strong>아래 슬라이더의 값은 모두 사용자가 넣는 예시값</strong>이다. 또한 이 식은 출력 토큰만 셌다. 실제 API는 입력(프리필) 토큰을 출력보다 훨씬 싸게 받는데, 프리필은 계산 바운드라 토큰당 GPU 시간이 디코드보다 훨씬 적기 때문이다.</p>
+
+    <div class="sim" id="sim-cost">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>비용 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-cost" class="ds-drag"></canvas><span class="hint">점을 끌어 처리량 변경</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>GPU 시간당 가격 (예시) <output id="co-price-out"></output></span><input type="range" id="co-price" min="0.2" max="12" step="0.1" value="2.5"></label>
+          <div class="ctrl"><span>GPU 개수</span><div class="seg" id="co-n"><button data-value="1" class="on">1</button><button data-value="2">2</button><button data-value="4">4</button><button data-value="8">8</button></div></div>
+          <label class="ctrl"><span>총 처리량 T <output id="co-t-out"></output></span><input type="range" id="co-t" min="1" max="5" step="0.01" value="3.4"></label>
+          <label class="ctrl"><span>가동률 (요청이 있는 시간 비율) <output id="co-u-out"></output></span><input type="range" id="co-u" min="0.1" max="1" step="0.05" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">$/1M 출력 토큰</span><span class="v" id="co-o-c">—</span></div>
+        <div class="stat"><span class="k">하루 생산 토큰</span><span class="v" id="co-o-day">—</span></div>
+        <div class="stat"><span class="k">월 GPU 비용</span><span class="v" id="co-o-mon">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 처리량을 200 → 2,000 tok/s로 끌면 단가가 정확히 1/10이 된다(로그-로그 그래프에서 기울기 −1의 직선). ② 점선 표시는 앞의 배치 스윕 모델로 계산한 'H100 · Llama 3 8B BF16 · 컨텍스트 2K'의 배치 1/16/128 처리량(이상적 상한)이다. ③ 가동률을 30%로 낮추면(밤에는 요청이 거의 없다) 실효 단가가 3배 이상 오른다 — 서비스 사업자가 트래픽을 평평하게 만들려는 이유다. 가격은 예시값이며 실제 계약가와 다르다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="playground">
+    <h2>종합 서빙 플레이그라운드</h2>
+    <p>이제 지금까지의 식을 모두 묶어 하나의 서빙 구성을 평가해 보자. 아래 시뮬레이터가 쓰는 모델은 다음과 같다(모두 GPU 하나당 값으로 계산한 뒤 텐서 병렬 \(N\)을 반영한다). <strong>교육용으로 단순화한 모델</strong>이며, 실제 엔진은 커널 효율, 스케줄링, 프리필 끼워 넣기, 투기적 디코딩 등으로 수십 % 이상 다를 수 있다.</p>
+    <ol>
+      <li><strong>적재</strong>: 가중치 \(M_w/N\) + KV + 작업 공간 2 GB가 GPU 메모리의 90% 안에 들어가야 한다. 실제 배치 \(b = \min(U, B_{\max})\). \(U > B_{\max}\)면 나머지는 대기열로 간다.</li>
+      <li><strong>디코드 스텝</strong>: \(t_\text{mem} = (M_w^{\text{read}}(b) + b\,\bar c\,M_\text{KV}) / (N \beta \eta_m)\), \(t_\text{comp} = b(2P_\text{act} + 4Ld\bar c)/(N\pi\eta_c)\), \(t_\text{comm} = 2L\left(\frac{2(N-1)}{N}\frac{2bd}{\beta_\text{link}} + \tau\right)\), \(\text{TPOT} = \max(t_\text{mem}, t_\text{comp}) + t_\text{comm}\). 여기서 \(\bar c = p + o/2\)는 평균 컨텍스트, \(\eta_m = 0.8\), \(\eta_c = 0.6\)은 실효 효율, \(\tau\)는 all-reduce 한 번의 고정 지연(NVLink 5 µs, PCIe 20 µs로 가정)이다. MoE는 배치의 토큰들이 건드리는 전문가 비율 \(1-(1-k/E)^b\)만큼 전문가 가중치를 읽고, 연산은 활성 파라미터 \(P_\text{act}\)로 센다. 어텐션 연산 \(4Ld\bar c\)는 모델별로 바꿔 쓴다. 풀 어텐션 층만 컨텍스트에 비례하고, 슬라이딩 창 층은 128토큰, V4의 CSA·HCA 층은 압축된 길이(\(c/4\)의 top-k, \(c/128\))만 본다.</li>
+      <li><strong>프리필</strong>: \(t_\text{pf} = \max\!\big(p(2P_\text{act} + 2Ldp)/(N\pi\eta_c),\ M_w/(N\beta\eta_m)\big) + t_\text{comm}(p)\). TTFT = 대기 + \(t_\text{pf}\) + 진행 중인 스텝 하나. 대기열이 있으면 슬롯이 비는 데 걸리는 시간 \(\lceil U/b - 1\rceil (t_\text{pf} + o \cdot \text{TPOT})\)을 더한다.</li>
+      <li><strong>처리량·비용</strong>: 총 \(b/\text{TPOT}\) tok/s(출력 기준), 사용자당 \(1/\text{TPOT}\), 단가는 앞 절의 식.</li>
+    </ol>
+
+    <div class="sim" id="sim-play">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>종합 서빙 플레이그라운드</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-play" class="ds-drag"></canvas><span class="hint">아래 그래프를 끌어 동시 사용자 수 조절</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델</span><select id="pl-model"><option value="l8">Llama 3 8B</option><option value="l70" selected>Llama 3 70B</option><option value="l405">Llama 3.1 405B</option><option value="mx">Mixtral 8x7B</option><option value="gpt">gpt-oss-120b (MoE)</option><option value="qw">Qwen3.5-397B-A17B (MoE)</option><option value="v4f">DeepSeek-V4-Flash (MoE)</option><option value="v4p">DeepSeek-V4-Pro (MoE)</option></select></label>
+          <div class="ctrl"><span>가중치</span><div class="seg" id="pl-w"><button data-value="16">BF16</button><button data-value="8" class="on">FP8</button><button data-value="4">INT4</button><button data-value="n">공개 형식</button></div></div>
+          <div class="ctrl"><span>KV 캐시</span><div class="seg" id="pl-kv"><button data-value="2" class="on">BF16</button><button data-value="1">FP8</button></div></div>
+          <label class="ctrl"><span>GPU</span><select id="pl-gpu"><option value="a100">A100 80GB</option><option value="h100" selected>H100 SXM</option><option value="h200">H200</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option><option value="r4090">RTX 4090</option><option value="m2u">Apple M2 Ultra</option></select></label>
+          <div class="ctrl"><span>GPU 개수 (TP·EP)</span><div class="seg" id="pl-n"><button data-value="1">1</button><button data-value="2" class="on">2</button><button data-value="4">4</button><button data-value="8">8</button><button data-value="16">16</button></div></div>
+          <label class="ctrl"><span>프롬프트 길이 p <output id="pl-p-out"></output></span><input type="range" id="pl-p" min="7" max="15" step="0.1" value="11"></label>
+          <label class="ctrl"><span>출력 길이 o <output id="pl-o-out"></output></span><input type="range" id="pl-o" min="4" max="12" step="0.1" value="9"></label>
+          <label class="ctrl"><span>동시 사용자 U <output id="pl-u-out"></output></span><input type="range" id="pl-u" min="0" max="10" step="0.05" value="5"></label>
+          <label class="ctrl"><span>GPU 시간당 가격 (예시) <output id="pl-price-out"></output></span><input type="range" id="pl-price" min="0.2" max="12" step="0.1" value="2.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">적재 / 배치</span><span class="v" id="pl-o-fit">—</span></div>
+        <div class="stat"><span class="k">TTFT</span><span class="v" id="pl-o-ttft">—</span></div>
+        <div class="stat"><span class="k">TPOT</span><span class="v" id="pl-o-tpot">—</span></div>
+        <div class="stat"><span class="k">사용자당 / 총</span><span class="v" id="pl-o-tp">—</span></div>
+        <div class="stat"><span class="k">$/1M 출력 토큰</span><span class="v" id="pl-o-cost">—</span></div>
+      </div>
+      <div class="ds-diag" id="pl-diag">—</div>
+      <div class="sim-note">해볼 것: ① 기본값(70B FP8, H100 2장)에서 동시 사용자를 1 → 32 → 최대까지 끌어 보자. 총 처리량은 오르고 단가는 떨어지지만, 최대 동시 요청을 넘는 순간 TTFT가 대기열 때문에 폭증한다. ② GPU를 4장으로 늘리면 TPOT이 줄어드는지(대역폭 N배), 통신 비중이 얼마나 커지는지 보자. RTX 4090 4장으로 바꾸면 PCIe 통신이 병목이 된다. ③ 405B BF16을 H100 8장에 올려 보고(실패), FP8 → INT4로 바꿔 보자. ④ Mixtral은 총 파라미터(47B)만큼 메모리를 차지하지만 배치 1에서는 활성 13B만 읽어 빠르다. 배치를 키우면 거의 모든 전문가를 읽게 되어 이점이 줄어든다. ⑤ 프롬프트 32K로 TTFT가 어떻게 되는지, 출력 길이 4K로 KV가 어떻게 되는지 보자. ⑥ gpt-oss-120b를 공개 형식으로 H100 1장에 올리고 동시 사용자를 늘려 보자. 진단 줄의 '전문가 %'가 배치 수십에서 거의 100%가 되며, 가중치 읽기가 활성 5.1B분에서 전체 117B분으로 커진다. ⑦ DeepSeek-V4-Pro를 공개 형식으로 B300 8장 또는 Rubin 8장에 올려 비교해 보자(16장은 NVL72 같은 랙 단위 NVLink 도메인을 가정한 값이다).</div>
+    </div>
+    <div class="callout tip"><strong>설계 순서 요약</strong>① 정밀도를 정한다(<a href="quantization.html">9장</a>: 대개 FP8 가중치 + FP8/BF16 KV는 품질 손실이 작다). ② 가중치 + 목표 동시 요청의 KV가 들어가는 최소 GPU 묶음을 찾는다. ③ TPOT SLA를 넘지 않는 최대 배치를 찾는다. ④ 그 배치의 처리량으로 단가를 계산하고, 필요한 총 트래픽을 그 처리량으로 나눠 복제본(DP) 수를 정한다. ⑤ 긴 프롬프트가 많으면 TTFT를 위해 프리필 전용 GPU를 따로 두는 분리형(disaggregated) 서빙도 고려한다.</div>
+  </section>
+
+  <!-- ============================================================ 10 (2026) -->
+  <section id="disagg">
+    <h2>분리 서빙: 프리필과 디코드를 다른 GPU로</h2>
+    <p>지금까지는 한 GPU(또는 TP 묶음)가 프리필과 디코드를 모두 했다. 이렇게 섞어 쓰는 방식을 <span class="term">콜로케이션</span><span class="en">(colocation)</span>이라 한다. 문제는 두 단계의 성질이 정반대라는 점이다(<a href="#roofline">루프라인</a> 절). 프리필은 계산 바운드이고 한 번에 수천 토큰을 처리하며 수백 ms가 걸린다. 디코드는 대역폭 바운드이고 수십 ms마다 한 토큰씩 꾸준히 나와야 한다. 같은 GPU에서 4K 토큰짜리 프롬프트가 프리필되는 동안, 그 GPU에서 디코딩 중이던 수십 명의 다음 토큰은 함께 멈춘다. 그래서 TPOT의 꼬리(p99)가 튄다. 이것을 <em>프리필–디코드 간섭</em>이라 한다.</p>
+    <p>해결책은 두 가지다. 하나는 연속 배칭 절에서 말한 <strong>chunked prefill</strong>이다. 프롬프트를 수백 토큰 조각으로 잘라 디코드 스텝마다 조금씩 끼워 넣으면 멈춤은 사라진다. 대신 모든 디코드 스텝이 조금씩 길어지고, 긴 프롬프트의 TTFT도 늘어난다. 다른 하나는 <span class="term">분리 서빙</span><span class="en">(prefill/decode disaggregation)</span>이다. GPU를 <em>프리필 풀</em>과 <em>디코드 풀</em>로 아예 나누고, 프리필이 끝난 요청의 KV 캐시를 네트워크로 디코드 GPU에 보낸다(DistServe·Splitwise, 2024). 2026년에는 NVIDIA Dynamo(+NIXL 전송 라이브러리), llm-d, vLLM, SGLang, TensorRT-LLM이 모두 이 구성을 지원한다. DeepSeek도 V3 기술 보고서(2024)부터 프리필과 디코드를 서로 다른 배치·병렬 구성으로 나눠 서빙한다고 밝혔다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="콜로케이션과 분리 서빙 구성 비교">
+        <defs>
+          <marker id="ds-ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="130" y="24" text-anchor="middle" class="t-acc">콜로케이션</text>
+        <rect x="20" y="40" width="220" height="150" rx="8" class="f-surface" style="stroke:var(--border)"/>
+        <g>
+          <rect x="36" y="56" width="88" height="56" rx="5" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <rect x="136" y="56" width="88" height="56" rx="5" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <text x="80" y="80" text-anchor="middle" class="t-mono" style="font-size:11px">GPU0</text>
+          <text x="80" y="98" text-anchor="middle" class="t-dim" style="font-size:11px">프리필+디코드</text>
+          <text x="180" y="80" text-anchor="middle" class="t-mono" style="font-size:11px">GPU1</text>
+          <text x="180" y="98" text-anchor="middle" class="t-dim" style="font-size:11px">프리필+디코드</text>
+        </g>
+        <!-- interference timeline -->
+        <g>
+          <rect x="36" y="128" width="16" height="14" class="f-acc"/><rect x="54" y="128" width="16" height="14" class="f-acc"/>
+          <rect x="72" y="128" width="78" height="14" style="fill:var(--warn);opacity:.75"/>
+          <rect x="152" y="128" width="16" height="14" class="f-acc"/><rect x="170" y="128" width="16" height="14" class="f-acc"/><rect x="188" y="128" width="16" height="14" class="f-acc"/>
+          <text x="111" y="139" text-anchor="middle" class="t-mono" style="font-size:10px">긴 프리필</text>
+          <text x="130" y="164" text-anchor="middle" class="t-dim" style="font-size:12px">이 동안 디코드 토큰이 멈춘다</text>
+          <text x="130" y="180" text-anchor="middle" class="t-dim" style="font-size:12px">→ TPOT 꼬리가 튄다</text>
+        </g>
+        <text x="500" y="24" text-anchor="middle" class="t-acc">분리 서빙</text>
+        <rect x="290" y="40" width="160" height="150" rx="8" class="f-surface" style="stroke:var(--accent-2)"/>
+        <text x="370" y="60" text-anchor="middle" class="t" style="fill:var(--accent-2)">프리필 풀</text>
+        <rect x="306" y="72" width="60" height="44" rx="5" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <rect x="374" y="72" width="60" height="44" rx="5" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="336" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">P0</text>
+        <text x="404" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">P1</text>
+        <text x="370" y="140" text-anchor="middle" class="t-dim" style="font-size:12px">계산 바운드</text>
+        <text x="370" y="158" text-anchor="middle" class="t-dim" style="font-size:12px">큰 토큰 배치</text>
+        <text x="370" y="176" text-anchor="middle" class="t-dim" style="font-size:12px">FP8/FP4 연산 GPU</text>
+        <rect x="580" y="40" width="160" height="150" rx="8" class="f-surface" style="stroke:var(--accent)"/>
+        <text x="660" y="60" text-anchor="middle" class="t-acc">디코드 풀</text>
+        <rect x="596" y="72" width="60" height="44" rx="5" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <rect x="664" y="72" width="60" height="44" rx="5" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="626" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">D0</text>
+        <text x="694" y="99" text-anchor="middle" class="t-mono" style="font-size:11px">D1</text>
+        <text x="660" y="140" text-anchor="middle" class="t-dim" style="font-size:12px">대역폭 바운드</text>
+        <text x="660" y="158" text-anchor="middle" class="t-dim" style="font-size:12px">많은 동시 요청</text>
+        <text x="660" y="176" text-anchor="middle" class="t-dim" style="font-size:12px">HBM 용량·대역폭</text>
+        <path d="M452 96 H576" class="s-line" style="stroke:var(--warn);stroke-width:2.5" marker-end="url(#ds-ar3)"/>
+        <text x="514" y="86" text-anchor="middle" class="t" style="fill:var(--warn)">KV 캐시 전송</text>
+        <text x="514" y="116" text-anchor="middle" class="t-dim" style="font-size:11px">NVLink / RDMA</text>
+        <!-- router -->
+        <rect x="320" y="226" width="100" height="30" rx="6" class="f-surface" style="stroke:var(--border)"/>
+        <text x="370" y="246" text-anchor="middle" class="t">라우터</text>
+        <path d="M370 226 V194" class="s-line" marker-end="url(#ds-ar3)"/>
+        <path d="M250 241 H316" class="s-line" marker-end="url(#ds-ar3)"/>
+        <text x="200" y="245" text-anchor="middle" class="t-dim" style="font-size:12px">요청 (프롬프트)</text>
+        <path d="M660 192 V241 H426" class="s-line" style="stroke-dasharray:4 3" marker-end="url(#ds-ar3)"/>
+        <text x="560" y="262" text-anchor="middle" class="t-dim" style="font-size:12px">출력 토큰 스트림</text>
+        <text x="380" y="290" text-anchor="middle" class="t-dim">프리필이 디코드를 멈추지 못하게 물리적으로 떼어 놓는다. 대가는 KV 전송과 풀 비율 조정이다.</text>
+      </svg>
+      <figcaption><b>그림 12-5.</b> 콜로케이션(왼쪽)과 분리 서빙(오른쪽). 분리 서빙에서는 프리필 GPU가 첫 토큰과 KV 캐시를 만들고, 디코드 GPU가 그 KV를 받아 나머지 토큰을 생성한다. 두 풀은 GPU 종류, 병렬 구성, 배치 크기를 따로 고를 수 있다.</figcaption>
+    </figure>
+    <p>분리 서빙의 새 비용은 KV 전송이다. 프롬프트 \(p\) 토큰의 KV를 링크 대역폭 \(B_\text{link}\)로 보내는 시간은 다음과 같다.</p>
+    <div class="formula">$$t_{\text{KV}} \approx \frac{p \cdot M_{\text{KV/token}}}{B_{\text{link}}}$$<div class="where">Llama 3 70B(BF16 KV, 320 KiB/토큰)의 4K 프롬프트는 약 1.34 GB다. 400 Gb/s RDMA(약 50 GB/s)로는 약 27 ms, NVLink(약 900 GB/s)로는 약 1.5 ms가 걸린다. 같은 길이에서 DeepSeek-V4-Pro의 압축 KV(약 4.9 KiB/토큰)는 약 20 MB라 RDMA로도 1 ms가 안 걸린다. KV를 작게 만드는 구조는 분리 서빙과도 궁합이 좋다.</div></div>
+    <p>평가 지표로는 <span class="term">굿풋</span><span class="en">(goodput)</span>을 쓴다. 굿풋은 SLA(TTFT 상한과 TPOT 상한)를 <em>둘 다</em> 만족한 요청만 센 처리량이다. 아무리 토큰을 많이 뽑아도 TPOT 목표를 넘긴 요청은 사용자에게는 실패다. 아래 시뮬레이터는 같은 요청열(시드 고정)을 세 방식으로 실제로 스케줄링한다.</p>
+    <ul>
+      <li><strong>요청</strong>: 포아송 도착(도착률 λ). 프롬프트 길이는 중앙값 \(\tilde p\)의 로그정규 분포(σ = 0.8, 16~16K)이고, 출력 길이는 중앙값 \(\tilde o\)의 로그정규 분포(σ = 0.8, 2~4K)다. 요청은 400개다.</li>
+      <li><strong>GPU</strong>: 한 장이 모델 전체를 올린 인스턴스 하나다(TP 없음). 반복 하나의 시간은 종합 플레이그라운드와 같은 루프라인 식으로 계산한다. \(\max(\text{읽을 바이트}/0.8\beta,\ \text{FLOPs}/0.6\pi) + 0.3\,\text{ms}\)이고, KV 예산이 동시 요청 수를 제한한다(요청당 \(p+o\) 토큰을 미리 예약).</li>
+      <li><strong>콜로케이션</strong>: 대기 중인 프롬프트가 있으면 프리필을 먼저 한다(한 반복에 최대 16K 토큰). 그동안 디코드는 멈춘다. <strong>Chunked</strong>: 매 반복 디코드 토큰 + 프리필 조각을 합쳐 512토큰 예산으로 처리한다.</li>
+      <li><strong>분리</strong>: 앞쪽 \(P\)장은 프리필만 하고, 끝난 요청의 KV를 GPU마다 하나의 링크로 순서대로 보낸다(전송 대기 포함). 나머지 \(N-P\)장은 받은 요청을 연속 배칭으로 디코딩한다. 첫 토큰은 디코드 GPU가 요청을 넘겨받는 시점에 사용자에게 보인다고 본다. 그래서 TTFT에 전송 시간이 들어간다.</li>
+      <li><strong>지표</strong>: TTFT = 첫 토큰 시각 − 도착, TPOT = (완료 − 첫 토큰)/(o − 1)이다(요청별 평균). SLA 달성률과 굿풋(달성 요청 수 / 전체 소요 시간)을 계산한다. 네트워크 경합, 프리픽스 캐시, 투기적 디코딩, 선점(preemption)은 넣지 않았다.</li>
+    </ul>
+
+    <div class="sim" id="sim-dg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>분리 서빙 vs 콜로케이션: TTFT·TPOT 분포와 굿풋</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-dg" class="ds-drag"></canvas><span class="hint">위 GPU 줄의 경계를 끌어 프리필:디코드 비율 조절 · 아래 그래프의 세로 점선(SLA)을 끌기</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델 (GPU 1장 = 인스턴스 1개)</span><select id="dg-model"><option value="l70" selected>Llama 3 70B · FP8</option><option value="l8">Llama 3 8B · BF16</option><option value="gpt">gpt-oss-120b · MXFP4</option></select></label>
+          <label class="ctrl"><span>GPU</span><select id="dg-gpu"><option value="h100">H100 SXM</option><option value="h200" selected>H200</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option></select></label>
+          <div class="ctrl"><span>방식</span><div class="seg" id="dg-mode"><button data-value="colo">콜로케이션</button><button data-value="chunk">Chunked</button><button data-value="dis" class="on">분리</button></div></div>
+          <label class="ctrl"><span>GPU 수 N <output id="dg-n-out"></output></span><input type="range" id="dg-n" min="2" max="16" step="1" value="8"></label>
+          <label class="ctrl"><span>프리필 GPU P (분리) <output id="dg-p-out"></output></span><input type="range" id="dg-p" min="1" max="7" step="1" value="4"></label>
+          <label class="ctrl"><span>도착률 λ <output id="dg-lam-out"></output></span><input type="range" id="dg-lam" min="-1" max="4.5" step="0.05" value="2.8"></label>
+          <label class="ctrl"><span>프롬프트 중앙값 <output id="dg-pm-out"></output></span><input type="range" id="dg-pm" min="7" max="13" step="0.5" value="11"></label>
+          <label class="ctrl"><span>출력 중앙값 <output id="dg-om-out"></output></span><input type="range" id="dg-om" min="4" max="11" step="0.5" value="8"></label>
+          <label class="ctrl"><span>KV 링크 대역폭 <output id="dg-link-out"></output></span><input type="range" id="dg-link" min="0" max="3.3" step="0.05" value="1.7"></label>
+          <div class="ctrl"><span>요청열</span><div class="ds-btns"><button class="btn" id="dg-seed">새 시드</button><button class="btn" id="dg-best">최적 분할 적용</button></div></div>
+        </div>
+      </div>
+      <div class="legend ds-legend"><span><i style="background:var(--accent)"></i>분리</span><span><i style="background:var(--warn)"></i>콜로케이션</span><span><i style="background:var(--accent-2)"></i>Chunked</span><span>굵은 선 = 선택한 방식</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">TTFT p50 / p99</span><span class="v" id="dg-o-tt">—</span></div>
+        <div class="stat"><span class="k">TPOT p50 / p99</span><span class="v" id="dg-o-tp">—</span></div>
+        <div class="stat"><span class="k">SLA 달성률</span><span class="v" id="dg-o-sla">—</span></div>
+        <div class="stat"><span class="k">굿풋</span><span class="v" id="dg-o-good">—</span></div>
+        <div class="stat"><span class="k">KV 전송 (중앙값 요청)</span><span class="v" id="dg-o-kv">—</span></div>
+      </div>
+      <div class="ds-diag" id="dg-diag">—</div>
+      <div class="sim-note">해볼 것: ① 기본값(70B FP8, H200 8장, λ ≈ 7 요청/s)에서 세 방식의 TPOT 곡선을 비교하자. 콜로케이션(주황)은 오른쪽 꼬리가 길고, 분리(굵은 선)는 좁은 범위에 몰린다. ② 위 GPU 줄의 경계를 끌어 P를 1 → 5로 바꿔 보자. 프리필 GPU가 너무 적으면 대기열이 생겨 TTFT가 폭발한다. 너무 많으면 디코드 GPU당 배치가 커져 TPOT이 는다. '최적 분할 적용'은 모든 P를 돌려 굿풋이 가장 큰 비율을 찾는다. ③ KV 링크를 2 GB/s(구형 이더넷 수준)로 내리면 전송 대기열이 생겨 분리의 TTFT가 나빠진다. NVLink급(900 GB/s)이면 전송은 무시할 만하다. ④ 출력 중앙값을 32로 줄여 보자(분류·짧은 답). 디코드가 거의 없으니 분리의 이점이 사라지고, 오히려 디코드 GPU가 놀아 손해다. ⑤ 프롬프트 중앙값을 8K로 올려 보자(RAG·에이전트처럼 긴 입력). 프리필 풀이 커져야 하고, 콜로케이션의 TPOT 꼬리는 더 길어진다. ⑥ TPOT SLA 점선을 50 ms로 늦추면 콜로케이션도 대부분 통과한다. 분리의 이득은 SLA가 빡빡할 때 크다.</div>
+    </div>
+    <div class="callout"><strong>언제 분리할까</strong>프롬프트가 길고(RAG, 코딩 에이전트, 긴 시스템 프롬프트) TPOT 목표가 빡빡할수록 분리가 유리하다. 반대로 요청이 적거나 입출력이 짧으면 GPU를 두 풀로 나눈 만큼 각 풀이 덜 차서 손해다. 실제 시스템은 부하에 따라 P:D 비율을 바꾸고(Dynamo의 플래너 등), 프리필 풀에는 연산이 센 GPU를, 디코드 풀에는 HBM이 크고 빠른 GPU를 배치하기도 한다. 이 시뮬레이터는 링크 경합과 KV 메모리 재사용(프리픽스 캐시)을 생략했으므로 수치보다 <em>경향</em>을 보자.</div>
+  </section>
+
+  <!-- ============================================================ 11 (2026) -->
+  <section id="moe-serving">
+    <h2>MoE 서빙과 KV 캐시 계층화</h2>
+    <p>2026년 대형 오픈 모델은 대부분 MoE다. gpt-oss-120b(전문가 128개 중 4개), Qwen3.5-397B-A17B(512개 중 10개 + 공유 1개), DeepSeek-V4(Flash 256개·Pro 384개 중 6개 + 공유 1개)처럼 전문가 수는 수백 개이고 활성 비율은 1~5%다. 앞 절들에서 본 대로 메모리는 총 파라미터만큼, 연산은 활성 파라미터만큼 든다. 이 절에서는 MoE를 <em>여러 GPU에서</em> 서빙할 때 생기는 문제와, 에이전트처럼 긴 대화를 반복하는 워크로드에서 KV 캐시를 어디에 두는지를 다룬다.</p>
+    <h3>전문가 병렬과 all-to-all</h3>
+    <p><span class="term">전문가 병렬</span><span class="en">(Expert Parallelism, EP)</span>은 전문가들을 GPU에 나눠 둔다. EP = 64면 V4-Pro의 384개 전문가가 GPU마다 6개씩 들어간다. 어텐션은 보통 데이터 병렬(DP)로 각 GPU가 자기 요청을 처리한다. 그 뒤 MoE 층마다 두 번의 <span class="term">all-to-all</span> 통신이 일어난다. 먼저 각 토큰의 은닉 벡터를 라우터가 고른 \(k\)개 전문가가 있는 GPU로 보내고(<em>dispatch</em>), 전문가 출력을 원래 GPU로 모은다(<em>combine</em>). 토큰 하나가 층 하나에서 보내는 양은 대략 다음과 같다.</p>
+    <div class="formula">$$V_{\text{a2a}} \approx 2 \cdot k \cdot d \cdot b_{\text{act}}\quad\text{바이트/토큰/층}$$<div class="where">\(k\): 활성 전문가 수, \(d\): 은닉 차원, \(b_\text{act}\): 활성값 바이트(FP8 dispatch면 1). V4-Pro(\(k=6,\ d=7168\))는 BF16 기준 층당 약 170 KB, 61층이면 토큰당 약 10 MB다. TP의 all-reduce처럼 지연에 민감하므로 NVLink 도메인(NVL72 랙 등)이나 고속 RDMA와 전용 커널(DeepEP 등)이 필요하다.</div></div>
+    <p><strong>큰 배치가 MoE에 특히 중요한 이유</strong>는 산술 강도에 있다. 디코드 스텝에서 배치 \(b\)의 토큰이 전문가 \(E\)개에 고르게 흩어지면, 전문가 하나가 받는 토큰은 평균 \(bk/E\)개뿐이다. 전문가 가중치는 한 번 읽어서 그 몇 개 토큰에만 쓰인다. 그래서 dense 모델에서 배치 \(b\)가 하던 역할(산술 강도 \(\approx b\))을 MoE의 전문가 GEMM에서는 \(bk/E\)가 한다(FP8 가중치면 \(I \approx 2bk/E\)). FP8 가중치로 H100의 리지 포인트(FP8 약 590 FLOP/B)에 닿으려면 전문가당 수백 토큰이 필요하다. V4-Pro라면 한 스텝에 \(b \approx 300 \times 384/6 \approx 2\)만 토큰이다. 그래서 대형 MoE의 디코드는 많은 GPU를 하나의 EP 그룹으로 묶어 전역 배치를 키운다. DeepSeek-V3 보고서(2024)는 디코드 최소 배치 단위를 40노드·320 GPU로 적었다. 대신 인기 있는 전문가에 토큰이 몰리면 그 GPU만 바빠지는 <em>부하 불균형</em>이 생긴다. 그래서 인기 전문가를 여러 GPU에 복제하는 <em>중복 전문가</em>(redundant experts)를 둔다.</p>
+
+    <div class="sim" id="sim-moe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>MoE 라우팅: 배치, 전문가 적중, EP 부하</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-moe" class="ds-drag"></canvas><span class="hint">아래 그래프를 좌우로 끌어 배치 b 조절 · 전문가 칸을 누르면 그 전문가가 받은 토큰 수 표시</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델</span><select id="moe-model"><option value="gpt">gpt-oss-120b (E=128, k=4)</option><option value="qw">Qwen3.5-397B (E=512, k=10)</option><option value="v4f">DeepSeek-V4-Flash (E=256, k=6)</option><option value="v4p" selected>DeepSeek-V4-Pro (E=384, k=6)</option></select></label>
+          <label class="ctrl"><span>배치 토큰 b <output id="moe-b-out"></output></span><input type="range" id="moe-b" min="0" max="14" step="0.1" value="6"></label>
+          <label class="ctrl"><span>라우팅 쏠림 α <output id="moe-a-out"></output></span><input type="range" id="moe-a" min="0" max="1.5" step="0.05" value="0.6"></label>
+          <div class="ctrl"><span>EP 크기 (GPU 수)</span><div class="seg" id="moe-ep"><button data-value="8">8</button><button data-value="16">16</button><button data-value="32" class="on">32</button><button data-value="64">64</button></div></div>
+          <div class="ctrl"><span>라우팅 표본</span><div class="ds-btns"><button class="btn" id="moe-seed">새 시드</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">건드린 전문가 (표본 / 식)</span><span class="v" id="moe-o-hit">—</span></div>
+        <div class="stat"><span class="k">스텝당 가중치 읽기 (공개 형식)</span><span class="v" id="moe-o-rd">—</span></div>
+        <div class="stat"><span class="k">토큰당 읽기</span><span class="v" id="moe-o-pt">—</span></div>
+        <div class="stat"><span class="k">전문가당 토큰 (평균 / 최대)</span><span class="v" id="moe-o-tpe">—</span></div>
+        <div class="stat"><span class="k">EP 부하 불균형 (최대/평균)</span><span class="v" id="moe-o-imb">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① b = 1에서 칸 몇 개만 켜진다(활성 전문가만 읽는다). b를 64 → 1K로 끌면 거의 모든 칸이 켜지고, '토큰당 읽기'는 줄어들다가 dense 모델처럼 \(1/b\)로 떨어진다. 그래프의 실선은 식 \(1-(1-k/E)^b\), 점은 실제로 뽑은 표본이다. ② α(쏠림)를 0으로 하면 라우팅이 고르게 퍼져 EP 불균형이 1에 가깝다. 1.2로 올리면 인기 전문가가 있는 GPU에 토큰이 몰리고, 그 GPU가 스텝 시간을 정한다. 이때 건드린 전문가 비율은 식보다 낮아진다. ③ EP를 8 → 64로 키우면 GPU당 전문가 수가 줄어 GPU당 메모리는 줄지만, 불균형은 커지기 쉽다(GPU 하나에 인기 전문가가 몰릴 확률). ④ '전문가당 토큰 평균'이 수백이 되려면 b가 얼마여야 하는지 보자. 그래야 전문가 GEMM이 계산 바운드에 가까워진다. 라우팅은 교육용 가정이다: 전문가 인기도를 순위\(^{-α}\)로 두고 토큰마다 \(k\)개를 중복 없이 뽑았다. 실제 라우터는 입력에 따라 다르고, 부하 균형 학습(보조 손실 없는 bias 조정 등)으로 쏠림을 줄인다.</div>
+    </div>
+
+    <h3>에이전트를 위한 KV 캐시: 프리픽스 캐싱과 계층화</h3>
+    <p><a href="agent.html">11장</a>의 에이전트는 같은 대화를 수십 번 이어 간다. 매 턴의 입력은 [시스템 프롬프트 + 도구 정의 + 지금까지의 대화와 도구 결과 + 새 메시지]다. 앞부분 수만 토큰은 지난 턴과 <em>똑같다</em>. 캐시가 없으면 매 턴 이 전체를 다시 프리필해야 해서 턴 수의 제곱으로 비용이 쌓인다. <span class="term">프리픽스 캐싱</span><span class="en">(prefix caching)</span>은 같은 접두사의 KV 블록을 해시로 찾아 재사용한다(vLLM의 automatic prefix caching, SGLang의 RadixAttention). 그러면 새로 붙은 토큰만 프리필하면 된다. 상용 API의 "프롬프트 캐싱" 할인도 같은 원리다.</p>
+    <p>문제는 HBM이 작다는 것이다. 수천 개의 대화 세션 KV를 모두 HBM에 둘 수는 없다. 그래서 KV를 <span class="term">계층화</span><span class="en">(KV tiering/offloading)</span>한다. 지금 디코딩 중인 요청의 KV는 HBM에 두고, 잠시 쉬는 세션(도구 실행을 기다리는 에이전트 등)의 KV는 CPU DRAM으로, 더 오래된 것은 로컬 NVMe SSD나 원격 저장소로 내린다(LMCache, Dynamo의 KV 블록 매니저 등). 다시 쓸 때 불러오는 시간 \(c \cdot M_\text{KV}/B_\text{tier}\)이 재계산(프리필) 시간보다 짧으면 이득이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="KV 캐시 계층: HBM, CPU DRAM, SSD">
+        <defs>
+          <marker id="ds-ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <rect x="40" y="30" width="200" height="70" rx="8" class="f-acc-soft" style="stroke:var(--accent)"/>
+        <text x="140" y="56" text-anchor="middle" class="t">GPU HBM</text>
+        <text x="140" y="78" text-anchor="middle" class="t-dim" style="font-size:12px">~100~300 GB · 수~20 TB/s</text>
+        <rect x="280" y="30" width="200" height="70" rx="8" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+        <text x="380" y="56" text-anchor="middle" class="t">CPU DRAM</text>
+        <text x="380" y="78" text-anchor="middle" class="t-dim" style="font-size:12px">~1~2 TB · PCIe 약 50 GB/s</text>
+        <rect x="520" y="30" width="200" height="70" rx="8" class="f-surface" style="stroke:var(--border)"/>
+        <text x="620" y="56" text-anchor="middle" class="t">NVMe SSD / 원격</text>
+        <text x="620" y="78" text-anchor="middle" class="t-dim" style="font-size:12px">수~수십 TB · 약 5~20 GB/s</text>
+        <path d="M244 56 H276" class="s-line" marker-end="url(#ds-ar4)"/>
+        <path d="M276 76 H244" class="s-line" marker-end="url(#ds-ar4)"/>
+        <path d="M484 56 H516" class="s-line" marker-end="url(#ds-ar4)"/>
+        <path d="M516 76 H484" class="s-line" marker-end="url(#ds-ar4)"/>
+        <text x="380" y="130" text-anchor="middle" class="t-dim">← 빠르고 작다 · · · 느리고 크다 →</text>
+        <!-- agent turns -->
+        <g>
+          <text x="40" y="166" class="t-acc">턴 t</text>
+          <rect x="100" y="152" width="300" height="20" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <text x="250" y="166" text-anchor="middle" class="t-mono" style="font-size:11px">공통 접두사 (시스템 + 도구 + 이전 대화)</text>
+          <rect x="402" y="152" width="70" height="20" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <text x="437" y="166" text-anchor="middle" class="t-mono" style="font-size:11px">새 입력</text>
+          <text x="40" y="206" class="t-acc">턴 t+1</text>
+          <rect x="100" y="192" width="372" height="20" rx="3" class="f-acc-soft" style="stroke:var(--accent)"/>
+          <text x="286" y="206" text-anchor="middle" class="t-mono" style="font-size:11px">캐시 적중 → 재사용 (프리필 생략)</text>
+          <rect x="474" y="192" width="70" height="20" rx="3" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+          <text x="509" y="206" text-anchor="middle" class="t-mono" style="font-size:11px">새 입력</text>
+          <text x="560" y="206" class="t-dim" style="font-size:12px">← 이것만 프리필</text>
+        </g>
+        <text x="380" y="240" text-anchor="middle" class="t-dim">대역폭 수치는 대략의 자릿수다(구성에 따라 다름). Grace 같은 CPU는 NVLink-C2C로 DRAM을 훨씬 빠르게 붙인다.</text>
+      </svg>
+      <figcaption><b>그림 12-6.</b> KV 캐시 계층과 에이전트의 프리픽스 재사용. 턴이 이어질수록 공통 접두사가 길어지므로, 그 KV를 어딘가에 보관했다가 다시 쓰면 매 턴의 프리필이 새 입력 몇 백~몇 천 토큰으로 줄어든다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-kvt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>에이전트 턴별 TTFT: 재계산 vs 캐시 불러오기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-kvt" class="ds-drag"></canvas><span class="hint">그래프를 좌우로 끌어 턴 선택</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델 · GPU 1장</span><select id="kvt-model"><option value="l70h200" selected>Llama 3 70B FP8 · H200</option><option value="gpth100">gpt-oss-120b · H100</option><option value="v4fb300">DeepSeek-V4-Flash · B300</option></select></label>
+          <label class="ctrl"><span>시작 접두사 S <output id="kvt-s-out"></output></span><input type="range" id="kvt-s" min="10" max="16" step="0.25" value="13"></label>
+          <label class="ctrl"><span>턴당 추가 토큰 Δ <output id="kvt-d-out"></output></span><input type="range" id="kvt-d" min="7" max="14" step="0.25" value="11"></label>
+          <label class="ctrl"><span>턴 수 T <output id="kvt-t-out"></output></span><input type="range" id="kvt-t" min="2" max="60" step="1" value="30"></label>
+          <div class="ctrl"><span>DRAM 링크</span><div class="seg" id="kvt-dram"><button data-value="50" class="on">PCIe 약 50 GB/s</button><button data-value="450">C2C 약 450 GB/s</button></div></div>
+        </div>
+      </div>
+      <div class="legend ds-legend"><span><i style="background:var(--bad)"></i>캐시 없음 (전체 재계산)</span><span><i style="background:var(--warn)"></i>SSD에서 불러오기</span><span><i style="background:var(--accent-2)"></i>DRAM에서 불러오기</span><span><i style="background:var(--accent)"></i>HBM 적중</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선택 턴의 컨텍스트</span><span class="v" id="kvt-o-ctx">—</span></div>
+        <div class="stat"><span class="k">TTFT (없음 / DRAM / HBM)</span><span class="v" id="kvt-o-tt">—</span></div>
+        <div class="stat"><span class="k">T턴 누적 프리필 GPU 시간</span><span class="v" id="kvt-o-cum">—</span></div>
+        <div class="stat"><span class="k">세션 하나의 KV</span><span class="v" id="kvt-o-kv">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(70B FP8, 접두사 8K, 턴당 2K, 30턴)에서 '캐시 없음' 곡선이 턴마다 계속 오르는 것을 보자. 마지막 턴(컨텍스트 약 66K)의 프리필은 10초를 넘고, 30턴 누적 프리필 GPU 시간은 HBM 적중의 열 배가 넘는다. T를 60턴으로 늘리면 그 배수가 더 커진다(제곱으로 쌓이므로). ② DRAM에서 불러오기는 KV 바이트 ÷ 링크 대역폭이다. 70B의 64K 컨텍스트(약 21 GB)는 PCIe로 0.4초 남짓이라 재계산보다 훨씬 싸다. ③ 모델을 DeepSeek-V4-Flash로 바꾸면 압축 KV(토큰당 약 3.4 KiB) 덕분에 SSD에서 불러와도 거의 공짜다. KV가 작은 구조는 계층화와도 궁합이 좋다. ④ Δ를 크게(16K: 큰 파일을 통째로 읽는 도구 결과) 하면 새 토큰 프리필이 지배해 캐시의 상대 이득이 줄어든다. 불러오기와 계산을 층 단위로 겹치면(파이프라이닝) 실제 지연은 더 줄어든다. 여기서는 겹치지 않는다고 가정했고, SSD는 약 10 GB/s로 두었다.</div>
+    </div>
+    <div class="callout tip"><strong>에이전트 서빙 체크리스트</strong>① 시스템 프롬프트·도구 정의처럼 고정된 부분을 맨 앞에 두어 접두사를 최대한 공유한다. 앞쪽 내용(예: 타임스탬프)이 바뀌면 그 뒤 캐시가 전부 무효가 된다. ② 같은 세션의 요청은 같은 GPU(또는 그 KV를 가진 노드)로 보내는 <em>캐시 인지 라우팅</em>을 쓴다. ③ 도구 실행을 기다리는 동안 KV를 DRAM으로 내렸다가 돌아오면 올린다. ④ 추론 모델(<a href="agent.html">11장</a>)은 출력의 상당 부분이 생각 토큰이다. 디코드 비중과 KV 길이가 모두 늘어나므로, 앞의 분리 서빙과 KV 압축 구조의 가치가 더 커진다.</div>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="training">
+    <h2>학습 쪽 숫자: \(C \approx 6ND\)</h2>
+    <p>서빙과 같은 방식으로 학습 규모도 추정할 수 있다. 파라미터 \(N\)개 모델을 토큰 \(D\)개로 학습하는 데 드는 연산량은 대략</p>
+    <div class="formula">$$C \approx 6ND\ \text{FLOPs}$$<div class="where">순전파가 토큰당 \(2N\), 역전파가 그 두 배인 \(4N\) FLOPs라서 합쳐 \(6N\)이다(어텐션 항과 재계산은 제외). 학습 시간 = \(C / (\text{GPU 수} \times \pi \times \text{MFU})\).</div></div>
+    <p><span class="term">MFU</span><span class="en">(Model FLOPs Utilization)</span>는 이론 최대 FLOPS 중 모델 연산에 실제로 쓰인 비율이다. 통신, 파이프라인 버블, 메모리 바운드 연산, 장애 복구 때문에 대규모 학습의 MFU는 보통 30~50% 수준이다. 공개 보고 기준으로 Llama 3.1 405B는 약 15.6조 토큰으로 학습했고, \(6 \times 405\times10^9 \times 15.6\times10^{12} \approx 3.8\times10^{25}\) FLOPs, 최대 약 16K장의 H100에서 BF16 MFU 약 38~43%로 학습했다(Meta, 2024). 메모리 쪽도 계산해 보자. Adam 혼합 정밀도 학습은 파라미터당 약 16바이트(BF16 가중치·기울기 4 B + FP32 마스터 가중치·모멘트 2개 12 B)가 필요하므로 405B는 상태만 약 6.5 TB — 그래서 학습은 FSDP/ZeRO로 상태까지 GPU 수천 장에 쪼갠다.</p>
+    <h3>MoE, 저정밀도, 새 옵티마이저</h3>
+    <p>MoE 학습에서는 식의 \(N\)에 <strong>활성 파라미터</strong>를 넣는다: \(C \approx 6 N_\text{act} D\). 토큰마다 활성 전문가만 순전파·역전파하기 때문이다. DeepSeek-V3(671B 총/37B 활성, 14.8조 토큰)는 \(6 \times 37\times10^9 \times 14.8\times10^{12} \approx 3.3\times10^{24}\) FLOPs로 405B dense의 약 1/11이다. 보고된 학습량은 H800 약 279만 GPU·시간(2,048장, FP8 혼합 정밀도)이었다(DeepSeek, 2024). Kimi K2(1T 총/32B 활성, 15.5조 토큰)도 같은 자릿수다. 반면 메모리 쪽 상태(가중치·기울기·옵티마이저)는 <em>총</em> 파라미터에 비례한다. 671B × 16바이트 ≈ 10.7 TB이므로 MoE도 상태를 수천 장에 나눠야 한다. 서빙과 똑같은 "메모리는 총, 연산은 활성" 구조다.</p>
+    <p>2025~26년에 \(C/(\text{GPU 수}\cdot\pi\cdot\text{MFU})\)의 각 항을 줄이는 기법도 실전에 들어왔다. ① <strong>더 낮은 정밀도</strong>: DeepSeek-V3의 FP8 학습에 이어, NVIDIA는 12B 모델을 10조 토큰 동안 NVFP4로 사전학습해 FP8에 가까운 손실을 보고했다(arXiv 2509.25149, 2025). 4비트 텐서 코어의 \(\pi\)를 학습에도 쓰려는 방향이다. ② <strong>Muon 옵티마이저</strong>: 2D 가중치의 모멘텀 업데이트를 Newton–Schulz 반복으로 직교화해 적용한다. Kimi는 같은 손실에 AdamW 대비 약 2배의 계산 효율을 보고했다('Muon is Scalable', 2025). K2는 이를 개량한 MuonClip으로 손실 스파이크 없이 학습했다. 같은 \(C\)로 더 낮은 손실을 얻는 셈이고, 모멘트를 하나만 들고 있어 옵티마이저 상태 메모리도 Adam보다 작다. ③ <strong>RL 사후학습</strong>: 추론 모델(<a href="agent.html">11장</a>)의 GRPO류 강화학습은 프롬프트마다 응답 여러 개를 <em>생성</em>(롤아웃)한 뒤 학습한다. 그래서 비용의 상당 부분이 이 장의 디코드 처리량 문제가 되고, 학습 클러스터 안에서도 서빙 엔진(vLLM, SGLang 등)이 롤아웃을 맡는다.</p>
+
+    <div class="sim" id="sim-train">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>학습 연산량·기간 추정</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv-train" class="ds-drag"></canvas><span class="hint">점을 좌우로 끌어 토큰 수 변경</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>파라미터 N <output id="tr-n-out"></output></span><input type="range" id="tr-n" min="8" max="12.3" step="0.01" value="11.608"></label>
+          <label class="ctrl"><span>학습 토큰 D <output id="tr-d-out"></output></span><input type="range" id="tr-d" min="10" max="14" step="0.01" value="13.193"></label>
+          <label class="ctrl"><span>GPU</span><select id="tr-gpu"><option value="a100">A100 80GB</option><option value="h100" selected>H100 SXM</option><option value="b200">B200</option><option value="b300">B300</option><option value="rubin">Rubin</option></select></label>
+          <label class="ctrl"><span>GPU 수 <output id="tr-g-out"></output></span><input type="range" id="tr-g" min="3" max="17" step="0.5" value="14"></label>
+          <div class="ctrl"><span>학습 정밀도 (피크 FLOPS)</span><div class="seg" id="tr-prec"><button data-value="16" class="on">BF16</button><button data-value="8">FP8</button></div></div>
+          <label class="ctrl"><span>MFU <output id="tr-mfu-out"></output></span><input type="range" id="tr-mfu" min="0.1" max="0.65" step="0.01" value="0.40"></label>
+          <div class="ctrl"><span>프리셋</span><div class="ds-btns"><button class="btn" id="tr-preset">Llama 3.1 405B</button><button class="btn" id="tr-preset-ds">DeepSeek-V3 (활성 37B)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">연산량 C</span><span class="v" id="tr-o-c">—</span></div>
+        <div class="stat"><span class="k">학습 기간</span><span class="v" id="tr-o-days">—</span></div>
+        <div class="stat"><span class="k">GPU·시간</span><span class="v" id="tr-o-gh">—</span></div>
+        <div class="stat"><span class="k">토큰/파라미터</span><span class="v" id="tr-o-ratio">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(405B, 15.6T 토큰, H100 16K장, MFU 40%)에서 기간이 약 두 달로 나오는지 확인하자 — 실제 보고(장애·재시작 포함 54일 학습 구간 등)와 자릿수가 맞는다. ② 점을 끌어 토큰을 줄이면 연산량 축에서 GPT-3(약 3.1×10²³) 근처로 내려간다. ③ 토큰/파라미터 비율이 20(Chinchilla 최적) 근처인지, Llama 3처럼 수백~수천으로 '과학습'하는지 비교해 보자. 작은 모델을 오래 학습하면 학습비는 더 들지만 서빙(이 장의 주제)이 싸진다. GPU 시간당 가격을 곱하면 학습 비용도 추정할 수 있다. ④ 'DeepSeek-V3' 프리셋(N = 활성 37B, 14.8T 토큰, H100급 2,048장, FP8, MFU 20%)은 약 47일이 나온다. 보고된 사전학습 약 266만 GPU·시간(약 54일)과 자릿수가 맞는다(H800은 연산 성능이 H100과 같고 NVLink만 느리다). FP8 피크 기준 MFU가 낮게 나오는 것은 6ND가 어텐션·MTP를 빼고 센 근사이기 때문이다. ⑤ GPU를 B300 또는 Rubin으로 바꿔 같은 학습이 며칠로 줄어드는지 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>서빙 품질은 TTFT(대기 + 프리필), TPOT(디코드 한 스텝), 처리량(비용)으로 요약되며, 지연 SLA 아래에서 처리량을 최대화하는 문제로 정리된다.</li>
+      <li>GPU 메모리 = 가중치(파라미터 × 바이트) + KV 캐시(\(2Ln_{kv}d_\text{head}b_{kv}\) × 토큰 × 요청) + 작업 공간. KV 예산이 최대 동시 요청 수를 정한다.</li>
+      <li>디코드의 산술 강도는 BF16 기준 약 \(b\) FLOP/B로 리지 포인트(H100 약 295)보다 훨씬 작아 메모리 대역폭 바운드다. 배치 1의 상한은 \(\beta / M_w\) tok/s. 프리필은 \(I \approx p\)로 계산 바운드다.</li>
+      <li>배치를 키우면 TPOT은 거의 그대로인 채 처리량이 늘다가, KV 읽기와 연산이 지배하면서 꺾인다. KV 읽기는 배치로 공유되지 않아 긴 컨텍스트일수록 일찍 꺾인다.</li>
+      <li>연속 배칭은 매 디코드 스텝마다 빈 슬롯을 채워, 출력 길이가 제각각인 실제 트래픽에서 슬롯 활용률과 대기 시간을 크게 개선한다.</li>
+      <li>TP는 가중치·KV·대역폭을 N등분/N배 하지만 층마다 all-reduce가 필요해 NVLink가 필수이고, PP는 통신이 적은 대신 버블 \((p-1)/(m+p-1)\)이 생기며, DP는 복제로 처리량을 늘린다.</li>
+      <li>$/1M 토큰 = GPU 비용 / (처리량 × 3600) × 10⁶. 같은 하드웨어에서 단가는 배치와 가동률이 정한다. 학습 연산량은 \(C \approx 6ND\)(MoE는 \(N\) = 활성 파라미터), 기간은 \(C/(\text{GPU 수} \cdot \pi \cdot \text{MFU})\).</li>
+      <li>MoE는 메모리를 총 파라미터로, 토큰당 연산을 활성 파라미터로 센다. 한 스텝에 읽는 전문가 비율 \(1-(1-k/E)^b\)는 배치와 함께 1로 다가간다. 전문가당 토큰 \(bk/E\)가 산술 강도를 정하므로 대형 MoE는 큰 EP 그룹과 큰 전역 배치로 서빙하고, MoE 층마다 dispatch/combine all-to-all이 필요하다.</li>
+      <li>분리 서빙은 프리필 풀과 디코드 풀을 나눠 프리필–디코드 간섭을 없앤다. 대가는 KV 전송 \(p\,M_\text{KV}/B_\text{link}\)와 P:D 비율 조정이며, 평가는 SLA를 모두 지킨 요청만 세는 굿풋으로 한다. 에이전트처럼 접두사를 반복하는 워크로드에서는 프리픽스 캐싱과 KV 계층화(HBM → DRAM → SSD)가 프리필을 새 토큰분으로 줄인다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. H100 SXM(약 3.35 TB/s) 한 장에서 Llama 3 8B BF16을 배치 1로 디코딩할 때, 이론적 최대 속도에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 20 tok/s</button><button class="opt" data-correct>약 200 tok/s</button><button class="opt">약 2,000 tok/s</button><button class="opt">약 60,000 tok/s</button>
+      </div><div class="quiz-exp">배치 1 디코딩은 매 토큰 가중치 전체(8.03B × 2 B ≈ 16 GB)를 읽어야 하는 메모리 바운드 작업이다. 3.35 TB/s ÷ 16 GB ≈ 209 tok/s가 상한이다. 연산(989 TFLOPS ÷ 16 GFLOPs ≈ 60,000)이 아니라 대역폭이 속도를 정한다.</div></div>
+      <div class="quiz-q"><p>2. KV 캐시를 무시하면 BF16 디코딩의 산술 강도는 배치 \(b\)에 대해 약 \(b\) FLOP/B다. H100에서 디코딩이 계산 바운드가 되기 시작하는 배치는 대략?</p><div class="opts">
+        <button class="opt">약 8</button><button class="opt">약 30</button><button class="opt" data-correct>약 300</button><button class="opt">약 3,000</button>
+      </div><div class="quiz-exp">리지 포인트 = 989 TFLOPS ÷ 3.35 TB/s ≈ 295 FLOP/B. \(I \approx b\)이므로 배치 약 300에서 지붕 모서리에 닿는다. 실제로는 KV 읽기와 메모리 용량 때문에 그 전에 다른 한계를 만나는 경우가 많다.</div></div>
+      <div class="quiz-q"><p>3. Llama 3 70B(80층, KV 헤드 8, 헤드 차원 128)의 KV 캐시를 BF16으로 저장할 때, 8,192 토큰 요청 하나의 KV 크기는?</p><div class="opts">
+        <button class="opt">약 0.27 GB</button><button class="opt" data-correct>약 2.7 GB</button><button class="opt">약 27 GB</button><button class="opt">약 140 GB</button>
+      </div><div class="quiz-exp">토큰당 2(K, V) × 80 × 8 × 128 × 2 B = 327,680 B(320 KiB). × 8,192 = 약 2.68 GB. GQA가 없었다면(KV 헤드 64) 8배인 21 GB가 된다.</div></div>
+      <div class="quiz-q"><p>4. 연속 배칭이 정적 배칭보다 처리량이 좋은 가장 근본적인 이유는?</p><div class="opts">
+        <button class="opt">요청마다 GPU를 하나씩 따로 쓰기 때문</button><button class="opt">디코드 한 스텝의 연산량을 줄이기 때문</button><button class="opt" data-correct>끝난 요청의 슬롯을 다음 스텝에 바로 새 요청으로 채워 빈 슬롯 시간을 없애기 때문</button><button class="opt">KV 캐시를 쓰지 않기 때문</button>
+      </div><div class="quiz-exp">정적 배칭은 가장 긴 요청이 끝날 때까지 배치를 유지해, 먼저 끝난 요청의 슬롯이 놀고 새 요청은 기다린다. 연속 배칭은 스케줄링 단위가 디코드 스텝이라 빈 슬롯을 즉시 채운다. 디코드 스텝 비용은 배치에 거의 무관하므로 채운 만큼 처리량이 된다.</div></div>
+      <div class="quiz-q"><p>5. 시간당 $2.5인 GPU 한 장이 총 2,500 tok/s를 생성한다. 100% 가동 시 1M 출력 토큰당 비용은?</p><div class="opts">
+        <button class="opt" data-correct>약 $0.28</button><button class="opt">약 $1.0</button><button class="opt">약 $2.8</button><button class="opt">약 $9.0</button>
+      </div><div class="quiz-exp">시간당 토큰 = 2,500 × 3,600 = 9M. $2.5 ÷ 9M × 1M ≈ $0.28. 가동률이 50%면 두 배가 된다.</div></div>
+      <div class="quiz-q"><p>6. 70B 파라미터 모델을 15조(1.5×10¹³) 토큰으로 학습하는 연산량은 \(C \approx 6ND\)로 약?</p><div class="opts">
+        <button class="opt">6.3×10²²</button><button class="opt">6.3×10²³</button><button class="opt" data-correct>6.3×10²⁴</button><button class="opt">6.3×10²⁶</button>
+      </div><div class="quiz-exp">6 × 7×10¹⁰ × 1.5×10¹³ = 6.3×10²⁴ FLOPs. H100 1만 장, MFU 40%(약 4×10¹⁸ FLOP/s)라면 약 1.6×10⁶초 ≈ 18일이다.</div></div>
+      <div class="quiz-q"><p>7. gpt-oss-120b(총 116.8B, 활성 5.1B, MoE 가중치 MXFP4·나머지 BF16)를 배치 1로 디코딩한다. GPU에 <em>올려야</em> 하는 가중치와 토큰 하나에 <em>읽는</em> 가중치에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">올릴 것 약 5 GB · 읽을 것 약 5 GB</button><button class="opt" data-correct>올릴 것 약 65 GB · 읽을 것 약 5 GB</button><button class="opt">올릴 것 약 65 GB · 읽을 것 약 65 GB</button><button class="opt">올릴 것 약 234 GB · 읽을 것 약 10 GB</button>
+      </div><div class="quiz-exp">어느 전문가가 선택될지 모르므로 전문가 128개를 모두 올려야 한다. 전문가 약 115B × 4.25비트 ≈ 61 GB에 나머지 약 2B × 2 B ≈ 4 GB를 더해 약 65 GB다. 배치 1에서는 층마다 4개 전문가와 비전문가 부분만 읽는다. 약 1.6B × 2 B + 3.6B × 0.53 B ≈ 5 GB다. 배치가 커지면 건드리는 전문가가 늘어 읽는 양이 65 GB 쪽으로 다가간다.</div></div>
+      <div class="quiz-q"><p>8. 분리 서빙에서 Llama 3 70B의 8K 토큰 프롬프트 KV(BF16, 약 2.7 GB)를 400 Gb/s RDMA(약 50 GB/s)로 디코드 GPU에 보내는 시간과, 그 영향으로 옳은 것은?</p><div class="opts">
+        <button class="opt">약 0.5 ms — 무시할 수 있다</button><button class="opt" data-correct>약 54 ms — TTFT에 더해지고, 링크가 붐비면 전송 대기가 생긴다</button><button class="opt">약 5.4 s — 분리 서빙은 70B에서 불가능하다</button><button class="opt">전송이 필요 없다 — 디코드 GPU가 KV를 다시 계산한다</button>
+      </div><div class="quiz-exp">2.7 GB ÷ 50 GB/s ≈ 54 ms다. 8K 프롬프트의 프리필(수백 ms~1 s)에 비하면 작지만 TTFT에 그대로 더해진다. 같은 프리필 GPU의 전송이 줄을 서면 대기도 생긴다. NVLink(약 900 GB/s)라면 약 3 ms다. KV가 작은 모델(GQA, MLA, V4의 압축 KV)일수록 전송 부담이 작다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function font(px, mono) { return px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font"); }
+
+  /* =====================================================================
+     공통 데이터: GPU, 모델
+     ===================================================================== */
+  var GPUS = {
+    a100: { name: "A100 80GB", mem: 80, bw: 2.0e12, fl: 312e12, fl8: 312e12, link: 600e9, lat: 5e-6, use: 0.9 },
+    h100: { name: "H100 SXM", mem: 80, bw: 3.35e12, fl: 989e12, fl8: 1979e12, link: 900e9, lat: 5e-6, use: 0.9 },
+    h200: { name: "H200", mem: 141, bw: 4.8e12, fl: 989e12, fl8: 1979e12, link: 900e9, lat: 5e-6, use: 0.9 },
+    b200: { name: "B200", mem: 180, bw: 8.0e12, fl: 2250e12, fl8: 4500e12, link: 1800e9, lat: 5e-6, use: 0.9 },
+    b300: { name: "B300", mem: 288, bw: 8.0e12, fl: 2500e12, fl8: 5000e12, link: 1800e9, lat: 5e-6, use: 0.9 },
+    rubin: { name: "Rubin", mem: 288, bw: 19.2e12, fl: 4000e12, fl8: 17500e12, link: 3000e9, lat: 5e-6, use: 0.9 },
+    r4090: { name: "RTX 4090", mem: 24, bw: 1.0e12, fl: 165e12, fl8: 330e12, link: 32e9, lat: 20e-6, use: 0.9 },
+    m2u: { name: "M2 Ultra", mem: 192, bw: 0.8e12, fl: 27e12, fl8: 27e12, link: 0, lat: 0, use: 0.75, single: true }
+  };
+  var MODELS = {
+    l8: { name: "Llama 3 8B", P: 8.03e9, Pact: 8.03e9, L: 32, d: 4096, kvh: 8, hd: 128 },
+    l70: { name: "Llama 3 70B", P: 70.6e9, Pact: 70.6e9, L: 80, d: 8192, kvh: 8, hd: 128 },
+    l405: { name: "Llama 3.1 405B", P: 405.9e9, Pact: 405.9e9, L: 126, d: 16384, kvh: 8, hd: 128 },
+    mx: { name: "Mixtral 8x7B", P: 46.7e9, Pact: 12.9e9, L: 32, d: 4096, kvh: 8, hd: 128, moe: { E: 8, k: 2, shared: 1.63e9, expert: 5.634e9 } },
+    // 아래 MoE 모델의 층 구성은 Hugging Face config.json 기준. expert = 전문가 하나의 (모든 층 합) 파라미터,
+    // shared = 매 토큰 읽는 비전문가 파라미터(입력 임베딩 표 제외 근사). 메모리는 P(총), 연산은 Pact(활성).
+    gpt: { name: "gpt-oss-120b", P: 116.83e9, Pact: 5.13e9, L: 36, d: 2880, kvL: 18, kvh: 8, hd: 64, ad: 4096,
+      actx: function (c) { return 18 * c + 18 * Math.min(c, 128); },
+      fix: function (kvB) { return 18 * 128 * 2 * 8 * 64 * kvB; },
+      moe: { E: 128, k: 4, shared: 1.59e9, expert: 0.8958e9 }, nat: { e: 4.25 / 8, o: 2, c: 16, label: "MoE MXFP4 + BF16" } },
+    qw: { name: "Qwen3.5-397B-A17B", P: 397e9, Pact: 17e9, L: 60, d: 4096, kvL: 15, kvh: 2, hd: 256, ad: 8192,
+      actx: function (c) { return 15 * c; },
+      fix: function () { return 45 * 64 * 128 * 128 * 4 + 45 * 12288 * 3 * 2; },
+      moe: { E: 512, k: 10, shared: 9.45e9, expert: 0.755e9 }, nat: { e: 2, o: 2, c: 16, label: "BF16" } },
+    v4f: { name: "DeepSeek-V4-Flash", P: 284e9, Pact: 13e9, L: 43, d: 4096, kvRel: 0.02 * 2 * 43 * 8 * 128 * 2, ad: 32768,
+      actx: function (c) { var w = Math.min(c, 128); return 2 * w + 21 * (Math.min(c / 4, 512) + w) + 20 * (c / 128 + w); },
+      moe: { E: 256, k: 6, shared: 6.5e9, expert: 1.082e9 }, nat: { e: 4.25 / 8, o: 1, c: 8, label: "전문가 FP4 + FP8" } },
+    v4p: { name: "DeepSeek-V4-Pro", P: 1.6e12, Pact: 49e9, L: 61, d: 7168, kvRel: 0.02 * 2 * 61 * 8 * 128 * 2, ad: 65536,
+      actx: function (c) { var w = Math.min(c, 128); return 30 * (Math.min(c / 4, 1024) + w) + 31 * (c / 128 + w); },
+      moe: { E: 384, k: 6, shared: 24.8e9, expert: 4.03e9 }, nat: { e: 4.25 / 8, o: 1, c: 8, label: "전문가 FP4 + FP8" } }
+  };
+  var WORK = 2e9; // GPU당 작업 공간
+  var CTXS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
+  function wBytes(bits) { return bits === 4 ? 4.125 / 8 : bits / 8; }
+  function kvPerTok(m, kvB) { return m.kvRel ? m.kvRel : 2 * (m.kvL || m.L) * m.kvh * m.hd * kvB; }
+  function kvFix(m, kvB) { return m.fix ? m.fix(kvB) : 0; }      // 요청당 고정(슬라이딩 창·선형 어텐션 상태)
+  function attF(m, c) { return 4 * (m.ad || m.d) * (m.actx ? m.actx(c) : m.L * c); } // 토큰 하나의 어텐션 FLOPs
+  // 가중치 형식: "16"/"8"/"4" 균일, "n" = 모델이 공개된 형식. e: 전문가 바이트/파라미터, o: 나머지, c: 연산 비트
+  function wSpec(m, sel) {
+    if (sel === "n") return m.nat || { e: 2, o: 2, c: 16 };
+    var b = wBytes(+sel); return { e: b, o: b, c: +sel };
+  }
+  function wTotal(m, ws) {
+    if (!m.moe) return m.P * ws.o;
+    var ex = m.moe.E * m.moe.expert; return (m.P - ex) * ws.o + ex * ws.e;
+  }
+  function expFrac(m, btok) { return 1 - Math.pow(1 - m.moe.k / m.moe.E, Math.max(1, btok)); }
+  function weightRead(m, ws, btok) {
+    if (typeof ws === "number") ws = { e: ws, o: ws };
+    if (!m.moe) return m.P * ws.o;
+    return m.moe.shared * ws.o + m.moe.expert * m.moe.E * expFrac(m, btok) * ws.e;
+  }
+  function peak(g, bits) { return bits === 8 ? g.fl8 : g.fl; }
+
+  // 포맷
+  function gb(x) { var v = x / 1e9; return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + "<small> GB</small>"; }
+  function gbt(x) { var v = x / 1e9; return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " GB"; }
+  function tm(s) {
+    if (!isFinite(s)) return "—";
+    if (s < 1e-3) return (s * 1e6).toFixed(0) + "<small> µs</small>";
+    if (s < 1) return (s * 1e3).toFixed(s < 0.01 ? 2 : 1) + "<small> ms</small>";
+    if (s < 120) return s.toFixed(s < 10 ? 2 : 1) + "<small> s</small>";
+    return (s / 60).toFixed(1) + "<small> 분</small>";
+  }
+  function tmt(s) { return tm(s).replace(/<\/?small>/g, ""); }
+  function num(x) {
+    if (!isFinite(x)) return "—";
+    if (x >= 1e6) return (x / 1e6).toPrecision(3) + "M";
+    if (x >= 1e4) return (x / 1e3).toPrecision(3) + "K";
+    if (x >= 100) return x.toFixed(0);
+    if (x >= 10) return x.toFixed(1);
+    return x.toPrecision(2);
+  }
+  function tokLabel(n) { return n >= 1024 ? (n / 1024).toFixed(n % 1024 ? 1 : 0) + "K" : String(Math.round(n)); }
+  function sci(x, d) {
+    var e = Math.floor(Math.log10(x)), m = x / Math.pow(10, e);
+    return m.toFixed(d == null ? 1 : d) + "×10<sup>" + e + "</sup>";
+  }
+  function money(x) { if (!isFinite(x)) return "—"; return "$" + (x >= 100 ? x.toFixed(0) : x >= 1 ? x.toFixed(2) : x >= 0.01 ? x.toFixed(3) : x.toExponential(1)); }
+  function selVal(id, cb) { var el = $(id); el.addEventListener("change", function () { cb(el.value); }); return function () { return el.value; }; }
+
+  // 포인터 드래그 헬퍼
+  function drag(cv, h) {
+    var on = false;
+    function pos(e) { var r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+    cv.addEventListener("pointerdown", function (e) { on = true; try { cv.setPointerCapture(e.pointerId); } catch (_) {} var p = pos(e); h.down && h.down(p[0], p[1]); e.preventDefault(); });
+    cv.addEventListener("pointermove", function (e) { if (!on) return; var p = pos(e); h.move && h.move(p[0], p[1]); });
+    function end(e) { if (!on) return; on = false; h.up && h.up(); }
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  }
+
+  // 서빙 모델 (플레이그라운드·메모리 공용)
+  function serve(o) {
+    var m = MODELS[o.model], g = GPUS[o.gpu], N = g.single ? 1 : o.N;
+    var ws = wSpec(m, String(o.wbits)), kvb = kvPerTok(m, o.kvB);
+    var cap = g.mem * 1e9 * g.use, W = wTotal(m, ws);
+    var ctx = o.p + o.o, kvReq = ctx * kvb + kvFix(m, o.kvB);
+    var free = cap * N - W - WORK * N;
+    var maxB = free > 0 ? Math.floor(free / kvReq) : 0;
+    var r = { m: m, g: g, N: N, W: W, kvb: kvb, kvReq: kvReq, cap: cap, maxB: maxB, fitW: W + WORK * N <= cap * N };
+    var b = Math.min(o.U, maxB);
+    r.b = b;
+    r.usedPer = (W + WORK * N + Math.min(o.U, Math.max(maxB, 0)) * kvReq) / N;
+    r.wantPer = (W + WORK * N + o.U * kvReq) / N;
+    if (b < 1) { r.fit = false; return r; }
+    r.fit = true;
+    var em = 0.8, ec = 0.6, BW = g.bw * N * em, FL = peak(g, ws.c) * N * ec;
+    var cbar = o.p + o.o / 2;
+    var comm = function (tok) { return N > 1 ? 2 * m.L * (2 * (N - 1) / N * tok * m.d * 2 / g.link + g.lat) : 0; };
+    r.tW = weightRead(m, ws, b) / BW;
+    r.tKV = b * (cbar * kvb + kvFix(m, o.kvB)) / BW;
+    r.tC = b * (2 * m.Pact + attF(m, cbar)) / FL;
+    r.expF = m.moe ? expFrac(m, b) : 1;
+    r.tComm = comm(b);
+    r.tpot = Math.max(r.tW + r.tKV, r.tC) + r.tComm;
+    var Fp = o.p * (2 * m.Pact + attF(m, o.p / 2));
+    r.tPf = Math.max(Fp / FL, weightRead(m, ws, o.p) / BW) + comm(o.p);
+    r.wait = o.U > b ? Math.ceil(o.U / b - 1) * (r.tPf + o.o * r.tpot) : 0;
+    r.ttft = r.wait + r.tPf + r.tpot;
+    r.user = 1 / r.tpot; r.total = b / r.tpot;
+    r.queue = o.U - b;
+    return r;
+  }
+
+  /* =====================================================================
+     ① GPU 메모리 적재
+     ===================================================================== */
+  (function () {
+    var gModel = selVal("mem-model", draw), gGpu = selVal("mem-gpu", draw);
+    var gW = AB.seg("mem-w", draw), gKV = AB.seg("mem-kv", draw), gN = AB.seg("mem-n", draw);
+    var gCtx = AB.range("mem-ctx", function (v) { return tokLabel(CTXS[v]); }, draw);
+    var gU = AB.range("mem-u", function (v) { return v + "개"; }, draw);
+    var geo = null, R = null;
+    var cv = AB.canvas($("ds-cv-mem"), function (ctx, w, h) {
+      var P = AB.palette();
+      var o = { model: gModel(), gpu: gGpu(), N: +gN(), wbits: gW(), kvB: +gKV(), p: CTXS[gCtx()], o: 0, U: gU() };
+      R = serve(o);
+      var N = R.N, g = R.g, capRaw = g.mem * 1e9;
+      var wPer = R.W / N, kvPer = gU() * R.kvReq / N, work = WORK;
+      var tot = wPer + work + kvPer;
+      var ymax = Math.max(capRaw, tot) * 1.08;
+      var top = 30, bot = h - 34, H = bot - top;
+      var Y = function (v) { return bot - v / ymax * H; };
+      var left = 58, right = w - 14, avail = right - left;
+      var gap = Math.min(18, avail / N * 0.25), bw = Math.min(110, (avail - gap * (N + 1)) / N);
+      var x0 = left + (avail - (bw * N + gap * (N - 1))) / 2;
+      // y axis ticks
+      ctx.font = font(11, true); ctx.fillStyle = P.dim; ctx.strokeStyle = P.grid; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      var step = ymax > 400e9 ? 100e9 : ymax > 150e9 ? 40e9 : ymax > 60e9 ? 20e9 : ymax > 30e9 ? 10e9 : 5e9;
+      for (var v = 0; v <= ymax; v += step) { ctx.beginPath(); ctx.moveTo(left, Y(v)); ctx.lineTo(right, Y(v)); ctx.stroke(); ctx.fillText((v / 1e9).toFixed(0), left - 6, Y(v)); }
+      ctx.save(); ctx.translate(14, top + H / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.font = font(12); ctx.fillText("GPU당 메모리 (GB)", 0, 0); ctx.restore();
+      var segs = [[wPer, P.accent, "가중치"], [work, P.faint, "작업"], [kvPer, P.accent2, "KV"]];
+      for (var i = 0; i < N; i++) {
+        var x = x0 + i * (bw + gap), acc = 0;
+        ctx.fillStyle = AB.alpha(P.text, 0.04); ctx.fillRect(x, Y(capRaw), bw, Y(0) - Y(capRaw));
+        segs.forEach(function (s) {
+          var y1 = Y(acc), y2 = Y(acc + s[0]);
+          ctx.fillStyle = AB.alpha(s[1], s[1] === P.faint ? 0.5 : 0.75); ctx.fillRect(x, y2, bw, y1 - y2);
+          if (bw > 46 && y1 - y2 > 16) { ctx.fillStyle = P.text; ctx.font = font(11); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(s[2], x + bw / 2, (y1 + y2) / 2); }
+          acc += s[0];
+        });
+        // over capacity hatch
+        if (tot > capRaw * g.use) { ctx.strokeStyle = P.bad; ctx.lineWidth = 2; ctx.strokeRect(x, Y(tot), bw, Y(capRaw * g.use) - Y(tot)); }
+        ctx.fillStyle = P.dim; ctx.font = font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText("GPU" + i, x + bw / 2, bot + 6);
+        // drag handle
+        ctx.fillStyle = P.accent2; ctx.fillRect(x + bw / 2 - 12, Y(tot) - 3, 24, 6);
+      }
+      // capacity lines
+      ctx.setLineDash([5, 4]); ctx.lineWidth = 1.3;
+      ctx.strokeStyle = P.text; ctx.beginPath(); ctx.moveTo(left, Y(capRaw)); ctx.lineTo(right, Y(capRaw)); ctx.stroke();
+      ctx.strokeStyle = P.warn; ctx.beginPath(); ctx.moveTo(left, Y(capRaw * g.use)); ctx.lineTo(right, Y(capRaw * g.use)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillStyle = P.text; ctx.fillText(g.name + " " + g.mem + " GB", right, Y(capRaw) - 2);
+      ctx.fillStyle = P.warn; ctx.textBaseline = "top"; ctx.fillText("사용 상한 " + Math.round(g.use * 100) + "%", right, Y(capRaw * g.use) + 2);
+      ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = P.dim;
+      ctx.fillText(MODELS[o.model].name + " · " + (N > 1 ? "TP " + N : "1 GPU") + (g.single && +gN() > 1 ? " (단일 칩만)" : ""), left + 4, 8);
+      geo = { Y: Y, ymax: ymax, bot: bot, H: H, wPer: wPer, kvReqPer: R.kvReq / N };
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 440 });
+    function draw() {
+      cv.redraw();
+      var r = R, N = r.N, g = r.g;
+      AB.stat("mem-o-w", gb(r.W));
+      AB.stat("mem-o-kvr", gb(r.kvReq));
+      AB.stat("mem-o-use", gb(r.wantPer) + "<small> / " + (g.mem * g.use).toFixed(0) + "</small>");
+      AB.stat("mem-o-max", r.fitW ? r.maxB + "<small>개</small>" : "—");
+      var d;
+      if (!r.fitW) d = '<span class="bad">적재 불가</span> — 가중치(GPU당 ' + gbt(r.W / N) + ')와 작업 공간만으로 GPU당 사용 상한 ' + (g.mem * g.use).toFixed(0) + ' GB를 넘는다. 정밀도를 낮추거나 GPU를 늘리자.';
+      else if (gU() > r.maxB) d = '<span class="warn">KV 부족</span> — 가중치는 들어가지만 이 컨텍스트로는 동시 <b>' + r.maxB + '</b>개까지만 받을 수 있다. 나머지 ' + (gU() - r.maxB) + '개는 대기하거나, 엔진이 KV 블록을 선점(preemption)해 재계산한다.';
+      else d = '<span class="ok">적재 가능</span> — 동시 ' + gU() + '개 요청의 KV ' + gbt(gU() * r.kvReq) + '까지 들어간다. 이 컨텍스트로 최대 <b>' + r.maxB + '</b>개.';
+      $("mem-diag").innerHTML = d;
+    }
+    drag(cv.canvas, {
+      down: function (x, y) { this.move(x, y); },
+      move: function (x, y) {
+        if (!geo) return;
+        var v = (geo.bot - y) / geo.H * geo.ymax;
+        var u = Math.round((v - geo.wPer - WORK) / geo.kvReqPer);
+        gU.set(AB.clamp(u, 1, 256));
+      }
+    });
+    draw();
+  })();
+
+  /* =====================================================================
+     ② 루프라인
+     ===================================================================== */
+  (function () {
+    var gGpu = selVal("roof-gpu", draw), gModel = AB.seg("roof-model", draw);
+    var gB = AB.range("roof-b", function (v) { return String(Math.round(Math.pow(2, v))); }, draw);
+    var gP = AB.range("roof-p", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var kvEl = $("roof-kv"); kvEl.addEventListener("change", draw);
+    var C = null, dragging = null;
+    function decode(m, b, c, kv) {
+      var F = b * (2 * m.P + 4 * m.L * m.d * c), B = 2 * m.P + (kv ? b * c * kvPerTok(m, 2) : 0);
+      return { F: F, B: B, I: F / B };
+    }
+    function prefill(m, p) {
+      var F = p * 2 * m.P + 2 * m.L * m.d * p * p, B = 2 * m.P + p * kvPerTok(m, 2);
+      return { F: F, B: B, I: F / B };
+    }
+    var cv = AB.canvas($("ds-cv-roof"), function (ctx, w, h) {
+      var P = AB.palette(), g = GPUS[gGpu()], m = MODELS[gModel()];
+      var b = Math.round(Math.pow(2, gB())), p = Math.round(Math.pow(2, gP())), kv = kvEl.checked;
+      var box = { x: 58, y: 18, w: w - 58 - 16, h: h - 18 - 48 };
+      var series = [];
+      Object.keys(GPUS).forEach(function (k) {
+        var G = GPUS[k], r = G.fl / G.bw, sel = k === gGpu();
+        series.push({ data: [[0.1, G.bw * 0.1 / 1e12], [r, G.fl / 1e12], [1e5, G.fl / 1e12]], color: sel ? P.accent : AB.alpha(P.dim, 0.35), width: sel ? 3 : 1.2 });
+      });
+      var sel = series.splice(Object.keys(GPUS).indexOf(gGpu()), 1); series.push(sel[0]);
+      var dc = decode(m, b, p, kv), pf = prefill(m, p);
+      var att = function (I) { return Math.min(g.fl, g.bw * I) / 1e12; };
+      C = AB.chart(ctx, box, { x: [0.1, 1e5], y: [0.1, 1e4], logX: true, logY: true, xLabel: "산술 강도 (FLOP/바이트)", yLabel: "달성 성능 (TFLOPS)", series: series,
+        vlines: [{ x: g.fl / g.bw, color: AB.alpha(P.accent, 0.6), label: "리지 " + (g.fl / g.bw).toFixed(0) }] });
+      var X = C.X, Yf = C.Y;
+      // points
+      [[dc.I, att(dc.I), P.accent2, "디코드 b=" + b, "d"], [pf.I, att(pf.I), P.warn, "프리필 p=" + tokLabel(p), "p"]].forEach(function (q) {
+        var px = X(q[0]), py = Yf(q[1]);
+        ctx.fillStyle = AB.alpha(q[2], 0.2); ctx.beginPath(); ctx.arc(px, py, dragging === q[4] ? 14 : 11, 0, 7); ctx.fill();
+        ctx.fillStyle = q[2]; ctx.beginPath(); ctx.arc(px, py, 6, 0, 7); ctx.fill();
+        ctx.font = font(12); ctx.textBaseline = "middle";
+        var right = px < box.x + box.w - 110;
+        ctx.textAlign = right ? "left" : "right"; ctx.fillStyle = P.text;
+        ctx.fillText(q[3], px + (right ? 14 : -14), py + (q[4] === "d" ? 14 : -14));
+      });
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(g.name + " · " + m.name + " BF16", box.x + 8, box.y + 6);
+      C.dc = dc; C.pf = pf; C.g = g; C.att = att;
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 460 });
+    function draw() {
+      cv.redraw();
+      var g = C.g, dc = C.dc, pf = C.pf;
+      var aD = Math.min(g.fl, g.bw * dc.I), aP = Math.min(g.fl, g.bw * pf.I);
+      AB.stat("roof-o-ridge", (g.fl / g.bw).toFixed(0) + "<small> FLOP/B</small>");
+      AB.stat("roof-o-dec", num(dc.I) + "<small> · " + (aD / g.fl * 100).toFixed(aD / g.fl < 0.1 ? 2 : 0) + "% 피크</small>");
+      AB.stat("roof-o-dt", tm(Math.max(dc.B / g.bw, dc.F / g.fl)));
+      AB.stat("roof-o-pre", num(pf.I) + "<small> · </small>" + tm(Math.max(pf.B / g.bw, pf.F / g.fl)));
+    }
+    function solve(which, Itarget) {
+      var m = MODELS[gModel()], kv = kvEl.checked;
+      var el = which === "d" ? gB : gP, lo = +el.el.min, hi = +el.el.max, best = lo, bd = 1e9;
+      for (var v = lo; v <= hi + 1e-9; v += 0.05) {
+        var n = Math.round(Math.pow(2, v));
+        var I = which === "d" ? decode(m, n, Math.round(Math.pow(2, gP())), kv).I : prefill(m, n).I;
+        var dd = Math.abs(Math.log(I) - Math.log(Itarget));
+        if (dd < bd) { bd = dd; best = v; }
+      }
+      el.set(Math.round(best * 20) / 20);
+    }
+    drag(cv.canvas, {
+      down: function (x, y) {
+        if (!C) return;
+        var pts = { d: [C.X(C.dc.I), C.Y(C.att(C.dc.I))], p: [C.X(C.pf.I), C.Y(C.att(C.pf.I))] };
+        var dd = Math.hypot(x - pts.d[0], y - pts.d[1]), dp = Math.hypot(x - pts.p[0], y - pts.p[1]);
+        dragging = dd <= dp ? "d" : "p"; this.move(x, y);
+      },
+      move: function (x) {
+        if (!C || !dragging) return;
+        var lx = Math.log10(0.1) + (x - C.box.x) / C.box.w * (Math.log10(1e5) - Math.log10(0.1));
+        solve(dragging, Math.pow(10, lx));
+      },
+      up: function () { dragging = null; draw(); }
+    });
+    draw();
+  })();
+
+  /* =====================================================================
+     ③ 배치 크기 스윕
+     ===================================================================== */
+  (function () {
+    var gGpu = selVal("bt-gpu", draw), gModel = AB.seg("bt-model", draw);
+    var gC = AB.range("bt-c", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var capEl = $("bt-cap"); capEl.addEventListener("change", draw);
+    var bSel = 16, geo = null;
+    function step(g, wb, b, c, kv) {
+      var m = MODELS.l8, kvb = kvPerTok(m, wb);
+      var tm_ = (m.P * wb + (kv ? b * c * kvb : 0)) / g.bw;
+      var fl = wb === 1 ? g.fl8 : g.fl;
+      var tc = b * (2 * m.P + 4 * m.L * m.d * c) / fl;
+      return { t: Math.max(tm_, tc), mem: tm_, comp: tc, kvPart: kv ? b * c * kvb / g.bw : 0, wPart: m.P * wb / g.bw };
+    }
+    var cv = AB.canvas($("ds-cv-batch"), function (ctx, w, h) {
+      var P = AB.palette(), g = GPUS[gGpu()], wb = gModel() === "l8f" ? 1 : 2, c = Math.round(Math.pow(2, gC()));
+      var m = MODELS.l8, kvb = kvPerTok(m, wb);
+      var maxB = Math.floor((g.mem * 1e9 * g.use - m.P * wb - WORK) / (c * kvb));
+      var bs = []; for (var e = 0; e <= 10.001; e += 0.05) bs.push(Math.pow(2, e));
+      var tp = [], tpNo = [], tot = [], usr = [];
+      bs.forEach(function (b) { var s = step(g, wb, b, c, true), s0 = step(g, wb, b, c, false); tp.push([b, s.t * 1e3]); tpNo.push([b, s0.t * 1e3]); tot.push([b, b / s.t]); usr.push([b, 1 / s.t]); });
+      var gapY = 18, hTop = (h - 18 - 48 - gapY - 30) / 2;
+      var box1 = { x: 62, y: 18, w: w - 62 - 16, h: hTop };
+      var box2 = { x: 62, y: 18 + hTop + gapY + 30, w: w - 62 - 16, h: hTop };
+      var vl = (capEl.checked && maxB >= 1 && maxB < 1024) ? [{ x: maxB, color: P.bad, label: "KV 용량 b≈" + maxB }] : [];
+      var vSel = { x: bSel, color: P.text, dash: [2, 3], width: 1 };
+      var C1 = AB.chart(ctx, box1, { x: [1, 1024], y: [1, 3000], logX: true, logY: true, yLabel: "TPOT (ms)", xFmt: function () { return ""; },
+        series: [{ data: tpNo, color: P.faint, width: 1.5, dash: [5, 4] }, { data: tp, color: P.accent, width: 2.5 }], vlines: vl.concat([vSel]) });
+      ctx.save(); ctx.font = font(12); ctx.fillStyle = P.dim; ctx.translate(14, box2.y + box2.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("tok/s", 0, 0); ctx.restore();
+      var C2 = AB.chart(ctx, box2, { x: [1, 1024], y: [1, 1e6], logX: true, logY: true, xLabel: "배치 크기 b (동시 요청)",
+        series: [{ data: tot, color: P.accent2, width: 2.5 }, { data: usr, color: P.warn, width: 2 }], vlines: vl.concat([vSel]) });
+      // selected marks
+      var s = step(g, wb, bSel, c, true);
+      [[C1, s.t * 1e3, P.accent], [C2, bSel / s.t, P.accent2], [C2, 1 / s.t, P.warn]].forEach(function (q) {
+        ctx.fillStyle = q[2]; ctx.beginPath(); ctx.arc(q[0].X(bSel), q[0].Y(q[1]), 5, 0, 7); ctx.fill();
+      });
+      if (capEl.checked && maxB >= 1 && maxB < 1024) {
+        ctx.fillStyle = AB.alpha(P.bad, 0.07);
+        ctx.fillRect(C1.X(maxB), box1.y, box1.x + box1.w - C1.X(maxB), box1.h);
+        ctx.fillRect(C2.X(maxB), box2.y, box2.x + box2.w - C2.X(maxB), box2.h);
+      }
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(g.name + " · Llama 3 8B " + (wb === 1 ? "FP8" : "BF16") + " · c=" + tokLabel(c), box1.x + 8, box1.y + 4);
+      geo = { box: box1, s: s, maxB: maxB };
+    }, { aspect: 0.72, minHeight: 380, maxHeight: 520 });
+    function draw() {
+      cv.redraw();
+      var s = geo.s;
+      AB.stat("bt-o-b", String(Math.round(bSel)) + (geo.maxB < bSel ? '<small style="color:var(--bad)"> 용량 초과</small>' : ""));
+      AB.stat("bt-o-tpot", tm(s.t));
+      AB.stat("bt-o-tp", num(bSel / s.t) + "<small> / " + num(1 / s.t) + " tok/s</small>");
+      var reg = s.comp >= s.mem ? "계산" : (s.kvPart > s.wPart ? "대역폭 (KV)" : "대역폭 (가중치)");
+      AB.stat("bt-o-reg", reg);
+    }
+    drag(cv.canvas, {
+      down: function (x) { this.move(x); },
+      move: function (x) {
+        if (!geo) return;
+        var t = AB.clamp((x - geo.box.x) / geo.box.w, 0, 1);
+        bSel = Math.max(1, Math.round(Math.pow(2, t * 10)));
+        draw();
+      }
+    });
+    draw();
+  })();
+
+  /* =====================================================================
+     ④ 스케줄러: 정적 vs 연속 배칭
+     ===================================================================== */
+  (function () {
+    var seed = 7, NREQ = 48, reqs = [], res = null, T = 0, playing = true, hi = -1, geo = null;
+    var gLam = AB.range("sc-lam", function (v) { return v.toFixed(2) + " /스텝"; }, rebuild);
+    var gS = AB.range("sc-s", function (v) { return v + "개"; }, rebuild);
+    var gLen = selVal("sc-len", rebuild);
+    function gen() {
+      var r = AB.rng(seed), t = 0, lam = gLam(), mode = gLen();
+      reqs = [];
+      for (var i = 0; i < NREQ; i++) {
+        t += -Math.log(1 - r()) / lam;
+        var u = r(), len = mode === "fixed" ? 60 : mode === "uni" ? Math.round(8 + 152 * u) : Math.round(8 + 152 * u * u * u);
+        reqs.push({ id: i, arr: Math.ceil(t), len: len });
+      }
+    }
+    function runStatic(S) {
+      var out = reqs.map(function () { return {}; }), q = 0, t = 0, batches = [];
+      while (q < reqs.length) {
+        if (reqs[q].arr > t) t = reqs[q].arr;
+        var batch = [];
+        while (q < reqs.length && reqs[q].arr <= t && batch.length < S) batch.push(q++);
+        var mx = 0;
+        batch.forEach(function (i, s) { out[i] = { slot: s, start: t, end: t + reqs[i].len }; mx = Math.max(mx, reqs[i].len); });
+        batches.push({ start: t, end: t + mx, n: batch.length });
+        t += mx;
+      }
+      return { r: out, batches: batches };
+    }
+    function runCont(S) {
+      var out = reqs.map(function () { return {}; }), slots = [], q = 0, t = 0, done = 0;
+      for (var s = 0; s < S; s++) slots.push(-1);
+      while (done < reqs.length) {
+        for (var k = 0; k < S; k++) {
+          if (slots[k] >= 0 && out[slots[k]].end <= t) { slots[k] = -1; }
+        }
+        for (k = 0; k < S; k++) {
+          if (slots[k] < 0 && q < reqs.length && reqs[q].arr <= t) { out[q] = { slot: k, start: t, end: t + reqs[q].len }; slots[k] = q; q++; done++; }
+        }
+        t++;
+        if (t > 1e6) break;
+      }
+      return { r: out };
+    }
+    function stats(o, S) {
+      var span = 0, use = 0, wait = 0, lat = 0;
+      reqs.forEach(function (q, i) { span = Math.max(span, o.r[i].end); use += q.len; wait += o.r[i].start - q.arr; lat += o.r[i].end - q.arr; });
+      var t0 = reqs[0].arr;
+      return { span: span, util: use / (S * (span - t0)), wait: wait / reqs.length, lat: lat / reqs.length };
+    }
+    function rebuild() {
+      gen();
+      var S = gS();
+      var st = runStatic(S), ct = runCont(S);
+      res = { S: S, st: st, ct: ct, a: stats(st, S), b: stats(ct, S) };
+      res.tmax = Math.max(res.a.span, res.b.span);
+      T = 0; playing = true; $("sc-play").textContent = "일시정지";
+      AB.stat("sc-o-util", (res.a.util * 100).toFixed(0) + "% <small>/</small> " + (res.b.util * 100).toFixed(0) + "%");
+      AB.stat("sc-o-wait", res.a.wait.toFixed(0) + " <small>/</small> " + res.b.wait.toFixed(0));
+      AB.stat("sc-o-lat", res.a.lat.toFixed(0) + " <small>/</small> " + res.b.lat.toFixed(0));
+      AB.stat("sc-o-span", res.a.span + " <small>/</small> " + res.b.span);
+      cv && cv.resize();
+    }
+    rebuild();
+    function colorFor(i, P, a) { var c = P.series[i % 4]; return AB.alpha(c, a); }
+    var cv = AB.canvas($("ds-cv-sched"), function (ctx, w, h) {
+      var P = AB.palette(), S = res.S;
+      var left = 64, right = w - 12, top = 10, laneH = (h - top - 36) / 2;
+      var rh = (laneH - 34) / S;
+      var X = function (t) { return left + t / res.tmax * (right - left); };
+      geo = { left: left, right: right, X: X, lanes: [] };
+      [["정적 배칭", res.st, res.a], ["연속 배칭", res.ct, res.b]].forEach(function (L, li) {
+        var y0 = top + li * laneH, ys = y0 + 30;
+        geo.lanes.push({ ys: ys, rh: rh, data: L[1] });
+        ctx.font = font(12); ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText(L[0], 4, y0 + 2);
+        // queue at T
+        var qn = 0, runN = 0;
+        reqs.forEach(function (q, i) { var r = L[1].r[i]; if (q.arr <= T && r.start > T) qn++; if (r.start <= T && r.end > T) runN++; });
+        ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "right";
+        ctx.fillText("t=" + Math.floor(T) + " · 실행 " + runN + " · 대기 " + qn, right, y0 + 2);
+        // arrivals
+        ctx.fillStyle = AB.alpha(P.text, 0.55);
+        reqs.forEach(function (q) { if (q.arr > T) return; var x = X(q.arr); ctx.beginPath(); ctx.moveTo(x - 3, ys - 10); ctx.lineTo(x + 3, ys - 10); ctx.lineTo(x, ys - 4); ctx.fill(); });
+        // slot rows bg
+        for (var s = 0; s < S; s++) { ctx.fillStyle = AB.alpha(P.text, s % 2 ? 0.03 : 0.06); ctx.fillRect(left, ys + s * rh, right - left, rh); }
+        ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        if (rh >= 9) for (s = 0; s < S; s++) ctx.fillText(String(s), left - 4, ys + (s + 0.5) * rh);
+        // static waste
+        if (li === 0) {
+          L[1].batches.forEach(function (bt) {
+            if (bt.start > T) return;
+            reqs.forEach(function (q, i) {
+              var r = L[1].r[i]; if (r.start !== bt.start) return;
+              var a = r.end, b = Math.min(bt.end, T); if (b <= a) return;
+              ctx.fillStyle = AB.alpha(P.faint, 0.35); ctx.fillRect(X(a), ys + r.slot * rh + 1, X(b) - X(a), rh - 2);
+            });
+          });
+        }
+        reqs.forEach(function (q, i) {
+          var r = L[1].r[i]; if (r.start > T) return;
+          var e = Math.min(r.end, T);
+          ctx.fillStyle = colorFor(i, P, hi < 0 || hi === i ? 0.8 : 0.22);
+          ctx.fillRect(X(r.start), ys + r.slot * rh + 1, Math.max(1, X(e) - X(r.start) - 1), rh - 2);
+          if (hi === i) { ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.strokeRect(X(r.start), ys + r.slot * rh + 0.5, X(r.end) - X(r.start), rh - 1); }
+        });
+        // cursor
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(T), ys - 12); ctx.lineTo(X(T), ys + S * rh); ctx.stroke();
+      });
+      // axis
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(left, h - 26); ctx.lineTo(right, h - 26); ctx.stroke();
+      ctx.font = font(10, true); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var stp = res.tmax > 1200 ? 200 : res.tmax > 600 ? 100 : 50;
+      for (var t = 0; t <= res.tmax; t += stp) ctx.fillText(String(t), X(t), h - 22);
+      ctx.textAlign = "right"; ctx.fillText("디코드 스텝 →", right, h - 11);
+    }, { aspect: 0.62, minHeight: 360, maxHeight: 480 });
+    var loop = AB.loop($("sim-sched"), function (dt) {
+      if (!playing) return;
+      T = Math.min(res.tmax, T + dt * res.tmax / 12);
+      cv.redraw();
+      if (T >= res.tmax) { playing = false; $("sc-play").textContent = "재생"; }
+    });
+    $("sc-play").addEventListener("click", function () { if (T >= res.tmax) T = 0; playing = !playing; this.textContent = playing ? "일시정지" : "재생"; });
+    $("sc-reset").addEventListener("click", function () { T = 0; playing = true; $("sc-play").textContent = "일시정지"; });
+    $("sc-seed").addEventListener("click", function () { seed = (seed * 7919 + 13) % 100000; rebuild(); });
+    var downX = 0, moved = false;
+    drag(cv.canvas, {
+      down: function (x, y) { downX = x; moved = false; this._y = y; },
+      move: function (x) { if (Math.abs(x - downX) > 4) moved = true; if (!moved || !geo) return; playing = false; $("sc-play").textContent = "재생"; T = AB.clamp((x - geo.left) / (geo.right - geo.left), 0, 1) * res.tmax; cv.redraw(); },
+      up: function () {
+        if (moved || !geo) return;
+        var x = downX, y = this._y, t = (x - geo.left) / (geo.right - geo.left) * res.tmax, found = -1;
+        geo.lanes.forEach(function (L) {
+          var s = Math.floor((y - L.ys) / L.rh); if (s < 0 || s >= res.S) return;
+          reqs.forEach(function (q, i) { var r = L.data.r[i]; if (r.slot === s && r.start <= t && r.end > t) found = i; });
+        });
+        hi = found === hi ? -1 : found;
+        cv.redraw();
+      }
+    });
+  })();
+
+  /* =====================================================================
+     ⑤ 파이프라인 버블
+     ===================================================================== */
+  (function () {
+    var gP = AB.range("pp-p", function (v) { return v; }, draw), gM = AB.range("pp-m", function (v) { return v; }, draw);
+    var gMode = AB.seg("pp-mode", draw), hi = -1, geo = null;
+    function sched() {
+      var p = gP(), m = gM(), train = gMode() === "train", cells = [];
+      var Tf = m + p - 1;
+      for (var i = 0; i < p; i++) for (var j = 0; j < m; j++) cells.push({ s: i, mb: j, t: i + j, d: 1, k: "F" });
+      var total = Tf;
+      if (train) {
+        for (i = 0; i < p; i++) for (j = 0; j < m; j++) cells.push({ s: i, mb: j, t: Tf + 2 * (p - 1 - i) + 2 * j, d: 2, k: "B" });
+        total = Tf + 2 * (m + p - 1);
+      }
+      return { p: p, m: m, cells: cells, total: total, work: m * (train ? 3 : 1) };
+    }
+    var cv = AB.canvas($("ds-cv-pp"), function (ctx, w, h) {
+      var P = AB.palette(), S = sched();
+      var left = 48, right = w - 10, top = 12, bot = h - 28;
+      var rh = Math.min(30, (bot - top) / S.p), cw = (right - left) / S.total;
+      geo = { left: left, top: top, rh: rh, cw: cw, S: S };
+      for (var i = 0; i < S.p; i++) {
+        ctx.fillStyle = AB.alpha(P.bad, 0.08); ctx.fillRect(left, top + i * rh + 1, right - left, rh - 2);
+        ctx.fillStyle = P.dim; ctx.font = font(11, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        ctx.fillText("GPU" + i, left - 6, top + (i + 0.5) * rh);
+      }
+      S.cells.forEach(function (c) {
+        var col = P.series[c.mb % 4], a = hi < 0 || hi === c.mb ? (c.k === "F" ? 0.55 : 0.9) : 0.15;
+        ctx.fillStyle = AB.alpha(col, a);
+        var x = left + c.t * cw, y = top + c.s * rh;
+        ctx.fillRect(x + 0.5, y + 2, c.d * cw - 1, rh - 4);
+        if (cw * c.d > 16 && rh > 14) { ctx.fillStyle = P.text; ctx.font = font(10, true); ctx.textAlign = "center"; ctx.fillText(c.k + c.mb, x + c.d * cw / 2, y + rh / 2); }
+      });
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("시간 (F 한 칸 단위) →   연한 빨강 = 버블(유휴)", left, bot + 8);
+    }, { aspect: 0.4, minHeight: 200, maxHeight: 300 });
+    function draw() {
+      cv.redraw();
+      var S = geo.S, bub = 1 - S.work / S.total;
+      AB.stat("pp-o-bub", (bub * 100).toFixed(1) + "%<small> = (p−1)/(m+p−1)</small>");
+      AB.stat("pp-o-t", S.total + "<small> 칸</small>");
+      AB.stat("pp-o-sp", (S.p * S.work / S.total).toFixed(2) + "<small>× (이상 " + S.p + "×)</small>");
+    }
+    cv.canvas.addEventListener("click", function (e) {
+      var r = cv.canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      var s = Math.floor((y - geo.top) / geo.rh), t = (x - geo.left) / geo.cw, f = -1;
+      geo.S.cells.forEach(function (c) { if (c.s === s && t >= c.t && t < c.t + c.d) f = c.mb; });
+      hi = f === hi ? -1 : f; cv.redraw();
+    });
+    draw();
+  })();
+
+  /* =====================================================================
+     ⑥ 비용 계산기
+     ===================================================================== */
+  (function () {
+    var gPrice = AB.range("co-price", function (v) { return "$" + v.toFixed(1) + "/h"; }, draw);
+    var gN = AB.seg("co-n", draw);
+    var gT = AB.range("co-t", function (v) { return num(Math.pow(10, v)) + " tok/s"; }, draw);
+    var gU = AB.range("co-u", function (v) { return Math.round(v * 100) + "%"; }, draw);
+    // 참고점: H100, 8B BF16, c=2048
+    var g = GPUS.h100, m = MODELS.l8, refs = [1, 16, 128].map(function (b) {
+      var c = 2048, t = Math.max((m.P * 2 + b * c * kvPerTok(m, 2)) / g.bw, b * (2 * m.P + 4 * m.L * m.d * c) / g.fl);
+      return { b: b, T: b / t };
+    });
+    var geo = null;
+    function cost(T) { return gPrice() * (+gN()) / (T * gU() * 3600) * 1e6; }
+    var cv = AB.canvas($("ds-cv-cost"), function (ctx, w, h) {
+      var P = AB.palette(), T = Math.pow(10, gT());
+      var line = [], lines = [];
+      for (var e = 1; e <= 5.001; e += 0.1) line.push([Math.pow(10, e), cost(Math.pow(10, e))]);
+      [0.5, 1, 2, 4, 8].forEach(function (pr) { var d = []; for (var e2 = 1; e2 <= 5.001; e2 += 0.5) d.push([Math.pow(10, e2), pr * (+gN()) / (Math.pow(10, e2) * gU() * 3600) * 1e6]); lines.push({ data: d, color: AB.alpha(P.dim, 0.25), width: 1 }); });
+      var C = AB.chart(ctx, null, { x: [10, 1e5], y: [0.001, 1000], logX: true, logY: true, xLabel: "총 처리량 (tok/s)", yLabel: "$ / 1M 출력 토큰",
+        yFmt: function (v) { return v >= 1 ? "$" + v : "$" + v; },
+        series: lines.concat([{ data: line, color: P.accent, width: 2.5 }]),
+        vlines: +gN() === 1 ? refs.map(function (r) { return { x: r.T, color: AB.alpha(P.warn, 0.8), label: "b=" + r.b }; }) : [] });
+      var c = cost(T);
+      ctx.fillStyle = AB.alpha(P.accent2, 0.2); ctx.beginPath(); ctx.arc(C.X(T), C.Y(c), 12, 0, 7); ctx.fill();
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(C.X(T), C.Y(c), 6, 0, 7); ctx.fill();
+      ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = C.X(T) > C.box.x + C.box.w - 120 ? "right" : "left"; ctx.textBaseline = "bottom";
+      ctx.fillText(money(c) + " / 1M", C.X(T) + (ctx.textAlign === "left" ? 12 : -12), C.Y(c) - 8);
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillText("흐린 선: $0.5·1·2·4·8 /GPU·h", C.box.x + C.box.w - 4, C.box.y + 4);
+      geo = C;
+    }, { aspect: 0.6, minHeight: 280, maxHeight: 420 });
+    function draw() {
+      cv.redraw();
+      var T = Math.pow(10, gT());
+      AB.stat("co-o-c", money(cost(T)));
+      AB.stat("co-o-day", num(T * gU() * 86400) + "<small> 토큰</small>");
+      AB.stat("co-o-mon", money(gPrice() * (+gN()) * 24 * 30));
+    }
+    drag(cv.canvas, {
+      down: function (x) { this.move(x); },
+      move: function (x) { if (!geo) return; var t = AB.clamp((x - geo.box.x) / geo.box.w, 0, 1); gT.set(Math.round((1 + 4 * t) * 100) / 100); }
+    });
+    draw();
+  })();
+
+  /* =====================================================================
+     ⑦ 종합 서빙 플레이그라운드
+     ===================================================================== */
+  (function () {
+    var gModel = selVal("pl-model", draw), gGpu = selVal("pl-gpu", onGpu);
+    var gW = AB.seg("pl-w", draw), gKV = AB.seg("pl-kv", draw), gN = AB.seg("pl-n", draw);
+    var gP = AB.range("pl-p", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var gO = AB.range("pl-o", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var gU = AB.range("pl-u", function (v) { return String(Math.round(Math.pow(2, v))); }, draw);
+    var gPrice = AB.range("pl-price", function (v) { return "$" + v.toFixed(1) + "/h"; }, draw);
+    var PRICE = { a100: 1.5, h100: 2.5, h200: 3.5, b200: 5.5, b300: 7, rubin: 10, r4090: 0.4, m2u: 0.3 };
+    function onGpu(v) { gPrice.set(PRICE[v]); }
+    function opts(U) {
+      return { model: gModel(), gpu: gGpu(), N: +gN(), wbits: gW(), kvB: +gKV(), p: Math.round(Math.pow(2, gP())), o: Math.round(Math.pow(2, gO())), U: U == null ? Math.round(Math.pow(2, gU())) : U };
+    }
+    var R = null, geo = null;
+    var cv = AB.canvas($("ds-cv-play"), function (ctx, w, h) {
+      var P = AB.palette(), o = opts();
+      R = serve(o);
+      var left = 62, right = w - 16;
+      ctx.font = font(12); ctx.textBaseline = "middle";
+      // (a) memory bar per GPU
+      var y = 14;
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText("GPU당 메모리", 8, y + 6);
+      y += 16;
+      var cap = R.g.mem * 1e9, wPer = R.W / R.N, kvPer = Math.min(o.U, Math.max(R.maxB, 0)) * R.kvReq / R.N;
+      var total = Math.max(cap, wPer + WORK + kvPer) * 1.02;
+      var BX = function (v) { return 8 + v / total * (right - 8); };
+      ctx.fillStyle = AB.alpha(P.text, 0.06); ctx.fillRect(8, y, BX(cap) - 8, 22);
+      var acc = 0;
+      [[wPer, P.accent, "가중치 " + gbt(wPer)], [WORK, P.faint, ""], [kvPer, P.accent2, "KV " + gbt(kvPer)]].forEach(function (s) {
+        ctx.fillStyle = AB.alpha(s[1], 0.75); ctx.fillRect(BX(acc), y, BX(acc + s[0]) - BX(acc), 22);
+        if (s[2] && BX(acc + s[0]) - BX(acc) > 90) { ctx.fillStyle = P.text; ctx.font = font(11); ctx.textAlign = "left"; ctx.fillText(s[2], BX(acc) + 4, y + 11); }
+        acc += s[0];
+      });
+      ctx.strokeStyle = P.warn; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(BX(cap * R.g.use), y - 4); ctx.lineTo(BX(cap * R.g.use), y + 26); ctx.stroke(); ctx.setLineDash([]);
+      if (!R.fitW) { ctx.strokeStyle = P.bad; ctx.lineWidth = 2; ctx.strokeRect(8, y, BX(Math.min(total, wPer + WORK)) - 8, 22); ctx.lineWidth = 1; }
+      y += 40;
+      // (b) step-time breakdown
+      ctx.fillStyle = P.dim; ctx.font = font(12); ctx.textAlign = "left"; ctx.fillText("디코드 스텝 시간 분해", 8, y);
+      y += 12;
+      if (R.fit) {
+        var tmax = Math.max(R.tW + R.tKV, R.tC) + R.tComm;
+        var TX = function (v) { return 92 + v / (tmax * 1.05) * (right - 92); };
+        var rows = [["메모리", [[R.tW, P.accent, "가중치"], [R.tKV, P.accent2, "KV"]]], ["연산", [[R.tC, P.warn, ""]]], ["통신", [[R.tComm, P.blue, ""]]]];
+        rows.forEach(function (row, ri) {
+          var yy = y + ri * 20;
+          ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "right"; ctx.fillText(row[0], 86, yy + 8);
+          var a = 0;
+          row[1].forEach(function (s) { ctx.fillStyle = AB.alpha(s[1], 0.75); ctx.fillRect(TX(a), yy, Math.max(0, TX(a + s[0]) - TX(a)), 16); a += s[0]; });
+          ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.font = font(10, true);
+          var lab = tmt(a); var lx = TX(a) + 4; if (lx > right - 50) { lx = TX(a) - 4; ctx.textAlign = "right"; }
+          ctx.fillText(lab, lx, yy + 8);
+        });
+        y += 66;
+      } else {
+        ctx.fillStyle = P.bad; ctx.font = font(13); ctx.textAlign = "left"; ctx.fillText("적재 불가 — 계산할 수 없음", 92, y + 18); y += 66;
+      }
+      // (c) 처리량, 지연 vs U
+      var avail = h - y - 6 - 44 - 22, hb = avail / 2;
+      var box1 = { x: left, y: y + 6, w: right - left, h: hb };
+      var box2 = { x: left, y: y + 6 + hb + 22, w: right - left, h: hb };
+      var tot = [], usr = [], tpo = [], ttf = [];
+      for (var e = 0; e <= 10.001; e += 0.1) {
+        var U = Math.round(Math.pow(2, e)), r = serve(opts(U));
+        if (r.fit) { tot.push([U, r.total]); usr.push([U, r.user]); tpo.push([U, r.tpot * 1000]); ttf.push([U, r.ttft * 1000]); }
+      }
+      var Uc = o.U;
+      var vls = [{ x: Uc, color: P.text, dash: [2, 3], width: 1 }].concat(R.maxB >= 1 && R.maxB < 1024 ? [{ x: R.maxB, color: P.bad, label: "B_max " + R.maxB }] : []);
+      var C1 = AB.chart(ctx, box1, { x: [1, 1024], y: [1, 1e6], logX: true, logY: true, yLabel: "", xFmt: function () { return ""; },
+        series: [{ data: tot, color: P.accent2, width: 2.5 }, { data: usr, color: P.warn, width: 2 }], vlines: vls });
+      var C2 = AB.chart(ctx, box2, { x: [1, 1024], y: [1, 1e6], logX: true, logY: true, xLabel: "동시 사용자 U", yLabel: "",
+        series: [{ data: tpo, color: P.accent, width: 2.5 }, { data: ttf, color: P.blue, width: 2 }],
+        hlines: [{ y: 50, color: AB.alpha(P.accent, 0.7), label: "TPOT 50 ms" }, { y: 2000, color: AB.alpha(P.blue, 0.7), label: "TTFT 2 s" }], vlines: vls.slice(0, 1) });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent2; ctx.fillText("총 tok/s", box1.x + 6, box1.y + 4);
+      ctx.fillStyle = P.warn; ctx.fillText("사용자당 tok/s", box1.x + 62, box1.y + 4);
+      ctx.fillStyle = P.accent; ctx.fillText("TPOT (ms)", box2.x + 6, box2.y + 4);
+      ctx.fillStyle = P.blue; ctx.fillText("TTFT (ms)", box2.x + 74, box2.y + 4);
+      if (R.fit) {
+        [[C1, R.total, P.accent2], [C1, R.user, P.warn], [C2, R.tpot * 1e3, P.accent], [C2, R.ttft * 1e3, P.blue]].forEach(function (q) {
+          if (q[1] < 1 || q[1] > 1e6) return;
+          ctx.fillStyle = q[2]; ctx.beginPath(); ctx.arc(q[0].X(Uc), q[0].Y(q[1]), 4.5, 0, 7); ctx.fill();
+        });
+      }
+      geo = { box: { x: box1.x, y: box1.y, w: box1.w, h: box2.y + box2.h - box1.y } };
+    }, { aspect: 0.95, minHeight: 540, maxHeight: 680 });
+    function draw() {
+      cv.redraw();
+      var r = R, o = opts(), d = [];
+      if (!r.fitW) {
+        AB.stat("pl-o-fit", '<span style="color:var(--bad)">불가</span>');
+        ["pl-o-ttft", "pl-o-tpot", "pl-o-tp", "pl-o-cost"].forEach(function (id) { AB.stat(id, "—"); });
+        $("pl-diag").innerHTML = '<span class="bad">병목: 메모리 용량</span> — 가중치 ' + gbt(r.W) + '가 ' + r.N + '장 × ' + (r.g.mem * r.g.use).toFixed(0) + ' GB 사용 상한에 들어가지 않는다. 가중치 정밀도를 낮추거나(<a href="quantization.html">9장</a>), GPU 수를 늘리거나, 용량이 큰 GPU를 고르자.';
+        return;
+      }
+      if (!r.fit) {
+        AB.stat("pl-o-fit", '<span style="color:var(--bad)">KV 부족</span>');
+        ["pl-o-ttft", "pl-o-tpot", "pl-o-tp", "pl-o-cost"].forEach(function (id) { AB.stat(id, "—"); });
+        $("pl-diag").innerHTML = '<span class="bad">병목: 메모리 용량 (KV)</span> — 가중치는 들어가지만 요청 하나의 KV(' + gbt(r.kvReq) + ')조차 남은 공간에 안 들어간다. 컨텍스트를 줄이거나 KV를 FP8로.';
+        return;
+      }
+      var cost = gPrice() * r.N / (r.total * 3600) * 1e6;
+      AB.stat("pl-o-fit", "b = " + r.b + "<small> / 최대 " + r.maxB + "</small>");
+      AB.stat("pl-o-ttft", tm(r.ttft));
+      AB.stat("pl-o-tpot", tm(r.tpot));
+      AB.stat("pl-o-tp", num(r.user) + "<small> / " + num(r.total) + " tok/s</small>");
+      AB.stat("pl-o-cost", money(cost));
+      var mem = r.tW + r.tKV, which;
+      if (r.tComm > 0.3 * r.tpot) which = '<span class="warn">병목: GPU 간 통신</span> — 스텝의 ' + Math.round(r.tComm / r.tpot * 100) + '%가 all-reduce다' + (r.g.link < 100e9 ? ' (PCIe 연결). NVLink가 있는 GPU를 쓰거나 TP를 줄이고 DP로 복제하자.' : '. TP를 줄이고 DP로 복제하는 편이 효율적일 수 있다.');
+      else if (r.tC > mem) which = '<span class="warn">병목: 연산</span> — 배치가 커서 계산 바운드다. 더 이상 배치를 늘려도 처리량이 거의 늘지 않는다. FP8 연산이나 더 빠른 GPU가 도움이 된다.';
+      else if (r.tKV > r.tW) which = '<span class="warn">병목: 메모리 대역폭 (KV 읽기)</span> — KV 캐시 읽기(' + tmt(r.tKV) + ')가 가중치 읽기(' + tmt(r.tW) + ')보다 길다. KV FP8, 짧은 컨텍스트, GQA/MLA류 구조가 효과적이다.';
+      else which = '<span class="warn">병목: 메모리 대역폭 (가중치 읽기)</span> — 가중치 읽기(' + tmt(r.tW) + ')가 스텝을 지배한다. 동시 사용자를 늘려도 TPOT이 거의 그대로이므로 배치를 키울 여지가 있다. 가중치 양자화도 직접 효과가 있다.';
+      d.push(which);
+      if (r.m.moe) d.push('MoE: 배치 ' + r.b + '개 토큰이 한 스텝에 전문가의 <b>' + Math.round(r.expF * 100) + '%</b>를 건드린다(무작위 라우팅 가정). 이번 스텝 가중치 읽기 ' + gbt(r.tW * r.N * r.g.bw * 0.8) + ' / 전체 ' + gbt(r.W) + ' · 연산은 활성 ' + AB.big(r.m.Pact) + ' 기준.');
+      if (r.queue > 0) d.push('<span class="bad">대기열 ' + r.queue + '명</span> — 동시 사용자가 최대 동시 요청(' + r.maxB + ')을 넘어 TTFT에 대기 ' + tmt(r.wait) + '가 더해졌다.');
+      var sla = [];
+      sla.push(r.ttft <= 2 ? '<span class="ok">TTFT ≤ 2 s ✓</span>' : '<span class="bad">TTFT > 2 s ✗</span>');
+      sla.push(r.tpot <= 0.05 ? '<span class="ok">TPOT ≤ 50 ms ✓</span>' : '<span class="bad">TPOT > 50 ms ✗</span>');
+      d.push("예시 SLA: " + sla.join(" · "));
+      if (r.g.single && +gN() > 1) d.push("Apple M2 Ultra는 단일 칩으로만 계산했다.");
+      $("pl-diag").innerHTML = d.join("<br>");
+    }
+    drag(cv.canvas, {
+      down: function (x, y) { this.on = geo && y > geo.box.y - 10; if (this.on) this.move(x, y); },
+      move: function (x) { if (!this.on || !geo) return; var t = AB.clamp((x - geo.box.x) / geo.box.w, 0, 1); gU.set(Math.round(t * 10 * 20) / 20); }
+    });
+    draw();
+  })();
+
+  // 분리 서빙 이벤트 시뮬레이션 (GPU 하나 = 모델 전체를 올린 인스턴스 하나)
+  function dgGen(seed, lam, pmed, omed, n) {
+    var r = AB.rng(seed), t = 0, out = [];
+    for (var i = 0; i < n; i++) {
+      t += -Math.log(1 - r()) / lam;
+      var p = Math.round(AB.clamp(pmed * Math.exp(0.8 * r.n()), 16, 16384));
+      var o = Math.round(AB.clamp(omed * Math.exp(0.8 * r.n()), 2, 4096));
+      out.push({ id: i, arr: t, p: p, o: o });
+    }
+    return out;
+  }
+  function dgSim(cfg, reqs) {
+    // cfg: { m, ws, kvB, g, N, mode: "colo"|"chunk"|"dis", P, link (B/s) }
+    var m = cfg.m, g = cfg.g, ws = cfg.ws, kvb = kvPerTok(m, cfg.kvB), fix = kvFix(m, cfg.kvB);
+    var BW = g.bw * 0.8, FL = peak(g, ws.c) * 0.6, TAU = 0.3e-3, BUDGET = 16384, CHUNK = 512, MAXB = 512;
+    var cap = g.mem * 1e9 * g.use - wTotal(m, ws) - WORK;
+    function need(q) { return (q.p + q.o) * kvb + fix; }
+    function iterT(decB, decFl, decBytes, pfTok, pfFl) {
+      var by = weightRead(m, ws, decB + pfTok) + decBytes;
+      var fl = 2 * m.Pact * (decB + pfTok) + decFl + pfFl;
+      return Math.max(by / BW, fl / FL) + TAU;
+    }
+    var N = cfg.N, dis = cfg.mode === "dis", P = dis ? cfg.P : 0;
+    var gpus = [];
+    for (var i = 0; i < N; i++) gpus.push({ i: i, t: 0, role: dis ? (i < P ? "P" : "D") : "C", run: [], pf: [], pq: [], mem: 0, busy: 0, link: 0, done: false });
+    var q = 0, pend = [], res = reqs.map(function () { return null; }), nDone = 0, guard = 0;
+    var all = reqs, drop = 0;
+    reqs = all.filter(function (r) { return need(r) <= cap; }); drop = all.length - reqs.length;
+    res = reqs.map(function () { return null; });
+    reqs = reqs.map(function (r, i) { return { id: i, arr: r.arr, p: r.p, o: r.o }; });
+    var S = reqs.map(function (r) { return { r: r, gen: 0, off: 0, first: -1 }; });
+    if (!reqs.length) return { res: [], gpus: gpus, span: 0, ok: false, drop: drop, n: all.length };
+    function minActive(role) { var mn = 1e9; gpus.forEach(function (G) { if (G.role === role) mn = Math.min(mn, G.run.length + G.pf.length); }); return mn; }
+    function finish(s, t) { res[s.r.id] = { ttft: s.first - s.r.arr, tpot: s.r.o > 1 ? (t - s.first) / (s.r.o - 1) : 0, end: t }; nDone++; }
+    function decodeStep(G, extraTok, pfFl) {
+      var b = G.run.length, dFl = 0, dBy = 0;
+      G.run.forEach(function (s) { var c = s.r.p + s.gen; dFl += attF(m, c); dBy += c * kvb + fix; });
+      return iterT(b, dFl, dBy, extraTok, pfFl);
+    }
+    while (nDone < reqs.length && guard++ < 800000) {
+      var G = null; gpus.forEach(function (x) { if (!x.done && (!G || x.t < G.t)) G = x; });
+      if (!G) break;
+      var t = G.t, dt = 0, k, s;
+      if (G.role === "P") {
+        var batch = [], tok = 0;
+        while (q < reqs.length && reqs[q].arr <= t && (batch.length === 0 || tok + reqs[q].p <= BUDGET)) { batch.push(S[q]); tok += reqs[q].p; q++; }
+        if (batch.length) {
+          var pf = 0; batch.forEach(function (x) { pf += x.r.p * attF(m, x.r.p / 2); });
+          dt = iterT(0, 0, 0, tok, pf);
+          batch.forEach(function (x) {
+            var xs = Math.max(t + dt, G.link), xe = xs + (x.r.p * kvb + fix) / cfg.link + 1e-4;
+            G.link = xe; x.ready = xe;
+            var dst = null;   // 디코드 GPU 배정: 진행 중 + 배정 대기가 가장 적은 곳
+            gpus.forEach(function (D) { if (D.role === "D" && (!dst || D.run.length + D.pq.length + D.mem / cap < dst.run.length + dst.pq.length + dst.mem / cap)) dst = D; });
+            dst.pq.push(x); pend.push(x);
+          });
+          gpus.forEach(function (D) { if (D.role === "D") D.pq.sort(function (a, b) { return a.ready - b.ready; }); });
+          G.busy += dt; G.t = t + dt; continue;
+        }
+      } else if (G.role === "D") {
+        while (G.pq.length && G.pq[0].ready <= t && G.run.length < MAXB && G.mem + need(G.pq[0].r) <= cap) {
+          s = G.pq.shift(); pend.splice(pend.indexOf(s), 1); s.first = t; s.gen = 1; G.mem += need(s.r); G.run.push(s);
+          if (s.r.o <= 1) { finish(s, t); G.run.pop(); G.mem -= need(s.r); }
+        }
+        if (G.run.length) {
+          dt = decodeStep(G, 0, 0);
+          for (k = G.run.length - 1; k >= 0; k--) { s = G.run[k]; s.gen++; if (s.gen >= s.r.o) { finish(s, t + dt); G.mem -= need(s.r); G.run.splice(k, 1); } }
+          G.busy += dt; G.t = t + dt; continue;
+        }
+      } else {
+        var mnC = minActive("C"), chunk = cfg.mode === "chunk", add = 0;
+        while (q < reqs.length && reqs[q].arr <= t && G.run.length + G.pf.length < MAXB && G.mem + need(reqs[q]) <= cap && G.run.length + G.pf.length <= mnC + 1) {
+          if (!chunk && G.pf.length && add + reqs[q].p > BUDGET) break;
+          if (chunk && pfLeft(G) >= CHUNK) break;
+          s = S[q++]; G.mem += need(s.r); G.pf.push(s); add += s.r.p;
+        }
+        if (G.pf.length && !chunk) {
+          var tk = 0, pf2 = 0; G.pf.forEach(function (x) { tk += x.r.p; pf2 += x.r.p * attF(m, x.r.p / 2); });
+          dt = iterT(0, 0, 0, tk, pf2);   // 프리필 우선: 이 반복 동안 디코드는 멈춘다
+          G.pf.forEach(function (x) { x.first = t + dt; x.gen = 1; G.run.push(x); });
+          G.pf = []; G.busy += dt; G.t = t + dt; continue;
+        }
+        if (G.run.length || G.pf.length) {
+          // chunked: 디코드 토큰 + 남은 예산만큼 프리필 조각
+          var left = Math.max(0, CHUNK - G.run.length), tk2 = 0, pf3 = 0, doneP = [];
+          G.pf.forEach(function (x) {
+            if (left <= 0) return;
+            var n = Math.min(left, x.r.p - x.off);
+            pf3 += n * attF(m, x.off + n / 2); tk2 += n; left -= n; x.off += n;
+            if (x.off >= x.r.p) doneP.push(x);
+          });
+          dt = decodeStep(G, tk2, pf3);
+          for (k = G.run.length - 1; k >= 0; k--) { s = G.run[k]; s.gen++; if (s.gen >= s.r.o) { finish(s, t + dt); G.mem -= need(s.r); G.run.splice(k, 1); } }
+          doneP.forEach(function (x) { x.first = t + dt; x.gen = 1; G.pf.splice(G.pf.indexOf(x), 1); G.run.push(x); });
+          G.busy += dt; G.t = t + dt; continue;
+        }
+      }
+      // 할 일이 없다: 다음 사건 시각으로 건너뛴다
+      var nx = Infinity;
+      if (q < reqs.length) nx = Math.min(nx, reqs[q].arr);
+      if (G.role === "D" && G.pq.length && G.pq[0].ready > t) nx = Math.min(nx, G.pq[0].ready);
+      gpus.forEach(function (x) { if (x !== G && !x.done && x.t > t) nx = Math.min(nx, x.t); });
+      if (nx <= t) nx = t + 1e-4;
+      var allIn = q >= reqs.length;
+      if (allIn && G.role === "P") { G.done = true; continue; }
+      if (allIn && G.role === "C" && !G.run.length && !G.pf.length) { G.done = true; continue; }
+      if (allIn && G.role === "D" && !G.run.length && !G.pq.length && gpus.every(function (x) { return x.role !== "P" || x.done; })) { G.done = true; continue; }
+      if (!isFinite(nx)) G.done = true; else G.t = nx;
+    }
+    function pfLeft(G) { var a = 0; G.pf.forEach(function (x) { a += x.r.p - x.off; }); return a; }
+    var span = 0; res.forEach(function (x) { if (x) span = Math.max(span, x.end); });
+    return { res: res, gpus: gpus, span: span, ok: nDone === reqs.length, drop: drop, n: all.length };
+  }
+  function pct(a, f) { if (!a.length) return NaN; var s = a.slice().sort(function (x, y) { return x - y; }); return s[Math.min(s.length - 1, Math.floor(f * s.length))]; }
+  function dgStats(R, reqs, sTT, sTP) {
+    var tt = [], tp = [], met = 0, n = 0;
+    n = R.drop || 0;
+    R.res.forEach(function (x) { if (!x) return; n++; tt.push(x.ttft); tp.push(x.tpot); if (x.ttft <= sTT && x.tpot <= sTP) met++; });
+    var win = reqs[reqs.length - 1].arr - reqs[0].arr;
+    return { tt: tt, tp: tp, tt50: pct(tt, 0.5), tt99: pct(tt, 0.99), tp50: pct(tp, 0.5), tp99: pct(tp, 0.99), rate: met / Math.max(1, n), good: met / Math.max(R.span - reqs[0].arr, win) };
+  }
+
+  /* =====================================================================
+     ⑨ 분리 서빙 (2026)
+     ===================================================================== */
+  (function () {
+    var DGM = {
+      l70: { m: MODELS.l70, ws: { e: 1, o: 1, c: 8 } },
+      l8: { m: MODELS.l8, ws: { e: 2, o: 2, c: 16 } },
+      gpt: { m: MODELS.gpt, ws: MODELS.gpt.nat }
+    };
+    var seed = 11, sTT = 2.0, sTP = 0.03, out = null, geo = null, dragK = null;
+    var gModel = selVal("dg-model", recompute), gGpu = selVal("dg-gpu", recompute);
+    var gMode = AB.seg("dg-mode", function () { cv.redraw(); readout(); });
+    var gN = AB.range("dg-n", function (v) { return v + "장"; }, function () { syncP(); recompute(); });
+    var gP = AB.range("dg-p", function (v) { return v + " : " + (gN() - v); }, recompute);
+    var gLam = AB.range("dg-lam", function (v) { return AB.fmt(Math.pow(2, v), 2) + " 요청/s"; }, recompute);
+    var gPm = AB.range("dg-pm", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, recompute);
+    var gOm = AB.range("dg-om", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, recompute);
+    var gLink = AB.range("dg-link", function (v) {
+      var x = Math.pow(10, v); return (x >= 100 ? x.toFixed(0) : x.toFixed(1)) + " GB/s" + (Math.abs(v - 1.7) < 0.06 ? " (RDMA 400G)" : Math.abs(x - 900) < 60 ? " (NVLink)" : "");
+    }, recompute);
+    function syncP() { var el = $("dg-p"); el.max = String(gN() - 1); if (gP() > gN() - 1) gP.set(gN() - 1); else gP.set(gP()); }
+    var pending = false;
+    function recompute() { if (pending) return; pending = true; requestAnimationFrame(function () { pending = false; run(); }); }
+    function cfgFor(mode, P) {
+      var d = DGM[gModel()];
+      return { m: d.m, ws: d.ws, kvB: 2, g: GPUS[gGpu()], N: gN(), mode: mode, P: P, link: Math.pow(10, gLink()) * 1e9 };
+    }
+    function run() {
+      var d = DGM[gModel()], g = GPUS[gGpu()];
+      var cap = g.mem * 1e9 * g.use - wTotal(d.m, d.ws) - WORK;
+      var reqs = dgGen(seed, Math.pow(2, gLam()), Math.pow(2, gPm()), Math.pow(2, gOm()), 400);
+      out = { reqs: reqs, fit: cap > 0 };
+      if (!out.fit) { cv.redraw(); readout(); return; }
+      out.colo = dgSim(cfgFor("colo", 0), reqs);
+      out.chunk = dgSim(cfgFor("chunk", 0), reqs);
+      out.dis = dgSim(cfgFor("dis", gP()), reqs);
+      // 최적 분할 탐색
+      var best = null;
+      for (var P = 1; P < gN(); P++) {
+        var R = P === gP() ? out.dis : dgSim(cfgFor("dis", P), reqs), st = dgStats(R, reqs, sTT, sTP);
+        if (!best || st.good > best.good + 1e-9) best = { P: P, good: st.good, rate: st.rate };
+      }
+      out.best = best;
+      var pm = pct(reqs.map(function (r) { return r.p; }), 0.5);
+      out.kvMed = (pm * kvPerTok(d.m, 2) + kvFix(d.m, 2)) / (Math.pow(10, gLink()) * 1e9);
+      out.kvBytes = pm * kvPerTok(d.m, 2) + kvFix(d.m, 2);
+      cv.redraw(); readout();
+    }
+    function statsOf(k) { return dgStats(out[k], out.reqs, sTT, sTP); }
+    function cdf(a) { var s = a.slice().sort(function (x, y) { return x - y; }), n = s.length, d = []; for (var i = 0; i < n; i++) d.push([Math.max(s[i], 1e-4), (i + 1) / n]); return d; }
+    var cv = AB.canvas($("ds-cv-dg"), function (ctx, w, h) {
+      var P = AB.palette();
+      if (!out) return;
+      if (!out.fit) {
+        ctx.fillStyle = P.bad; ctx.font = font(14); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("이 GPU 한 장에 모델이 들어가지 않는다 — 더 큰 GPU를 고르자", w / 2, h / 2); geo = null; return;
+      }
+      var N = gN(), mode = gMode(), Pn = gP();
+      // (a) GPU 줄
+      var top = 22, bh = 46, left = 12, right = w - 12, gap = 4;
+      var bw = (right - left - gap * (N - 1)) / N;
+      var R = out[mode], span = Math.max(1e-9, R.span - out.reqs[0].arr);
+      ctx.font = font(12); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(mode === "dis" ? "프리필 " + Pn + "장  |  디코드 " + (N - Pn) + "장   (막대 = 가동률)" : "모든 GPU가 프리필+디코드 (막대 = 가동률)", left, 14);
+      for (var i = 0; i < N; i++) {
+        var x = left + i * (bw + gap), G = R.gpus[i], role = mode === "dis" ? (i < Pn ? "P" : "D") : "C";
+        var col = role === "P" ? P.accent2 : role === "D" ? P.accent : P.warn;
+        ctx.fillStyle = AB.alpha(col, 0.12); ctx.fillRect(x, top, bw, bh);
+        var u = AB.clamp(G.busy / span, 0, 1);
+        ctx.fillStyle = AB.alpha(col, 0.7); ctx.fillRect(x, top + bh * (1 - u), bw, bh * u);
+        ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, top + 0.5, bw - 1, bh - 1);
+        if (bw > 26) { ctx.fillStyle = P.text; ctx.font = font(10, true); ctx.textAlign = "center"; ctx.fillText((role === "C" ? "C" : role) + i, x + bw / 2, top + 13); ctx.fillText(Math.round(u * 100) + "%", x + bw / 2, top + bh - 6); }
+      }
+      var divX = null;
+      if (mode === "dis") {
+        divX = left + Pn * (bw + gap) - gap / 2;
+        ctx.strokeStyle = P.text; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(divX, top - 6); ctx.lineTo(divX, top + bh + 6); ctx.stroke();
+        ctx.fillStyle = P.text; ctx.beginPath(); ctx.arc(divX, top + bh / 2, 6, 0, 7); ctx.fill();
+      }
+      // (b) CDF 두 개
+      var y0 = top + bh + 34, stack = w < 560;
+      var cw = stack ? right - left - 50 : (right - left - 50 * 2 - 24) / 2;
+      var chH = stack ? (h - y0 - 40 * 2 - 12 - 70) / 2 : h - y0 - 40;
+      var box1 = { x: left + 44, y: y0, w: cw, h: chH };
+      var box2 = stack ? { x: left + 44, y: y0 + chH + 52, w: cw, h: chH } : { x: left + 44 + cw + 24 + 50, y: y0, w: cw, h: chH };
+      var cols = { dis: P.accent, colo: P.warn, chunk: P.accent2 };
+      function panel(box, key, xr, sla, label) {
+        var series = ["colo", "chunk", "dis"].map(function (k) {
+          var st = statsOf(k); return { data: cdf(st[key]), color: AB.alpha(cols[k], k === mode ? 1 : 0.45), width: k === mode ? 3 : 1.5 };
+        });
+        series.sort(function (a, b) { return a.width - b.width; });
+        var C = AB.chart(ctx, box, { x: xr, y: [0, 1], logX: true, xLabel: label, yLabel: "누적 비율", series: series,
+          xFmt: function (v) { return v >= 1 ? v + " s" : (v * 1000) + " ms"; },
+          hlines: [{ y: 0.99, color: AB.alpha(P.dim, 0.5), dash: [2, 3], label: "p99" }],
+          vlines: [{ x: sla, color: P.bad, dash: [5, 4], width: 2, label: "SLA " + (sla >= 1 ? sla.toFixed(1) + " s" : Math.round(sla * 1000) + " ms") }] });
+        return C;
+      }
+      var C1 = panel(box1, "tt", [0.01, 100], sTT, "TTFT");
+      var C2 = panel(box2, "tp", [0.005, 0.5], sTP, "TPOT (요청 평균)");
+      geo = { top: top, bh: bh, left: left, bw: bw, gap: gap, N: N, C1: C1, C2: C2 };
+    }, { aspect: 1.0, minHeight: 620, maxHeight: 680 });
+    function msOrS(x) { return tm(x); }
+    function readout() {
+      if (!out || !out.fit) {
+        ["dg-o-tt", "dg-o-tp", "dg-o-sla", "dg-o-good", "dg-o-kv"].forEach(function (id) { AB.stat(id, "—"); });
+        $("dg-diag").innerHTML = '<span class="bad">적재 불가</span> — 가중치와 작업 공간만으로 GPU 한 장의 사용 상한을 넘는다. 70B FP8은 H200 이상이 필요하다.';
+        return;
+      }
+      var mode = gMode(), st = statsOf(mode), names = { colo: "콜로케이션", chunk: "Chunked", dis: "분리" };
+      AB.stat("dg-o-tt", msOrS(st.tt50) + "<small> / </small>" + msOrS(st.tt99));
+      AB.stat("dg-o-tp", msOrS(st.tp50) + "<small> / </small>" + msOrS(st.tp99));
+      AB.stat("dg-o-sla", Math.round(st.rate * 100) + "<small>%</small>");
+      AB.stat("dg-o-good", st.good.toFixed(2) + "<small> 요청/s</small>");
+      AB.stat("dg-o-kv", gbt(out.kvBytes) + "<small> · </small>" + msOrS(out.kvMed));
+      var a = statsOf("colo"), b = statsOf("chunk"), c = statsOf("dis");
+      var d = '세 방식 굿풋(요청/s) — 콜로케이션 <b>' + a.good.toFixed(2) + '</b> · Chunked <b>' + b.good.toFixed(2) + '</b> · 분리(' + gP() + ':' + (gN() - gP()) + ') <b>' + c.good.toFixed(2) + '</b>. ';
+      d += '이 부하에서 굿풋이 가장 큰 분할은 <b>' + out.best.P + ':' + (gN() - out.best.P) + '</b>(' + out.best.good.toFixed(2) + ' 요청/s, 달성률 ' + Math.round(out.best.rate * 100) + '%)이다. ';
+      d += 'SLA: TTFT ≤ ' + (sTT >= 1 ? sTT.toFixed(1) + ' s' : Math.round(sTT * 1000) + ' ms') + ', TPOT ≤ ' + Math.round(sTP * 1000) + ' ms. ';
+      var lam = Math.pow(2, gLam());
+      if (c.tt50 > 5 * sTT && mode === "dis") d += '<span class="bad">프리필 풀 포화</span> — 프리필 GPU가 도착률을 따라가지 못해 대기열이 쌓였다. ';
+      if (st.good < lam * 0.5 && st.rate < 0.5) d += '<span class="warn">과부하</span> — 이 GPU 수로는 λ = ' + AB.fmt(lam, 2) + ' 요청/s를 SLA 안에서 감당하지 못한다. ';
+      $("dg-diag").innerHTML = d;
+    }
+    $("dg-seed").addEventListener("click", function () { seed = (seed * 7919 + 17) % 100000; recompute(); });
+    $("dg-best").addEventListener("click", function () { if (out && out.best) { setSeg("dis"); gP.set(out.best.P); } });
+    function setSeg(v) { var el = $("dg-mode"); Array.prototype.forEach.call(el.querySelectorAll("button"), function (b) { if (b.dataset.value === v && !b.classList.contains("on")) b.click(); }); }
+    drag(cv.canvas, {
+      down: function (x, y) {
+        dragK = null; if (!geo) return;
+        if (y < geo.top + geo.bh + 10) dragK = "split";
+        else if (inBox(geo.C1.box, x, y)) dragK = "tt";
+        else if (inBox(geo.C2.box, x, y)) dragK = "tp";
+        this.move(x, y);
+      },
+      move: function (x, y) {
+        if (!geo || !dragK) return;
+        if (dragK === "split") {
+          var k = Math.round((x - geo.left + geo.gap / 2) / (geo.bw + geo.gap));
+          k = AB.clamp(k, 1, geo.N - 1);
+          if (gMode() !== "dis") setSeg("dis");
+          if (k !== gP()) gP.set(k);
+        } else {
+          var C = dragK === "tt" ? geo.C1 : geo.C2, lo = dragK === "tt" ? -2 : Math.log10(0.005), hi = dragK === "tt" ? 2 : Math.log10(0.5);
+          var t = AB.clamp((x - C.box.x) / C.box.w, 0, 1), v = Math.pow(10, lo + t * (hi - lo));
+          var snap = function (z) { var e = Math.pow(10, Math.floor(Math.log10(z))); return Math.round(z / e * 4) / 4 * e; };
+          if (dragK === "tt") sTT = snap(v); else sTP = snap(v);
+          cv.redraw(); readout();
+        }
+      },
+      up: function () { if (dragK === "tt" || dragK === "tp") recompute(); dragK = null; }
+    });
+    function inBox(b, x, y) { return x >= b.x - 10 && x <= b.x + b.w + 10 && y >= b.y - 10 && y <= b.y + b.h + 30; }
+    syncP(); run();
+  })();
+
+  /* =====================================================================
+     ⑩ MoE 라우팅 표본
+     ===================================================================== */
+  (function () {
+    var seed = 5, hiE = -1, geo = null, S = null;
+    var gModel = selVal("moe-model", build);
+    var gB = AB.range("moe-b", function (v) { return String(Math.round(Math.pow(2, v))); }, sample);
+    var gA = AB.range("moe-a", function (v) { return v.toFixed(2); }, build);
+    var gEP = AB.seg("moe-ep", sample);
+    var pop = null, cum = null, perm = null;
+    function build() {
+      var m = MODELS[gModel()], E = m.moe.E, r = AB.rng(seed * 31 + 7), a = gA();
+      // 전문가 인기도: 순위^(-α), 순위는 무작위로 섞는다
+      perm = []; for (var i = 0; i < E; i++) perm.push(i);
+      for (i = E - 1; i > 0; i--) { var j = Math.floor(r() * (i + 1)), t = perm[i]; perm[i] = perm[j]; perm[j] = t; }
+      pop = new Float64Array(E); var s = 0;
+      for (i = 0; i < E; i++) { pop[i] = Math.pow(perm[i] + 1, -a); s += pop[i]; }
+      cum = new Float64Array(E); var c = 0;
+      for (i = 0; i < E; i++) { c += pop[i] / s; cum[i] = c; }
+      sample();
+    }
+    function pick(u) { var lo = 0, hi = cum.length - 1; while (lo < hi) { var mid = (lo + hi) >> 1; if (cum[mid] < u) lo = mid + 1; else hi = mid; } return lo; }
+    function route(m, b, r) {
+      var E = m.moe.E, k = m.moe.k, cnt = new Int32Array(E), chosen = [];
+      for (var t = 0; t < b; t++) {
+        chosen.length = 0;
+        var guard = 0;
+        while (chosen.length < k && guard++ < 200) { var e = pick(r()); if (chosen.indexOf(e) < 0) chosen.push(e); }
+        for (var q = 0; q < chosen.length; q++) cnt[chosen[q]]++;
+      }
+      return cnt;
+    }
+    function sample() {
+      var m = MODELS[gModel()], E = m.moe.E, k = m.moe.k, b = Math.round(Math.pow(2, gB())), ep = +gEP();
+      var r = AB.rng(seed);
+      var cnt = route(m, b, r), hit = 0, mx = 0;
+      for (var i = 0; i < E; i++) { if (cnt[i] > 0) hit++; mx = Math.max(mx, cnt[i]); }
+      var per = Math.ceil(E / ep), load = [];
+      for (var gI = 0; gI < ep; gI++) { var L = 0; for (i = gI * per; i < Math.min(E, (gI + 1) * per); i++) L += cnt[i]; load.push(L); }
+      var mean = b * k / ep, lmax = Math.max.apply(null, load);
+      // 표본 곡선: 몇 개 배치에서 같은 방식으로 건드린 비율
+      var pts = [];
+      [1, 4, 16, 64, 256, 1024, 4096, 16384].forEach(function (bb) {
+        var c2 = route(m, bb, AB.rng(seed + bb)), h2 = 0; for (var z = 0; z < E; z++) if (c2[z] > 0) h2++; pts.push([bb, h2 / E]);
+      });
+      var nat = m.nat, eb = nat.e;
+      S = { m: m, E: E, k: k, b: b, ep: ep, cnt: cnt, hit: hit, mx: mx, load: load, imb: lmax / Math.max(mean, 1e-9), pts: pts,
+        rd: hit * m.moe.expert * eb, sharedRd: m.moe.shared * nat.o };
+      cv.redraw(); readout();
+    }
+    var cv = AB.canvas($("ds-cv-moe"), function (ctx, w, h) {
+      var P = AB.palette(); if (!S) return;
+      var E = S.E, ep = S.ep, per = Math.ceil(E / ep);
+      // (a) 전문가 격자: GPU별 열 묶음
+      var gridH = Math.min(h * 0.5, 230), top = 22, left = 10, right = w - 10;
+      var cols = Math.ceil(Math.sqrt(E * (right - left) / gridH));
+      var rows = Math.ceil(E / cols), cs = Math.min((right - left) / cols, gridH / rows);
+      var gx = left + (right - left - cs * cols) / 2;
+      ctx.font = font(12); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(w < 520 ? "전문가 " + E + "개 · 색 = 받은 토큰 · 테두리 = GPU (EP " + ep + ")" : "전문가 " + E + "개 · 칸 색 = 이번 스텝에 받은 토큰 수 · 테두리 색 = 담당 GPU (EP " + ep + ")", left, 14);
+      var mx = Math.max(1, S.mx);
+      for (var e = 0; e < E; e++) {
+        var cx = gx + (e % cols) * cs, cy = top + Math.floor(e / cols) * cs, c = S.cnt[e], gpu = Math.floor(e / per);
+        ctx.fillStyle = c > 0 ? AB.heat(0.25 + 0.75 * Math.sqrt(c / mx)) : AB.alpha(P.text, 0.05);
+        ctx.fillRect(cx + 1, cy + 1, cs - 2, cs - 2);
+        ctx.strokeStyle = AB.alpha(P.series[gpu % P.series.length], 0.55); ctx.lineWidth = 1;
+        ctx.strokeRect(cx + 1.5, cy + 1.5, cs - 3, cs - 3);
+        if (e === hiE) { ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.strokeRect(cx + 0.5, cy + 0.5, cs - 1, cs - 1); }
+      }
+      if (hiE >= 0 && hiE < E) {
+        ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = "right";
+        ctx.fillText("전문가 #" + hiE + " (GPU" + Math.floor(hiE / per) + "): 토큰 " + S.cnt[hiE] + "개", right, 14);
+      }
+      // (b) 건드린 비율 vs 배치
+      var y0 = top + rows * cs + 18;
+      var box = { x: 58, y: y0, w: w - 58 - 16, h: Math.max(80, h - y0 - (w < 500 ? 112 : 80)) };
+      var curve = []; for (var t = 0; t <= 14.001; t += 0.1) { var bb = Math.pow(2, t); curve.push([bb, 1 - Math.pow(1 - S.k / E, bb)]); }
+      var C = AB.chart(ctx, box, { x: [1, 16384], y: [0, 1], logX: true, xLabel: "배치 토큰 b", yLabel: "적중 비율",
+        series: [{ data: curve, color: P.accent, width: 2.5 }],
+        points: S.pts.map(function (p) { return { x: p[0], y: p[1], color: P.accent2, r: 3.5 }; }),
+        vlines: [{ x: S.b, color: P.text, dash: [2, 3], width: 1, label: "b=" + S.b }] });
+      ctx.fillStyle = P.warn; ctx.beginPath(); ctx.arc(C.X(S.b), C.Y(S.hit / E), 6, 0, 7); ctx.fill();
+      geo = { box: C.box, gx: gx, top: top, cs: cs, cols: cols, E: E };
+    }, { aspect: 0.75, minHeight: 470, maxHeight: 560 });
+    function readout() {
+      var f = 1 - Math.pow(1 - S.k / S.E, S.b);
+      AB.stat("moe-o-hit", Math.round(S.hit / S.E * 100) + "%<small> / " + Math.round(f * 100) + "%</small>");
+      AB.stat("moe-o-rd", gb(S.rd + S.sharedRd));
+      AB.stat("moe-o-pt", gb((S.rd + S.sharedRd) / S.b));
+      AB.stat("moe-o-tpe", (S.b * S.k / S.E).toFixed(S.b * S.k / S.E < 10 ? 1 : 0) + "<small> / " + S.mx + "</small>");
+      AB.stat("moe-o-imb", S.imb.toFixed(2) + "<small>×</small>");
+    }
+    $("moe-seed").addEventListener("click", function () { seed = (seed * 7919 + 3) % 100000; build(); });
+    var downX = 0, downY = 0, moved = false;
+    drag(cv.canvas, {
+      down: function (x, y) { downX = x; downY = y; moved = false; if (geo && y > geo.box.y - 6) { moved = true; this.move(x, y); } },
+      move: function (x, y) {
+        if (!geo) return;
+        if (Math.abs(x - downX) > 3) moved = true;
+        if (!moved || downY < geo.box.y - 6) return;
+        var t = AB.clamp((x - geo.box.x) / geo.box.w, 0, 1);
+        gB.set(Math.round(t * 14 * 10) / 10);
+      },
+      up: function () {
+        if (moved || !geo) return;
+        var c = Math.floor((downX - geo.gx) / geo.cs), r = Math.floor((downY - geo.top) / geo.cs), e = r * geo.cols + c;
+        if (c >= 0 && c < geo.cols && r >= 0 && e < geo.E) { hiE = hiE === e ? -1 : e; cv.redraw(); }
+      }
+    });
+    build();
+  })();
+
+  /* =====================================================================
+     ⑪ 에이전트 턴별 TTFT: 프리픽스 캐시와 KV 계층
+     ===================================================================== */
+  (function () {
+    var CFG = {
+      l70h200: { m: MODELS.l70, ws: { e: 1, o: 1, c: 8 }, g: GPUS.h200, kvB: 2 },
+      gpth100: { m: MODELS.gpt, ws: MODELS.gpt.nat, g: GPUS.h100, kvB: 2 },
+      v4fb300: { m: MODELS.v4f, ws: MODELS.v4f.nat, g: GPUS.b300, kvB: 1 }
+    };
+    var SSD = 10e9, sel = -1, geo = null, D = null;
+    var gModel = selVal("kvt-model", draw);
+    var gS = AB.range("kvt-s", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var gD = AB.range("kvt-d", function (v) { return tokLabel(Math.round(Math.pow(2, v))); }, draw);
+    var gT = AB.range("kvt-t", function (v) { return v + "턴"; }, draw);
+    var gDram = AB.seg("kvt-dram", draw);
+    function pfTime(c, n, cfg) {   // 이미 c 토큰의 KV가 있을 때 새 토큰 n개 프리필
+      var m = cfg.m, FL = peak(cfg.g, cfg.ws.c) * 0.6, BW = cfg.g.bw * 0.8;
+      var fl = n * (2 * m.Pact + attF(m, c + n / 2));
+      return Math.max(fl / FL, weightRead(m, cfg.ws, n) / BW + (c * kvPerTok(m, cfg.kvB)) / BW);
+    }
+    function compute() {
+      var cfg = CFG[gModel()], S0 = Math.round(Math.pow(2, gS())), dl = Math.round(Math.pow(2, gD())), T = gT();
+      var dram = +gDram() * 1e9, kvb = kvPerTok(cfg.m, cfg.kvB), fix = kvFix(cfg.m, cfg.kvB);
+      var rows = [], cum = { none: 0, hbm: 0 };
+      for (var t = 1; t <= T; t++) {
+        var c = t === 1 ? 0 : S0 + (t - 2) * dl, n = t === 1 ? S0 : dl;   // 1턴: 접두사 S 전체를 처음 프리필
+        var bytes = c * kvb + (c > 0 ? fix : 0);
+        var none = pfTime(0, c + n, cfg), hit = pfTime(c, n, cfg);
+        rows.push({ t: t, ctx: c + n, none: none, hbm: hit, dram: hit + bytes / dram, ssd: hit + bytes / SSD, bytes: bytes });
+        cum.none += none; cum.hbm += hit;
+      }
+      D = { rows: rows, cum: cum, cfg: cfg, T: T, kvSess: (S0 + (T - 1) * dl) * kvb + fix };
+    }
+    var cv = AB.canvas($("ds-cv-kvt"), function (ctx, w, h) {
+      var P = AB.palette(); compute();
+      if (sel < 1 || sel > D.T) sel = D.T;
+      var R = D.rows, ymin = 1e-3, ymax = 100;
+      var line = function (k) { return R.map(function (r) { return [r.t, Math.max(ymin, r[k])]; }); };
+      var C = AB.chart(ctx, null, { x: [1, Math.max(2, D.T)], y: [ymin, ymax], logY: true, xLabel: "턴", yLabel: "TTFT (초, 로그)",
+        yFmt: function (v) { return v >= 1 ? v + " s" : (v * 1000) + " ms"; },
+        series: [{ data: line("none"), color: P.bad, width: 2.5 }, { data: line("ssd"), color: P.warn, width: 2 }, { data: line("dram"), color: P.accent2, width: 2 }, { data: line("hbm"), color: P.accent, width: 2.5 }],
+        vlines: [{ x: sel, color: P.text, dash: [2, 3], width: 1, label: "턴 " + sel }] });
+      var r = R[sel - 1];
+      [["none", P.bad], ["ssd", P.warn], ["dram", P.accent2], ["hbm", P.accent]].forEach(function (q) {
+        ctx.fillStyle = q[1]; ctx.beginPath(); ctx.arc(C.X(sel), C.Y(Math.max(ymin, r[q[0]])), 4.5, 0, 7); ctx.fill();
+      });
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(D.cfg.m.name + " · " + D.cfg.g.name + " · KV " + AB.fmt(kvPerTok(D.cfg.m, D.cfg.kvB) / 1024, 3) + " KiB/토큰", C.box.x + 6, C.box.y + 4);
+      geo = C;
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 440 });
+    function draw() {
+      cv.redraw();
+      var r = D.rows[sel - 1];
+      AB.stat("kvt-o-ctx", tokLabel(r.ctx) + "<small> 토큰</small>");
+      AB.stat("kvt-o-tt", tm(r.none) + "<small> / </small>" + tm(r.dram) + "<small> / </small>" + tm(r.hbm));
+      AB.stat("kvt-o-cum", tm(D.cum.none) + "<small> vs </small>" + tm(D.cum.hbm) + "<small> (" + Math.round(D.cum.none / D.cum.hbm) + "×)</small>");
+      AB.stat("kvt-o-kv", gb(D.kvSess));
+    }
+    drag(cv.canvas, {
+      down: function (x) { this.move(x); },
+      move: function (x) { if (!geo) return; var t = AB.clamp((x - geo.box.x) / geo.box.w, 0, 1); var s2 = Math.round(1 + t * (Math.max(2, D.T) - 1)); if (s2 !== sel) { sel = s2; draw(); } }
+    });
+    var lastT = gT();
+    $("kvt-t").addEventListener("input", function () { if (sel === lastT || sel > gT()) sel = gT(); lastT = gT(); draw(); });
+    draw();
+  })();
+
+  /* =====================================================================
+     ⑧ 학습 연산량
+     ===================================================================== */
+  (function () {
+    var gN = AB.range("tr-n", function (v) { return AB.big(Math.pow(10, v)); }, draw);
+    var gD = AB.range("tr-d", function (v) { return AB.big(Math.pow(10, v)).replace("T", "T"); }, draw);
+    var gGpu = selVal("tr-gpu", draw);
+    var gG = AB.range("tr-g", function (v) { return AB.big(Math.round(Math.pow(2, v))) + "장"; }, draw);
+    var gM = AB.range("tr-mfu", function (v) { return Math.round(v * 100) + "%"; }, draw);
+    var gPrec = AB.seg("tr-prec", draw);
+    var REF = [["GPT-3 175B", 3.14e23], ["Llama 3 8B", 6 * 8.03e9 * 15e12], ["DeepSeek-V3 (활성)", 6 * 37e9 * 14.8e12], ["Llama 3 70B", 6 * 70.6e9 * 15e12], ["Llama 3.1 405B", 3.8e25]];
+    var geo = null;
+    function C() { return 6 * Math.pow(10, gN()) * Math.pow(10, gD()); }
+    var cv = AB.canvas($("ds-cv-train"), function (ctx, w, h) {
+      var P = AB.palette(), lo = 20, hi = 27, left = 24, right = w - 24, ay = h * 0.58;
+      var X = function (c) { return left + (Math.log10(c) - lo) / (hi - lo) * (right - left); };
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(left, ay); ctx.lineTo(right, ay); ctx.stroke();
+      ctx.font = font(11, true); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      for (var e = lo; e <= hi; e++) { ctx.beginPath(); ctx.moveTo(X(Math.pow(10, e)), ay - 4); ctx.lineTo(X(Math.pow(10, e)), ay + 4); ctx.stroke(); ctx.fillText("1e" + e, X(Math.pow(10, e)), ay + 8); }
+      ctx.font = font(12); ctx.fillText("학습 연산량 C (FLOPs, 로그)", (left + right) / 2, h - 20);
+      REF.forEach(function (r, i) {
+        var x = X(r[1]), up = i % 2 === 0;
+        ctx.strokeStyle = AB.alpha(P.dim, 0.6); ctx.beginPath(); ctx.moveTo(x, ay); ctx.lineTo(x, up ? ay - 34 : ay + 30); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "center"; ctx.textBaseline = up ? "bottom" : "top";
+        ctx.fillText(r[0], AB.clamp(x, left + 40, right - 40), up ? ay - 36 : ay + 32);
+      });
+      var c = C(), x = X(c);
+      ctx.fillStyle = AB.alpha(P.accent2, 0.2); ctx.beginPath(); ctx.arc(x, ay, 13, 0, 7); ctx.fill();
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(x, ay, 7, 0, 7); ctx.fill();
+      ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText("현재 " + c.toExponential(1).replace("e+", "e"), AB.clamp(x, left + 50, right - 50), ay - 62 > 10 ? ay - 62 : 14);
+      geo = { X: X, left: left, right: right, lo: lo, hi: hi };
+    }, { aspect: 0.32, minHeight: 190, maxHeight: 240 });
+    function draw() {
+      cv.redraw();
+      var c = C(), g = GPUS[gGpu()], n = Math.round(Math.pow(2, gG()));
+      var sec = c / (n * (gPrec() === "8" ? g.fl8 : g.fl) * gM());
+      AB.stat("tr-o-c", sci(c) + "<small> FLOPs</small>");
+      AB.stat("tr-o-days", (sec / 86400 >= 1 ? (sec / 86400).toFixed(sec / 86400 < 10 ? 1 : 0) + "<small> 일</small>" : (sec / 3600).toFixed(1) + "<small> 시간</small>"));
+      AB.stat("tr-o-gh", AB.big(sec / 3600 * n) + "<small> GPU·h</small>");
+      AB.stat("tr-o-ratio", num(Math.pow(10, gD() - gN())) + "<small> 토큰/파라미터</small>");
+    }
+    $("tr-preset").addEventListener("click", function () {
+      $("tr-gpu").value = "h100"; setPrec("16"); gN.set(Math.log10(405.9e9)); gD.set(Math.log10(15.6e12)); gG.set(14); gM.set(0.4);
+    });
+    $("tr-preset-ds").addEventListener("click", function () {
+      $("tr-gpu").value = "h100"; setPrec("8"); gN.set(Math.log10(37e9)); gD.set(Math.log10(14.8e12)); gG.set(11); gM.set(0.2);
+    });
+    function setPrec(v) { Array.prototype.forEach.call($("tr-prec").querySelectorAll("button"), function (b) { if (b.dataset.value === v && !b.classList.contains("on")) b.click(); }); }
+    drag(cv.canvas, {
+      down: function (x) { this.move(x); },
+      move: function (x) {
+        if (!geo) return;
+        var lc = geo.lo + AB.clamp((x - geo.left) / (geo.right - geo.left), 0, 1) * (geo.hi - geo.lo);
+        var d = lc - Math.log10(6) - gN();
+        gD.set(Math.round(AB.clamp(d, 10, 14) * 100) / 100);
+      }
+    });
+    draw();
+  })();
+})();
+</script>
+</body>
+</html>

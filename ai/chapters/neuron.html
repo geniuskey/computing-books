@@ -1,0 +1,1281 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>뉴런과 신경망 · AIBook</title>
+<meta name="description" content="인공 뉴런과 퍼셉트론, XOR 문제, 활성화 함수, 은닉층이 공간을 접는 원리, 브라우저에서 역전파로 학습하는 신경망 플레이그라운드, 보편 근사 정리, 출력층과 소프트맥스, 파라미터 수 세기까지.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .nr-drag { touch-action: none; cursor: crosshair; }
+  .nr-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .nr-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .nr-two > div + div { border-left: 1px solid var(--border); }
+  @media (max-width: 600px) { .nr-two { grid-template-columns: minmax(0, 1fr); } .nr-two > div + div { border-left: 0; border-top: 1px solid var(--border); } }
+  .nr-two .cap { position: absolute; left: 10px; top: 6px; font-size: 12px; color: var(--text-dim); pointer-events: none; background: color-mix(in srgb, var(--canvas-bg) 75%, transparent); padding: 0 6px; border-radius: 4px; }
+  .nr-two > div { position: relative; }
+  .nr-sl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; }
+  .nr-sl .ctrl { font-size: 12.5px; }
+  .nr-play-loss { border-top: 1px solid var(--border); }
+  .nr-ptable td, .nr-ptable th { font-size: 13.5px; padding: 6px 10px; white-space: nowrap; }
+  .nr-mini { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin: 0; }
+  figure.diagram svg.nr-narrow { max-width: 640px; margin: 0 auto; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="neuron">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 02</div>
+    <h1>뉴런과 신경망</h1>
+    <p class="lead">인공 뉴런은 놀랄 만큼 단순하다. 입력과 가중치의 내적에 편향을 더하고, 그 결과를 구부러진 함수 하나에 통과시킨다. 그게 전부다. 그런데 이 단순한 부품을 층층이 쌓으면 원 안팎을 가르고, 나선을 풀고, 이론적으로는 어떤 연속 함수든 흉내 낼 수 있다. 이 장에서는 직선 하나밖에 못 긋는 퍼셉트론에서 출발해, 은닉층이 공간을 '접어서' 문제를 쉽게 만드는 과정을 직접 보고, 브라우저 안에서 실제 역전파로 신경망을 학습시킨다.</p>
+    <ul class="objectives">
+      <li>인공 뉴런 \(y=\varphi(\mathbf w\cdot\mathbf x + b)\)의 구성과 생물 뉴런과의 유사점·차이를 설명할 수 있다.</li>
+      <li>퍼셉트론의 결정 경계가 직선(초평면)인 이유와 퍼셉트론 학습 규칙을 이해하고, XOR가 왜 풀리지 않는지 안다.</li>
+      <li>step·sigmoid·tanh·ReLU·GELU·SiLU의 모양과 도함수, 포화 영역의 의미를 비교할 수 있다.</li>
+      <li>은닉층이 입력 공간을 휘고 접어 선형 분리 가능하게 만드는 원리를 설명할 수 있다.</li>
+      <li>보편 근사 정리의 의미를 ReLU 조각 합으로 이해하고, 깊이와 너비의 역할 차이를 안다.</li>
+      <li>출력층(회귀·분류, 로짓, 소프트맥스, 교차 엔트로피)을 구성하고 MLP의 파라미터 수를 직접 셀 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="bio">
+    <h2>생물 뉴런과 인공 뉴런</h2>
+    <p>사람의 뇌에는 약 860억 개의 뉴런이 있고, 각 뉴런은 수천 개의 다른 뉴런과 <span class="term">시냅스</span><span class="en">(synapse)</span>로 연결된다. 뉴런은 가지돌기<span class="en">(dendrite)</span>로 신호를 받아 세포체<span class="en">(soma)</span>에서 모으고, 모인 전위가 문턱을 넘으면 축삭<span class="en">(axon)</span>을 따라 전기 펄스(활동 전위)를 내보낸다. 시냅스마다 신호를 얼마나 세게 전달할지가 다르고, 학습은 이 연결 강도가 바뀌는 과정이다.</p>
+    <p>1943년 McCulloch와 Pitts는 이 구조를 극도로 단순화한 수학 모델을 제안했다. 입력 \(x_i\)마다 연결 강도 \(w_i\)(<span class="term">가중치</span>)를 곱해 더하고, <span class="term">편향</span><span class="en">(bias)</span> \(b\)를 더한 뒤, <span class="term">활성화 함수</span><span class="en">(activation function)</span> \(\varphi\)를 통과시킨다.</p>
+    <div class="formula">$$y = \varphi\Big(\sum_{i=1}^{d} w_i x_i + b\Big) = \varphi(\mathbf w\cdot\mathbf x + b) = \varphi(z)$$
+      <div class="where">\(z = \mathbf w\cdot\mathbf x + b\)를 <strong>사전 활성화</strong><span class="en">(pre-activation)</span>라 부른다. <a href="vector.html">1장</a>에서 본 대로 내적 \(\mathbf w\cdot\mathbf x\)는 "입력이 가중치 패턴 \(\mathbf w\)와 얼마나 닮았나"이고, \(b\)는 얼마나 닮아야 반응할지 정하는 문턱이다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="생물 뉴런과 인공 뉴런 비교">
+        <defs>
+          <marker id="nr-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+          <marker id="nr-ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+        </defs>
+        <text x="190" y="24" text-anchor="middle" class="t-acc">생물 뉴런</text>
+        <g class="s-line" style="stroke-width:2">
+          <path d="M60 80 Q90 110 112 130"/><path d="M40 150 Q80 150 108 150"/><path d="M60 220 Q90 190 112 170"/>
+          <path d="M70 60 L80 90 M45 130 L60 145 M48 235 L70 210"/>
+        </g>
+        <ellipse cx="140" cy="150" rx="34" ry="30" class="f-acc-soft"/>
+        <circle cx="140" cy="150" r="9" class="f-acc" style="opacity:.6"/>
+        <path d="M174 150 H310" style="stroke:var(--accent);stroke-width:5;fill:none;opacity:.55"/>
+        <g style="fill:var(--surface);stroke:var(--border)"><rect x="196" y="143" width="24" height="14" rx="6"/><rect x="232" y="143" width="24" height="14" rx="6"/><rect x="268" y="143" width="24" height="14" rx="6"/></g>
+        <path d="M310 150 L340 125 M310 150 L345 150 M310 150 L340 175" class="s-line" style="stroke-width:2"/>
+        <circle cx="342" cy="125" r="4" class="f-acc"/><circle cx="347" cy="150" r="4" class="f-acc"/><circle cx="342" cy="175" r="4" class="f-acc"/>
+        <text x="70" y="262" text-anchor="middle" class="t-dim">가지돌기</text><text x="70" y="278" text-anchor="middle" class="t-mono">입력 수신</text>
+        <text x="140" y="205" text-anchor="middle" class="t-dim">세포체</text><text x="140" y="221" text-anchor="middle" class="t-mono">합산·문턱</text>
+        <text x="245" y="130" text-anchor="middle" class="t-dim">축삭</text>
+        <text x="330" y="210" text-anchor="middle" class="t-dim">시냅스</text><text x="330" y="226" text-anchor="middle" class="t-mono">연결 강도</text>
+
+        <path d="M385 40 V270" class="s-axis" style="stroke-dasharray:4 4"/>
+
+        <text x="600" y="24" text-anchor="middle" class="t-acc">인공 뉴런</text>
+        <g>
+          <circle cx="440" cy="80" r="16" class="f-elev"/><text x="440" y="85" text-anchor="middle" class="t">x₁</text>
+          <circle cx="440" cy="150" r="16" class="f-elev"/><text x="440" y="155" text-anchor="middle" class="t">x₂</text>
+          <circle cx="440" cy="220" r="16" class="f-elev"/><text x="440" y="225" text-anchor="middle" class="t">x₃</text>
+        </g>
+        <path d="M456 84 L560 140" class="s-line" marker-end="url(#nr-ar)"/><path d="M456 150 L558 150" class="s-line" marker-end="url(#nr-ar)"/><path d="M456 216 L560 160" class="s-line" marker-end="url(#nr-ar)"/>
+        <text x="500" y="100" class="t-mono" style="fill:var(--accent-2)">w₁</text><text x="500" y="143" class="t-mono" style="fill:var(--accent-2)">w₂</text><text x="500" y="208" class="t-mono" style="fill:var(--accent-2)">w₃</text>
+        <circle cx="586" cy="150" r="26" class="f-acc-soft"/><text x="586" y="157" text-anchor="middle" class="t" style="font-size:20px">Σ</text>
+        <text x="586" y="104" text-anchor="middle" class="t-mono">+ b</text><path d="M586 110 V122" class="s-line" marker-end="url(#nr-ar)"/>
+        <path d="M612 150 H646" class="s-line" marker-end="url(#nr-ar)"/>
+        <text x="629" y="140" text-anchor="middle" class="t-mono">z</text>
+        <rect x="650" y="124" width="60" height="52" rx="8" class="f-acc2-soft"/>
+        <path d="M658 166 L676 166 Q682 166 684 150 Q686 134 692 134 L702 134" style="stroke:var(--accent-2);stroke-width:2;fill:none"/>
+        <text x="680" y="194" text-anchor="middle" class="t-mono">φ(z)</text>
+        <path d="M710 150 H756" style="stroke:var(--accent);stroke-width:2" marker-end="url(#nr-ara)"/>
+        <text x="770" y="155" class="t-acc">y</text>
+        <text x="600" y="262" text-anchor="middle" class="t-dim">가중합 → 편향 → 비선형 함수</text>
+      </svg>
+      <figcaption><b>그림 2-1.</b> 생물 뉴런(왼쪽)과 인공 뉴런(오른쪽)의 대응. 시냅스 강도 ↔ 가중치 \(w_i\), 세포체의 합산 ↔ \(\Sigma\), 발화 문턱 ↔ 편향 \(b\)와 활성화 함수 \(\varphi\). 인공 뉴런은 펄스의 타이밍을 무시하고 '발화율' 같은 실수 하나만 출력한다.</figcaption>
+    </figure>
+    <div class="callout warn"><strong>비유는 여기까지</strong>
+      <p>현대 신경망은 뇌의 시뮬레이션이 아니다. 실제 뉴런은 시간에 따라 펄스를 내고, 수상돌기 자체가 비선형 계산을 하며, 학습 규칙도 역전파와 다르다. 인공 뉴런은 "가중합 + 비선형"이라는 계산 단위로 이해하는 편이 정확하다. 이름만 생물학에서 빌렸을 뿐, 이 책의 나머지는 순수하게 선형대수와 미적분이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="perceptron">
+    <h2>퍼셉트론: 결정 경계는 직선이다</h2>
+    <p>1958년 Rosenblatt의 <span class="term">퍼셉트론</span><span class="en">(perceptron)</span>은 활성화 함수로 계단 함수를 쓰는 뉴런 하나다. \(z = \mathbf w\cdot\mathbf x + b\)가 0 이상이면 클래스 +1, 아니면 −1로 분류한다. 그러면 두 클래스를 가르는 경계는 \(\mathbf w\cdot\mathbf x + b = 0\)인 점들의 집합, 곧 2차원에서는 <strong>직선</strong>, \(d\)차원에서는 <strong>초평면</strong><span class="en">(hyperplane)</span>이다.</p>
+    <p>기하학적으로 \(\mathbf w\)는 경계에 수직인 <strong>법선 벡터</strong>이고 '+1 쪽'을 가리킨다. \(b\)는 경계를 원점에서 얼마나 떨어뜨릴지 정한다(원점에서 경계까지 거리 \(=|b|/\lVert\mathbf w\rVert\)). 한 점의 \(z\) 값은 그 점이 경계에서 법선 방향으로 얼마나 떨어져 있는지(× \(\lVert\mathbf w\rVert\))를 나타낸다.</p>
+    <h3>퍼셉트론 학습 규칙</h3>
+    <p>Rosenblatt의 학습 규칙은 놀랍도록 단순하다. 잘못 분류된 점 \((\mathbf x, y)\)(\(y\in\{-1,+1\}\))을 하나 골라 가중치를 그 점 쪽으로(또는 반대쪽으로) 조금 민다.</p>
+    <div class="formula">$$\text{만약 } y\,(\mathbf w\cdot\mathbf x + b)\le 0 \text{ 이면:}\qquad \mathbf w \leftarrow \mathbf w + \eta\,y\,\mathbf x,\qquad b \leftarrow b + \eta\,y$$
+      <div class="where">\(\eta\)는 학습률. 업데이트 후 그 점의 \(y z\)는 \(\eta(\lVert\mathbf x\rVert^2+1)\)만큼 커져 올바른 쪽으로 이동한다. <strong>퍼셉트론 수렴 정리</strong>: 데이터가 선형 분리 가능하면 이 규칙은 유한 번 안에 모든 점을 맞히는 경계를 찾는다. 분리 불가능하면 영원히 흔들린다.</div>
+    </div>
+
+    <div class="sim" id="sim-nr-perc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>퍼셉트론: 경계선을 직접 돌리거나 학습시키기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nr-cv-perc" class="nr-drag"></canvas><span class="hint">빈 곳 클릭: 점 추가 · 점 클릭: 클래스 바꾸기 · 끌기: 이동</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>클릭 동작</span><div class="seg" id="nr-pc-mode"><button data-value="1" class="on">● +1 추가</button><button data-value="-1">● −1 추가</button><button data-value="del">삭제</button></div></div>
+          <div class="ctrl"><span>데이터</span><div class="nr-btns"><button class="btn" data-nrpd="lin">선형 분리 가능</button><button class="btn" data-nrpd="ovl">겹침</button><button class="btn" data-nrpd="xor">XOR</button></div></div>
+          <label class="ctrl"><span>학습률 η <output id="nr-pc-eta-out"></output></span><input type="range" id="nr-pc-eta" min="0.02" max="1" step="0.02" value="0.2"></label>
+          <div class="ctrl"><span>퍼셉트론 규칙</span><div class="nr-btns"><button class="btn" id="nr-pc-step">학습 1스텝</button><button class="btn primary" id="nr-pc-auto">▶ 자동</button><button class="btn" id="nr-pc-rand">경계 무작위</button></div></div>
+          <p class="nr-mini">경계선의 ● 손잡이를 끌면 평행 이동, 화살표(법선 w) 끝을 끌면 회전한다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">w = (w₁, w₂)</span><span class="v" id="nr-pc-w" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">b</span><span class="v" id="nr-pc-b">—</span></div>
+        <div class="stat"><span class="k">정확도</span><span class="v" id="nr-pc-acc">—</span></div>
+        <div class="stat"><span class="k">업데이트 횟수</span><span class="v" id="nr-pc-n">0</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="nr-pc-st" style="font-size:15px">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① '선형 분리 가능'에서 '경계 무작위' 후 '자동'을 누르면 몇십 번의 업데이트 안에 정확도 100%로 멈춘다(수렴 정리). 노랗게 표시되는 점이 방금 업데이트에 쓰인 오분류 점이다. ② 손잡이로 경계를 직접 돌려서 100%를 만들어 보자. 정답 경계는 하나가 아니다 — 퍼셉트론은 '어떤' 경계든 찾으면 멈출 뿐, 여유(margin)가 가장 큰 경계를 찾지는 않는다. ③ 'XOR'에서는 아무리 돌려도 정확도가 75%를 넘지 못하고, 자동 학습은 끝없이 흔들린다. 다음 절의 주제다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="xor">
+    <h2>XOR 문제와 선형 분리 불가능성</h2>
+    <p>두 입력이 0 또는 1일 때 AND와 OR은 퍼셉트론 하나로 쉽게 표현된다. 예를 들어 AND는 \(\mathbf w=(1,1), b=-1.5\), OR은 \(\mathbf w=(1,1), b=-0.5\)다. 그런데 "둘 중 정확히 하나만 1"일 때 1을 내는 <span class="term">XOR</span>은 다르다. 네 점 (0,0), (1,1)은 한 클래스, (0,1), (1,0)은 다른 클래스인데, 대각선으로 엇갈려 있어 어떤 직선으로도 나눌 수 없다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 260" role="img" aria-label="AND, OR, XOR의 선형 분리 가능성">
+        <g transform="translate(40,30)">
+          <text x="100" y="0" text-anchor="middle" class="t-acc">AND</text>
+          <rect x="30" y="20" width="140" height="140" class="f-surface"/>
+          <path d="M100 20 L170 90" style="stroke:var(--ok);stroke-width:2.2"/>
+          <circle cx="50" cy="140" r="9" style="fill:var(--accent-2)"/><circle cx="150" cy="140" r="9" style="fill:var(--accent-2)"/><circle cx="50" cy="40" r="9" style="fill:var(--accent-2)"/><circle cx="150" cy="40" r="9" style="fill:var(--accent)"/>
+          <text x="100" y="186" text-anchor="middle" class="t-dim">x₁ + x₂ − 1.5 = 0</text><text x="100" y="206" text-anchor="middle" class="t" style="fill:var(--ok)">직선 하나로 분리 ✓</text>
+        </g>
+        <g transform="translate(300,30)">
+          <text x="100" y="0" text-anchor="middle" class="t-acc">OR</text>
+          <rect x="30" y="20" width="140" height="140" class="f-surface"/>
+          <path d="M30 90 L100 160" style="stroke:var(--ok);stroke-width:2.2"/>
+          <circle cx="50" cy="140" r="9" style="fill:var(--accent-2)"/><circle cx="150" cy="140" r="9" style="fill:var(--accent)"/><circle cx="50" cy="40" r="9" style="fill:var(--accent)"/><circle cx="150" cy="40" r="9" style="fill:var(--accent)"/>
+          <text x="100" y="186" text-anchor="middle" class="t-dim">x₁ + x₂ − 0.5 = 0</text><text x="100" y="206" text-anchor="middle" class="t" style="fill:var(--ok)">직선 하나로 분리 ✓</text>
+        </g>
+        <g transform="translate(560,30)">
+          <text x="100" y="0" text-anchor="middle" class="t-acc">XOR</text>
+          <rect x="30" y="20" width="140" height="140" class="f-surface"/>
+          <path d="M30 120 L170 60" style="stroke:var(--bad);stroke-width:2;stroke-dasharray:6 4"/>
+          <path d="M80 20 L120 160" style="stroke:var(--bad);stroke-width:2;stroke-dasharray:6 4;opacity:.6"/>
+          <circle cx="50" cy="140" r="9" style="fill:var(--accent-2)"/><circle cx="150" cy="140" r="9" style="fill:var(--accent)"/><circle cx="50" cy="40" r="9" style="fill:var(--accent)"/><circle cx="150" cy="40" r="9" style="fill:var(--accent-2)"/>
+          <text x="100" y="186" text-anchor="middle" class="t-dim">어떤 직선도 4점 중 1개 이상 틀림</text><text x="100" y="206" text-anchor="middle" class="t" style="fill:var(--bad)">선형 분리 불가 ✗</text>
+        </g>
+        <text x="400" y="252" text-anchor="middle" class="t-mono">가로 x₁, 세로 x₂ ∈ {0,1} · 보라 = 1, 분홍 = 0</text>
+      </svg>
+      <figcaption><b>그림 2-2.</b> AND와 OR은 직선 하나로 1과 0을 나눌 수 있지만 XOR은 불가능하다. 1969년 Minsky와 Papert가 이 한계를 엄밀히 보이면서 신경망 연구는 한동안 침체기('첫 번째 AI 겨울')를 맞았다.</figcaption>
+    </figure>
+    <p>증명도 간단하다. 퍼셉트론이 XOR을 푼다면 \(b\lt0\)((0,0) → 0), \(w_1+b\ge0\), \(w_2+b\ge0\)((1,0), (0,1) → 1), \(w_1+w_2+b\lt0\)((1,1) → 0)이어야 한다. 가운데 두 식을 더하면 \(w_1+w_2+2b\ge0\), 곧 \(w_1+w_2+b\ge -b\gt0\)이 되어 마지막 식과 모순이다.</p>
+    <p>해법은 뉴런을 <strong>여러 층</strong>으로 쌓는 것이다. XOR = (OR) AND NOT (AND)이므로, 첫 층에서 OR 뉴런과 AND 뉴런을 만들고 둘째 층에서 이 둘을 조합하면 된다. 문제는 오랫동안 "여러 층의 가중치를 어떻게 학습시키느냐"였고, 그 답이 1986년 Rumelhart·Hinton·Williams가 널리 알린 <strong>역전파</strong>다(<a href="training.html">3장</a>). 그런데 층을 쌓기만 해서는 안 된다. 활성화 함수가 반드시 비선형이어야 한다.</p>
+    <div class="callout"><strong>선형 층은 아무리 쌓아도 선형이다</strong>
+      <p>활성화 함수 없이 두 층을 쌓으면 \(W_2(W_1\mathbf x+\mathbf b_1)+\mathbf b_2 = (W_2W_1)\mathbf x + (W_2\mathbf b_1+\mathbf b_2)\)로, 행렬 하나짜리 층과 똑같다. 100층을 쌓아도 직선 하나만 긋는다. <a href="vector.html">1장</a>에서 본 대로 선형 변환의 합성은 선형 변환이기 때문이다. 비선형 함수가 끼어야 비로소 공간을 '구부릴' 수 있다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="act">
+    <h2>활성화 함수: 비선형의 재료</h2>
+    <p>활성화 함수는 신경망에 비선형성을 주는 유일한 부품이다. 역사적으로 여러 함수가 쓰였고, 각각 학습 속도와 안정성에 영향을 준다. 핵심 기준은 <strong>도함수</strong>다. <a href="training.html">3장</a>의 역전파에서 기울기는 층을 거꾸로 지나며 각 층 활성화 함수의 도함수를 곱해 간다. 도함수가 0에 가까운 <span class="term">포화 영역</span><span class="en">(saturation)</span>이 넓으면 기울기가 사라져 학습이 멈춘다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>함수</th><th>식</th><th>도함수 범위</th><th>특징·사용처</th></tr></thead>
+      <tbody>
+        <tr><td>계단 (step)</td><td>\(\mathbb 1[z\ge0]\)</td><td>0 (z ≠ 0)</td><td>퍼셉트론. 기울기가 없어 역전파 불가</td></tr>
+        <tr><td>sigmoid</td><td>\(\sigma(z)=\dfrac{1}{1+e^{-z}}\)</td><td>(0, 0.25]</td><td>출력 (0,1) → 확률. 은닉층에선 포화로 기울기 소실</td></tr>
+        <tr><td>tanh</td><td>\(\tanh z = 2\sigma(2z)-1\)</td><td>(0, 1]</td><td>0 중심 출력. RNN·LSTM 내부</td></tr>
+        <tr><td>ReLU</td><td>\(\max(0,z)\)</td><td>{0, 1}</td><td>계산이 싸고 양수 쪽 포화 없음. 2012년 이후 CNN의 표준. 음수 쪽 '죽은 뉴런' 문제</td></tr>
+        <tr><td>GELU</td><td>\(z\,\Phi(z)\)</td><td>약 −0.13 ~ 1.13</td><td>매끄러운 ReLU. BERT·GPT-2·GPT-3</td></tr>
+        <tr><td>SiLU / Swish</td><td>\(z\,\sigma(z)\)</td><td>약 −0.1 ~ 1.1</td><td>Llama·Mistral 계열 FFN의 SwiGLU 게이트</td></tr>
+      </tbody>
+    </table></div>
+    <p>sigmoid의 도함수 \(\sigma'(z)=\sigma(z)(1-\sigma(z))\)는 최댓값이 \(z=0\)에서 0.25다. 10층을 지나면 기울기는 최대 \(0.25^{10}\approx 10^{-6}\)배로 줄어든다. ReLU는 양수 영역에서 도함수가 정확히 1이라 이런 감쇠가 없다. 이것이 깊은 신경망이 실용화된 결정적 요인 중 하나였다. GELU와 SiLU는 0 근처를 매끄럽게 하고 음수 쪽에 작은 음의 값을 허용해, 대규모 Transformer에서 약간 더 좋은 성능을 보인다.</p>
+
+    <div class="sim" id="sim-nr-act">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>활성화 함수 탐색기: 값, 도함수, 포화 영역</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nr-cv-act" class="nr-drag" style="cursor:ew-resize"></canvas><span class="hint" style="top:6px;bottom:auto">좌우로 끌어 입력 z를 옮기세요</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>함수</span><div class="seg" id="nr-act-f"><button data-value="step">step</button><button data-value="sigmoid">sigmoid</button><button data-value="tanh">tanh</button><button data-value="relu" class="on">ReLU</button><button data-value="gelu">GELU</button><button data-value="silu">SiLU</button></div></div>
+          <label class="check"><input type="checkbox" id="nr-act-all"> 다른 함수도 흐리게 겹치기</label>
+          <label class="check"><input type="checkbox" id="nr-act-sat" checked> 포화 영역 표시 (|φ′| &lt; 0.05)</label>
+          <label class="ctrl"><span>깊이 L (기울기 곱 계산) <output id="nr-act-L-out"></output></span><input type="range" id="nr-act-L" min="1" max="50" step="1" value="10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">z</span><span class="v" id="nr-act-z">—</span></div>
+        <div class="stat"><span class="k">φ(z)</span><span class="v" id="nr-act-y">—</span></div>
+        <div class="stat"><span class="k">φ′(z)</span><span class="v" id="nr-act-d">—</span></div>
+        <div class="stat"><span class="k">φ′(z)<sup>L</sup> (L층 통과 후 기울기 배율)</span><span class="v" id="nr-act-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① sigmoid에서 z를 0에 두면 φ′ = 0.25가 최대다. L = 10이면 기울기 배율이 10<sup>−6</sup>까지 떨어진다. z = 4로 옮기면 φ′ ≈ 0.018로 포화 영역에 들어가 더 심해진다. ② tanh는 z = 0에서 φ′ = 1이라 sigmoid보다 낫지만 |z| &gt; 2.5면 역시 포화된다. ③ ReLU는 z &gt; 0이면 φ′ = 1이라 L을 50으로 해도 배율 1이다. 대신 z &lt; 0에서는 정확히 0 — 이 뉴런으로는 기울기가 전혀 흐르지 않는다. ④ GELU·SiLU의 음수 쪽 작은 '골짜기'를 찾아보자(최솟값 약 −0.17, −0.28).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="fold">
+    <h2>은닉층은 공간을 휘고 접는다</h2>
+    <p>층 하나 \(\mathbf h = \varphi(W\mathbf x+\mathbf b)\)가 하는 일을 기하학으로 보자. 먼저 \(W\mathbf x+\mathbf b\)는 <a href="vector.html">1장</a>의 선형 변환(+평행 이동)이다. 격자를 돌리고, 늘이고, 기울인다. 그다음 ReLU가 성분마다 음수를 0으로 바꾼다. 이것은 공간에서 각 좌표축의 음수 쪽 영역을 축 위로 <strong>눌러 접는</strong> 것이다. 원래 공간에서 보면, 은닉 뉴런 \(j\)마다 직선 \(\mathbf w_j\cdot\mathbf x+b_j=0\)이 '접는 선'이 된다.</p>
+    <p>접힌 공간에서는 원래 멀리 떨어져 있던 점들이 겹치기도 하고, 꼬여 있던 클래스가 한쪽으로 모이기도 한다. 그러면 다음 층은 접힌 공간 위에 다시 직선을 긋기만 하면 된다. <strong>은닉층의 역할은 마지막 층이 직선 하나로 풀 수 있는 공간을 만들어 주는 것</strong>이다. 아래 시뮬레이터는 2 → 2(ReLU) 변환을 나란히 보여 준다. 오른쪽 은닉 공간에서 점선은 로지스틱 회귀로 찾은 최적 직선이다.</p>
+
+    <div class="sim" id="sim-nr-fold">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>공간 접기: 입력 공간 → 은닉 공간 (2 → 2, ReLU)</h3></div>
+      <div class="sim-view nr-two">
+        <div><canvas id="nr-cv-fold1" class="nr-drag"></canvas><span class="cap">입력 공간 x — 접는 선 끌기 가능</span></div>
+        <div><canvas id="nr-cv-fold2"></canvas><span class="cap">은닉 공간 h = ReLU(Wx + b)</span></div>
+      </div>
+      <div class="sim-controls">
+        <div class="ctrl"><span>프리셋</span><div class="nr-btns"><button class="btn primary" data-nrf="xor">XOR 풀이</button><button class="btn" data-nrf="lin">회전·늘이기만</button><button class="btn" data-nrf="rand">무작위</button></div></div>
+        <label class="check"><input type="checkbox" id="nr-f-relu" checked> ReLU 적용 (끄면 순수 선형 변환)</label>
+        <div class="nr-sl">
+          <label class="ctrl"><span>w₁₁ <output id="nr-f-w11-out"></output></span><input type="range" id="nr-f-w11" min="-2" max="2" step="0.05" value="1"></label>
+          <label class="ctrl"><span>w₁₂ <output id="nr-f-w12-out"></output></span><input type="range" id="nr-f-w12" min="-2" max="2" step="0.05" value="1"></label>
+          <label class="ctrl"><span>b₁ <output id="nr-f-b1-out"></output></span><input type="range" id="nr-f-b1" min="-2" max="2" step="0.05" value="0"></label>
+          <label class="ctrl"><span>w₂₁ <output id="nr-f-w21-out"></output></span><input type="range" id="nr-f-w21" min="-2" max="2" step="0.05" value="1"></label>
+          <label class="ctrl"><span>w₂₂ <output id="nr-f-w22-out"></output></span><input type="range" id="nr-f-w22" min="-2" max="2" step="0.05" value="1"></label>
+          <label class="ctrl"><span>b₂ <output id="nr-f-b2-out"></output></span><input type="range" id="nr-f-b2" min="-2" max="2" step="0.05" value="-1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">은닉 공간에서 선형 분리</span><span class="v" id="nr-f-sep">—</span></div>
+        <div class="stat"><span class="k">최적 직선 정확도</span><span class="v" id="nr-f-acc">—</span></div>
+        <div class="stat"><span class="k">h(0,0) · h(1,0) · h(0,1) · h(1,1)</span><span class="v" id="nr-f-h" style="font-size:13px">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 'XOR 풀이'에서 은닉 뉴런 1은 x₁+x₂를, 뉴런 2는 x₁+x₂−1을 계산한 뒤 ReLU로 음수를 자른다. (1,0)과 (0,1)은 은닉 공간에서 같은 점 (1,0)으로 합쳐지고, (0,0)과 (1,1)은 그 양옆으로 갈라져 직선 하나로 분리된다. 왼쪽 배경색은 이 직선을 원래 공간으로 되돌린 결정 영역 — 띠 모양이다. ② ReLU를 끄면 격자는 평행사변형으로만 변하고 XOR은 다시 풀리지 않는다. ③ 왼쪽에서 접는 선의 손잡이를 끌어 다른 해법을 찾아보자. 두 접는 선이 네 점을 '가운데 두 점 vs 바깥 두 점'으로 나누면 풀린다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="playground">
+    <h2>신경망 플레이그라운드: 브라우저에서 학습시키기</h2>
+    <p>이제 여러 은닉층을 쌓은 <span class="term">다층 퍼셉트론</span><span class="en">(MLP, Multi-Layer Perceptron)</span>을 실제로 학습시켜 보자. 구조는 입력 2개 → 은닉층 1~3개 → 출력 1개(sigmoid, 클래스 1일 확률)이고, 손실은 이진 교차 엔트로피다. 기울기는 역전파로 정확히 계산하며, 최적화는 Adam 또는 SGD로 미니배치(10개)마다 갱신한다. 역전파와 Adam의 원리는 <a href="training.html">3장</a>에서 자세히 다룬다. 여기서는 '학습되는 모습'에 집중하자.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="다층 퍼셉트론 구조" class="nr-narrow">
+        <g class="s-line" style="stroke-width:1;opacity:.55">
+          <path d="M120 95 L300 50 M120 95 L300 100 M120 95 L300 150 M120 95 L300 200 M120 155 L300 50 M120 155 L300 100 M120 155 L300 150 M120 155 L300 200"/>
+          <path d="M300 50 L480 50 M300 50 L480 100 M300 50 L480 150 M300 50 L480 200 M300 100 L480 50 M300 100 L480 100 M300 100 L480 150 M300 100 L480 200 M300 150 L480 50 M300 150 L480 100 M300 150 L480 150 M300 150 L480 200 M300 200 L480 50 M300 200 L480 100 M300 200 L480 150 M300 200 L480 200"/>
+          <path d="M480 50 L660 125 M480 100 L660 125 M480 150 L660 125 M480 200 L660 125"/>
+        </g>
+        <circle cx="120" cy="95" r="16" class="f-elev"/><circle cx="120" cy="155" r="16" class="f-elev"/>
+        <text x="120" y="100" text-anchor="middle" class="t">x₁</text><text x="120" y="160" text-anchor="middle" class="t">x₂</text>
+        <circle cx="300" cy="50" r="15" class="f-acc-soft"/><circle cx="300" cy="100" r="15" class="f-acc-soft"/><circle cx="300" cy="150" r="15" class="f-acc-soft"/><circle cx="300" cy="200" r="15" class="f-acc-soft"/>
+        <circle cx="480" cy="50" r="15" class="f-acc-soft"/><circle cx="480" cy="100" r="15" class="f-acc-soft"/><circle cx="480" cy="150" r="15" class="f-acc-soft"/><circle cx="480" cy="200" r="15" class="f-acc-soft"/>
+        <circle cx="660" cy="125" r="18" class="f-acc2-soft"/><text x="660" y="130" text-anchor="middle" class="t">ŷ</text>
+        <text x="210" y="238" text-anchor="middle" class="t-mono">W₁: 4×2, b₁: 4</text>
+        <text x="390" y="238" text-anchor="middle" class="t-mono">W₂: 4×4, b₂: 4</text>
+        <text x="570" y="238" text-anchor="middle" class="t-mono">W₃: 1×4, b₃: 1</text>
+        <text x="300" y="20" text-anchor="middle" class="t-dim">은닉층 1 (ReLU)</text><text x="480" y="20" text-anchor="middle" class="t-dim">은닉층 2 (ReLU)</text><text x="660" y="90" text-anchor="middle" class="t-dim">출력 (sigmoid)</text>
+        <text x="120" y="60" text-anchor="middle" class="t-dim">입력</text>
+      </svg>
+      <figcaption><b>그림 2-3.</b> 2 → 4 → 4 → 1 MLP. 화살표 하나가 가중치 하나이고, 층과 층 사이 연결 전체가 행렬 \(W_l\) 하나다. 파라미터 수 = (4·2+4) + (4·4+4) + (1·4+1) = 37. 층마다 \(\mathbf h_l = \varphi(W_l\mathbf h_{l-1}+\mathbf b_l)\)을 계산하는 것을 <strong>순전파</strong>라 한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-nr-play">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>신경망 플레이그라운드 (실제 역전파 학습)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view">
+          <canvas id="nr-cv-play" class="nr-drag"></canvas>
+          <canvas id="nr-cv-loss" class="nr-play-loss"></canvas>
+        </div>
+        <div class="sim-controls">
+          <div class="nr-btns"><button class="btn primary" id="nr-pl-run">▶ 학습 시작</button><button class="btn" id="nr-pl-reset">가중치 초기화</button></div>
+          <div class="ctrl"><span>데이터셋</span><div class="seg" id="nr-pl-ds"><button data-value="circle" class="on">원</button><button data-value="xor">XOR</button><button data-value="moons">반달</button><button data-value="spiral">나선</button></div></div>
+          <label class="ctrl"><span>은닉층 수 <output id="nr-pl-L-out"></output></span><input type="range" id="nr-pl-L" min="1" max="3" step="1" value="2"></label>
+          <label class="ctrl"><span>층당 뉴런 수 <output id="nr-pl-H-out"></output></span><input type="range" id="nr-pl-H" min="2" max="8" step="1" value="4"></label>
+          <div class="ctrl"><span>활성화</span><div class="seg" id="nr-pl-act"><button data-value="relu" class="on">ReLU</button><button data-value="tanh">tanh</button></div></div>
+          <div class="ctrl"><span>최적화</span><div class="seg" id="nr-pl-opt"><button data-value="adam" class="on">Adam</button><button data-value="sgd">SGD</button></div></div>
+          <label class="ctrl"><span>학습률 <output id="nr-pl-lr-out"></output></span><input type="range" id="nr-pl-lr" min="0" max="7" step="1" value="4"></label>
+          <div class="ctrl"><span>캔버스 클릭으로 점 추가</span><div class="seg" id="nr-pl-add"><button data-value="1" class="on">클래스 1</button><button data-value="0">클래스 0</button></div></div>
+          <label class="check"><input type="checkbox" id="nr-pl-test" checked> 테스트 점 표시 (속 빈 원)</label>
+        </div>
+      </div>
+      <div class="sim-panel"><canvas id="nr-cv-net"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">에폭</span><span class="v" id="nr-pl-ep">0</span></div>
+        <div class="stat"><span class="k">학습 손실</span><span class="v" id="nr-pl-tr">—</span></div>
+        <div class="stat"><span class="k">테스트 손실</span><span class="v" id="nr-pl-te">—</span></div>
+        <div class="stat"><span class="k">테스트 정확도</span><span class="v" id="nr-pl-acc">—</span></div>
+        <div class="stat"><span class="k">파라미터 수</span><span class="v" id="nr-pl-np">—</span></div>
+      </div>
+      <div class="sim-note">위: 결정 경계 히트맵(보라 = 클래스 1 확률 높음, 분홍 = 클래스 0). 아래: 학습(실선)·테스트(점선) 손실. 패널: 각 은닉 뉴런의 출력을 입력 공간 전체에 그린 작은 지도. 해볼 것: ① '원'은 은닉층 1개·뉴런 2개로는 잘 안 되고(직선 두 개로 원을 감쌀 수 없다), 뉴런 3~4개면 삼각형·사각형 모양의 경계로 풀린다. ② '나선'은 1층 × 4뉴런으론 거의 불가능하다. 3층 × 8뉴런, 학습률 0.01로 두면 수백 에폭(30초 남짓) 뒤에 테스트 정확도 90% 이상으로 풀린다. ③ 학습률을 최대로 올리면 손실이 요동치거나 폭발한다. SGD는 같은 학습률에서 Adam보다 훨씬 느리다. ④ 패널의 첫 층 뉴런 지도는 항상 '직선 하나로 나뉜 반평면'이고, 깊은 층으로 갈수록 모양이 복잡해진다 — 층이 접기를 거듭한 결과다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="uat">
+    <h2>보편 근사 정리: ReLU 조각으로 무엇이든</h2>
+    <p>은닉층 하나짜리 신경망은 얼마나 강력할까? <span class="term">보편 근사 정리</span><span class="en">(Universal Approximation Theorem)</span>는 놀라운 답을 준다. 비다항식 활성화 함수를 쓰는 은닉층 하나짜리 신경망은, 뉴런 수만 충분하면 유계 구간 위의 <strong>어떤 연속 함수든 원하는 정확도로 근사</strong>할 수 있다(Cybenko 1989, Hornik 1991, Leshno 외 1993).</p>
+    <p>ReLU로 보면 직관이 명확하다. 은닉 뉴런 하나 \(a\cdot\mathrm{ReLU}(x - t)\)는 \(x=t\)에서 꺾이는 '경첩'이다. 이런 경첩을 여러 개 더하면, 꺾이는 점마다 기울기가 바뀌는 <strong>꺾은선</strong>이 된다. 꺾은선은 점을 충분히 촘촘히 찍으면 어떤 연속 곡선이든 따라갈 수 있다.</p>
+    <div class="formula">$$\hat f(x) = c + \sum_{k=1}^{N} a_k\,\mathrm{ReLU}(x - t_k)$$
+      <div class="where">\(t_k\)는 꺾이는 위치(\(=-b_k/w_k\)), \(a_k\)는 그 점에서 기울기가 바뀌는 양. 실제 신경망은 \(w_k, b_k, a_k\)를 모두 학습하지만, 아래 시뮬레이터는 \(t_k\)를 고정하고 \(a_k, c\)만 <strong>최소제곱법</strong>으로 정확히 푼다(정규방정식 \(\Phi^\top\Phi\,\mathbf a = \Phi^\top\mathbf y\)).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="ReLU 경첩 함수들의 합이 꺾은선이 되는 모습">
+        <path d="M40 170 H340 M40 40 V290" class="s-axis"/>
+        <path d="M40 170 L340 70" style="stroke:var(--accent);stroke-width:1.6;opacity:.6;fill:none"/>
+        <path d="M40 170 L145 170 L340 300" style="stroke:var(--accent-2);stroke-width:1.6;opacity:.6;fill:none"/>
+        <path d="M40 170 L250 170 L340 95" style="stroke:var(--warn);stroke-width:1.6;opacity:.7;fill:none"/>
+        <path d="M40 170 L145 135 L250 170 L340 125" style="stroke:var(--ok);stroke-width:3.2;fill:none"/>
+        <circle cx="145" cy="135" r="4" style="fill:var(--ok)"/><circle cx="250" cy="170" r="4" style="fill:var(--ok)"/>
+        <text x="300" y="66" class="t-mono" style="fill:var(--accent)">ReLU(x)</text>
+        <text x="200" y="250" class="t-mono" style="fill:var(--accent-2)">−2·ReLU(x−0.35)</text>
+        <text x="258" y="112" class="t-mono" style="fill:var(--warn)">2.5·ReLU(x−0.7)</text>
+        <text x="60" y="120" class="t" style="fill:var(--ok)">합 = 꺾은선</text>
+        <text x="190" y="24" text-anchor="middle" class="t-acc">경첩 3개 → 꺾인 점 2개</text>
+        <path d="M430 170 H770" class="s-axis"/>
+        <path d="M440.0 170.0 L448.0 157.5 L456.0 145.3 L464.0 133.7 L472.0 123.0 L480.0 113.4 L488.0 105.3 L496.0 98.7 L504.0 93.9 L512.0 91.0 L520.0 90.0 L528.0 91.0 L536.0 93.9 L544.0 98.7 L552.0 105.3 L560.0 113.4 L568.0 123.0 L576.0 133.7 L584.0 145.3 L592.0 157.5 L600.0 170.0 L608.0 182.5 L616.0 194.7 L624.0 206.3 L632.0 217.0 L640.0 226.6 L648.0 234.7 L656.0 241.3 L664.0 246.1 L672.0 249.0 L680.0 250.0 L688.0 249.0 L696.0 246.1 L704.0 241.3 L712.0 234.7 L720.0 226.6 L728.0 217.0 L736.0 206.3 L744.0 194.7 L752.0 182.5 L760.0 170.0" style="stroke:var(--text-faint);stroke-width:5;fill:none;opacity:.6"/>
+        <path d="M440 170 L480 113.4 L520 90 L560 113.4 L600 170 L640 226.6 L680 250 L720 226.6 L760 170" style="stroke:var(--accent);stroke-width:2.2;fill:none"/>
+        <g style="fill:var(--accent)"><circle cx="480" cy="113.4" r="3"/><circle cx="520" cy="90" r="3"/><circle cx="560" cy="113.4" r="3"/><circle cx="600" cy="170" r="3"/><circle cx="640" cy="226.6" r="3"/><circle cx="680" cy="250" r="3"/><circle cx="720" cy="226.6" r="3"/></g>
+        <text x="600" y="24" text-anchor="middle" class="t-acc">조각 8개로 sin 근사</text>
+        <text x="600" y="286" text-anchor="middle" class="t-dim">조각을 늘리면 오차가 줄어든다 (최대 오차 ∝ 1/N²)</text>
+      </svg>
+      <figcaption><b>그림 2-4.</b> 왼쪽: 서로 다른 위치에서 꺾이는 ReLU 세 개(가는 선)의 합이 꺾은선(굵은 초록)이 된다. 오른쪽: 꺾이는 점을 8개 두면 sin 곡선(회색)을 꺾은선(보라)이 따라간다. 매끄러운 함수라면 조각 수 \(N\)을 두 배로 할 때 오차가 약 1/4로 준다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-nr-uat">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ReLU 조각으로 함수 근사 (최소제곱)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nr-cv-uat" class="nr-drag"></canvas><span class="hint">곡선을 끌면 '사용자 정의' 목표가 됩니다</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>목표 함수</span><div class="seg" id="nr-u-f"><button data-value="sin" class="on">sin</button><button data-value="step">계단</button><button data-value="bump">봉우리</button><button data-value="abs">|sin|</button><button data-value="user">사용자</button></div></div>
+          <label class="ctrl"><span>ReLU 유닛 수 N <output id="nr-u-N-out"></output></span><input type="range" id="nr-u-N" min="1" max="48" step="1" value="6"></label>
+          <div class="ctrl"><span>꺾이는 위치 tₖ</span><div class="seg" id="nr-u-knot"><button data-value="uni" class="on">균등</button><button data-value="rand">무작위</button></div></div>
+          <label class="check"><input type="checkbox" id="nr-u-units" checked> 유닛별 기여 aₖ·ReLU(x−tₖ) 표시</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">은닉 뉴런 N</span><span class="v" id="nr-u-n">—</span></div>
+        <div class="stat"><span class="k">1→N→1 신경망 파라미터</span><span class="v" id="nr-u-p">—</span></div>
+        <div class="stat"><span class="k">RMSE</span><span class="v" id="nr-u-rmse">—</span></div>
+        <div class="stat"><span class="k">최대 오차</span><span class="v" id="nr-u-max">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① sin에서 N을 2 → 4 → 8 → 16으로 늘리며 RMSE를 보자. N을 두 배로 할 때마다 대략 1/4로 줄어든다. ② '계단'은 불연속이라 N을 늘려도 점프 근처의 최대 오차가 잘 줄지 않는다 — 정리가 '연속' 함수를 조건으로 다는 이유다. 대신 오차가 생기는 구간의 폭은 계속 좁아진다. ③ '사용자'에서 점 11개를 끌어 꺾은선 목표를 만들고 N = 10, 균등으로 두면 오차가 정확히 0이 된다. 꺾은선은 ReLU의 합으로 정확히 표현된다. ④ '무작위' 위치는 같은 N에서 대개 더 나쁘다. 실제 학습은 이 위치까지 최적화하므로 훨씬 효율적이다.</div>
+    </div>
+    <div class="callout deep"><strong>그런데 왜 깊게 쌓는가</strong>
+      <p>보편 근사 정리는 '존재'만 보장할 뿐, 필요한 뉴런 수가 얼마나 될지, 학습으로 그 가중치를 찾을 수 있을지는 말해 주지 않는다. 얕은 신경망은 꺾은선 조각을 하나하나 따로 만들어야 하지만, 깊은 신경망은 접기를 반복해 조각 수를 층마다 <strong>곱으로</strong> 늘릴 수 있다. 폭 \(n\)인 ReLU 층 \(L\)개는 많게는 \(n^L\) 수준의 선형 조각을 만든다(Montúfar 외 2014). 종이를 반으로 \(L\)번 접고 한 번 자르면 \(2^L\)개의 조각이 나오는 것과 비슷하다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="output">
+    <h2>출력층: 회귀, 분류, 로짓, 소프트맥스</h2>
+    <p>마지막 층은 문제의 종류에 맞춰 설계한다. 값 하나를 맞히는 <span class="term">회귀</span><span class="en">(regression)</span>라면 활성화 없이 \(\hat y = \mathbf w\cdot\mathbf h + b\)를 그대로 출력하고 평균제곱오차(MSE)로 학습한다. 두 클래스 <span class="term">분류</span>라면 sigmoid로 (0, 1) 확률을 내고 이진 교차 엔트로피를 쓴다(앞의 플레이그라운드). \(K\)개 클래스 중 하나를 고르는 다중 분류에서는 출력 뉴런을 \(K\)개 두고, 각각의 실수 출력 \(z_k\)를 <span class="term">로짓</span><span class="en">(logit)</span>이라 부른다. 로짓을 확률로 바꾸는 함수가 <span class="term">소프트맥스</span><span class="en">(softmax)</span>다.</p>
+    <div class="formula">$$p_k = \operatorname{softmax}(\mathbf z)_k = \frac{e^{z_k/T}}{\sum_{j=1}^{K} e^{z_j/T}},\qquad \mathcal L_\text{CE} = -\sum_k y_k\log p_k = -\log p_{\text{정답}},\qquad \frac{\partial\mathcal L}{\partial z_k} = p_k - y_k\;(T=1)$$
+      <div class="where">\(T\)는 온도(기본 1). \(\mathbf y\)는 정답 클래스만 1이고 나머지가 0인 <strong>원-핫</strong> 벡터. 소프트맥스는 모든 로짓에 같은 상수를 더해도 결과가 변하지 않으며, 지수 때문에 큰 로짓을 과장한다. 교차 엔트로피와 결합하면 기울기가 '예측 − 정답'이라는 깔끔한 형태가 된다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 230" role="img" aria-label="로짓에서 소프트맥스 확률과 원핫 정답 비교">
+        <text x="130" y="22" text-anchor="middle" class="t-acc">로짓 z</text>
+        <path d="M40 130 H220" class="s-axis"/>
+        <rect x="50" y="70" width="26" height="60" class="f-acc"/><rect x="86" y="94" width="26" height="36" class="f-acc"/><rect x="122" y="106" width="26" height="24" class="f-acc"/><rect x="158" y="130" width="26" height="22" class="f-acc2"/><rect x="194" y="130" width="22" height="40" class="f-acc2"/>
+        <text x="63" y="64" text-anchor="middle" class="t-mono">2.0</text><text x="99" y="88" text-anchor="middle" class="t-mono">1.2</text><text x="135" y="100" text-anchor="middle" class="t-mono">0.8</text><text x="171" y="166" text-anchor="middle" class="t-mono">−1</text><text x="205" y="186" text-anchor="middle" class="t-mono">−2</text>
+        <text x="130" y="212" text-anchor="middle" class="t-dim">임의의 실수 (음수 가능)</text>
+        <path d="M250 110 H330" class="s-line" style="stroke-width:2"/><path d="M322 104 L332 110 L322 116" class="s-line" style="stroke-width:2"/>
+        <text x="290" y="98" text-anchor="middle" class="t-mono">softmax</text>
+        <text x="460" y="22" text-anchor="middle" class="t-acc">확률 p</text>
+        <path d="M360 170 H560" class="s-axis"/>
+        <rect x="370" y="76" width="26" height="94" class="f-acc"/><rect x="406" y="128" width="26" height="42" class="f-acc"/><rect x="442" y="142" width="26" height="28" class="f-acc"/><rect x="478" y="165" width="26" height="5" class="f-acc"/><rect x="514" y="168" width="26" height="2" class="f-acc"/>
+        <text x="383" y="70" text-anchor="middle" class="t-mono">.55</text><text x="419" y="122" text-anchor="middle" class="t-mono">.24</text><text x="455" y="136" text-anchor="middle" class="t-mono">.16</text><text x="491" y="159" text-anchor="middle" class="t-mono">.03</text><text x="527" y="162" text-anchor="middle" class="t-mono">.01</text>
+        <text x="460" y="212" text-anchor="middle" class="t-dim">0~1, 합 = 1</text>
+        <text x="700" y="22" text-anchor="middle" class="t-acc">원-핫 정답 y</text>
+        <path d="M610 170 H790" class="s-axis"/>
+        <rect x="620" y="76" width="26" height="94" style="fill:var(--ok)"/>
+        <text x="633" y="70" text-anchor="middle" class="t-mono">1</text><text x="669" y="164" text-anchor="middle" class="t-mono">0</text><text x="705" y="164" text-anchor="middle" class="t-mono">0</text><text x="741" y="164" text-anchor="middle" class="t-mono">0</text><text x="777" y="164" text-anchor="middle" class="t-mono">0</text>
+        <text x="700" y="212" text-anchor="middle" class="t-dim">손실 = −log 0.55 ≈ 0.60</text>
+      </svg>
+      <figcaption><b>그림 2-5.</b> 다중 분류 출력층. 로짓을 소프트맥스로 확률 분포로 바꾸고, 원-핫 정답과의 교차 엔트로피로 손실을 잰다. 언어 모델은 이 \(K\)가 어휘 크기(GPT-2 50,257, Llama 3 128,256)인 거대한 분류기다(<a href="llm.html">7장</a>, <a href="generation.html">8장</a>).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-nr-soft">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>로짓 → 소프트맥스 → 교차 엔트로피</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nr-cv-soft" class="nr-drag"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온도 T <output id="nr-s-T-out"></output></span><input type="range" id="nr-s-T" min="0.1" max="5" step="0.05" value="1"></label>
+          <div class="nr-btns"><button class="btn" id="nr-s-shift">모든 로짓 +1</button><button class="btn" id="nr-s-reset">초기화</button><button class="btn" id="nr-s-grad">기울기 방향으로 1스텝</button></div>
+          <p class="nr-mini">왼쪽 막대를 위아래로 끌면 로짓이 바뀌고, 클래스 이름(또는 오른쪽 막대)을 누르면 정답이 바뀐다. '기울기 방향으로 1스텝'은 z ← z − 1.0·(p − y)를 적용한다. 학습이 로짓을 어떻게 움직이는지 볼 수 있다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">p(정답)</span><span class="v" id="nr-s-pt">—</span></div>
+        <div class="stat"><span class="k">교차 엔트로피 (nat)</span><span class="v" id="nr-s-ce">—</span></div>
+        <div class="stat"><span class="k">엔트로피 (bit)</span><span class="v" id="nr-s-H">—</span></div>
+        <div class="stat"><span class="k">∂L/∂z = (p − y)/T</span><span class="v" id="nr-s-g" style="font-size:13px">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① '모든 로짓 +1'을 여러 번 눌러도 확률은 전혀 변하지 않는다(소프트맥스는 차이만 본다). ② 정답 로짓을 다른 것보다 3만큼 크게 만들면 p ≈ 0.9를 넘고 손실은 0.1 근처로 떨어진다. 반대로 정답 로짓을 최하위로 내리면 손실이 급격히 커진다. ③ T를 0.2로 낮추면 분포가 1위에 몰리고(엔트로피 ↓), 5로 높이면 거의 균등해진다 — <a href="generation.html">8장</a> 샘플링 온도의 정체다. ④ '1스텝'을 반복하면 정답 로짓은 올라가고 나머지는 확률에 비례해 내려간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="params">
+    <h2>깊이 vs 너비, 그리고 파라미터 수 세기</h2>
+    <p>신경망의 크기는 <strong>너비</strong>(층당 뉴런 수)와 <strong>깊이</strong>(층 수)로 정해진다. 너비는 한 층이 동시에 표현할 수 있는 특징의 수, 깊이는 특징을 조합하는 단계의 수다. 이미지 분류 CNN의 앞 층은 모서리, 중간 층은 질감·부품, 뒤 층은 물체 전체에 반응하는 식으로, 깊은 망은 단순한 특징을 계층적으로 조합한다. 같은 파라미터 예산이라면 대개 적당히 깊은 망이 넓고 얕은 망보다 효율적이지만, 너무 깊으면 기울기가 전달되기 어려워진다. 이를 해결한 잔차 연결이 <a href="transformer.html">6장</a>에서 등장한다.</p>
+    <p>완전연결층 \(d_\text{in}\to d_\text{out}\)의 파라미터 수는 가중치 \(d_\text{in}\times d_\text{out}\)에 편향 \(d_\text{out}\)을 더한 것이다. 층 크기 목록 \([n_0, n_1, \dots, n_L]\)인 MLP 전체는</p>
+    <div class="formula">$$N_\text{params} = \sum_{l=1}^{L}\big(n_{l-1}\,n_l + n_l\big)$$
+      <div class="where">예: MNIST 분류 MLP [784, 256, 128, 10] = (784·256+256) + (256·128+128) + (128·10+10) = 235,146. 순전파 FLOPs는 토큰(샘플)당 약 \(2\times\)(가중치 수)다.</div>
+    </div>
+    <p>이 공식이 Transformer에서도 그대로 통한다. GPT-2와 Llama의 각 블록에 있는 <span class="term">FFN</span><span class="en">(Feed-Forward Network)</span>은 다름 아닌 은닉층 하나짜리 MLP다. GPT-2 small은 [768, 3072, 768]에 GELU를 쓰고, Llama 3 8B는 [4096, 14336, 4096]에 SiLU 게이트를 곱하는 <strong>SwiGLU</strong>를 써서 행렬이 3개다(\(W_\text{down}(\mathrm{SiLU}(W_\text{gate}\mathbf x)\odot W_\text{up}\mathbf x)\), 편향 없음). 모델 파라미터의 대부분이 바로 이 MLP들에 있다. 아래 계산기로 확인해 보자.</p>
+
+    <div class="sim" id="sim-nr-params">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>MLP 파라미터 계산기</h3></div>
+      <div class="sim-controls" style="border-top:0">
+        <label class="ctrl"><span>층 크기 (쉼표로 구분)</span><input class="ab-input" id="nr-pm-sizes" value="784, 256, 128, 10" style="font-family:var(--mono)"></label>
+        <label class="ctrl"><span>블록 반복 수 <output id="nr-pm-rep-out"></output></span><input type="range" id="nr-pm-rep" min="1" max="96" step="1" value="1"></label>
+        <div class="ctrl"><span>옵션</span><div style="display:grid;gap:6px"><label class="check"><input type="checkbox" id="nr-pm-bias" checked> 편향 포함</label><label class="check"><input type="checkbox" id="nr-pm-glu"> 게이트(SwiGLU) — 은닉층마다 행렬 하나 추가</label></div></div>
+        <div class="ctrl"><span>프리셋</span><div class="nr-btns"><button class="btn" data-nrpm="mnist">MNIST MLP</button><button class="btn" data-nrpm="gpt2">GPT-2 small FFN ×12</button><button class="btn" data-nrpm="llama">Llama 3 8B FFN ×32</button><button class="btn" data-nrpm="deep">깊고 좁게</button><button class="btn" data-nrpm="wide">얕고 넓게</button></div></div>
+      </div>
+      <div class="sim-panel"><div class="table-wrap" style="margin:0"><table class="nr-ptable" id="nr-pm-table"></table></div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">블록 1개 파라미터</span><span class="v" id="nr-pm-one">—</span></div>
+        <div class="stat"><span class="k">전체 (× 반복)</span><span class="v" id="nr-pm-all">—</span></div>
+        <div class="stat"><span class="k">메모리 FP32 / BF16</span><span class="v" id="nr-pm-mem" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">순전파 FLOPs/샘플</span><span class="v" id="nr-pm-fl">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 'GPT-2 small FFN ×12'는 약 5,670만 개로, 전체 약 1.24억 파라미터의 절반 가까이 된다(나머지는 어텐션과 임베딩). ② 'Llama 3 8B FFN ×32'는 블록당 약 1.76억, 전체 약 56억 개 — 8.03B 중 약 70%다. ③ '깊고 좁게' [2,8,8,8,8,1]과 '얕고 넓게' [2,64,1]은 파라미터 수가 비슷하다(249 vs 257). 플레이그라운드에서 나선 문제를 풀어 보면 어느 쪽이 유리할까? (힌트: 위의 '접기' 논리)</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>인공 뉴런은 \(y=\varphi(\mathbf w\cdot\mathbf x+b)\): 입력과 가중치 패턴의 내적에 편향을 더해 비선형 함수에 통과시킨다.</li>
+      <li>퍼셉트론의 결정 경계 \(\mathbf w\cdot\mathbf x+b=0\)은 직선(초평면)이고 \(\mathbf w\)는 그 법선이다. 퍼셉트론 규칙은 선형 분리 가능한 데이터에서 반드시 수렴하지만 XOR은 풀 수 없다.</li>
+      <li>활성화 함수가 없으면 층을 아무리 쌓아도 선형 변환 하나다. sigmoid·tanh는 포화로 기울기가 사라지기 쉽고, ReLU는 양수 쪽 도함수가 1이라 깊은 망을 가능하게 했다. GELU·SiLU는 대규모 Transformer의 표준이다.</li>
+      <li>은닉층은 공간을 선형 변환한 뒤 ReLU로 접어, 마지막 층이 직선 하나로 풀 수 있는 표현을 만든다.</li>
+      <li>MLP는 역전파와 경사하강(Adam 등)으로 학습하며, 깊이와 너비가 표현력을 정한다. 깊이는 접기를 거듭해 조각 수를 곱으로 늘린다.</li>
+      <li>보편 근사 정리: 은닉층 하나로도 충분히 넓으면 어떤 연속 함수든 근사할 수 있다. ReLU 합은 꺾은선이다.</li>
+      <li>다중 분류 출력층은 로짓 → 소프트맥스 → 교차 엔트로피이며 기울기는 \(\mathbf p-\mathbf y\)다. 파라미터 수는 \(\sum(n_{l-1}n_l+n_l)\)이고, Transformer의 FFN이 바로 이 MLP다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 퍼셉트론 \(\mathbf w=(2,-1), b=1\)에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">점 (0, 0)은 클래스 −1로 분류된다</button><button class="opt" data-correct>결정 경계는 직선 2x₁ − x₂ + 1 = 0이고, (2, −1) 방향이 +1 쪽이다</button><button class="opt">결정 경계는 (2, −1) 방향과 평행하다</button><button class="opt">b를 바꾸면 경계의 기울기가 바뀐다</button>
+      </div><div class="quiz-exp">(0,0)에서 z = 1 &gt; 0이므로 +1이다. \(\mathbf w\)는 경계에 수직인 법선이며 +1 쪽을 가리킨다. b는 경계를 평행 이동시킬 뿐 기울기는 \(\mathbf w\)의 방향이 정한다.</div></div>
+      <div class="quiz-q"><p>2. 활성화 함수 없이 Linear 층 10개를 쌓은 신경망의 표현력은?</p><div class="opts">
+        <button class="opt">층이 많아 어떤 함수든 근사할 수 있다</button><button class="opt">XOR까지는 풀 수 있다</button><button class="opt" data-correct>Linear 층 1개와 같다</button><button class="opt">Linear 층 10개보다 2배 강력하다</button>
+      </div><div class="quiz-exp">\(W_{10}\cdots W_2W_1\)은 하나의 행렬이고 편향들도 하나의 벡터로 합쳐진다. 선형(아핀) 변환의 합성은 선형(아핀) 변환이므로 결정 경계는 여전히 직선이다.</div></div>
+      <div class="quiz-q"><p>3. sigmoid 도함수의 최댓값과, 그것이 깊은 망에서 의미하는 바는?</p><div class="opts">
+        <button class="opt">1 — 기울기가 그대로 전달된다</button><button class="opt" data-correct>0.25 — 층마다 기울기가 최소 1/4 이하로 줄어 소실되기 쉽다</button><button class="opt">0.5 — 층마다 절반씩 줄어든다</button><button class="opt">무한대 — 기울기가 폭발한다</button>
+      </div><div class="quiz-exp">\(\sigma'(z)=\sigma(z)(1-\sigma(z))\)는 \(z=0\)에서 \(0.5\times0.5=0.25\)가 최대다. 역전파는 층마다 이 값을 곱하므로 10층이면 \(0.25^{10}\approx10^{-6}\)배 이하가 된다.</div></div>
+      <div class="quiz-q"><p>4. 편향을 포함한 MLP [784, 256, 10]의 파라미터 수는?</p><div class="opts">
+        <button class="opt">203,264</button><button class="opt" data-correct>203,530</button><button class="opt">200,970</button><button class="opt">235,146</button>
+      </div><div class="quiz-exp">(784×256 + 256) + (256×10 + 10) = 200,960 + 2,570 = 203,530. 235,146은 [784, 256, 128, 10]의 값이다.</div></div>
+      <div class="quiz-q"><p>5. 로짓 (3, 1, 0)에 모든 원소에 10을 더한 (13, 11, 10)의 소프트맥스 결과는?</p><div class="opts">
+        <button class="opt">더 1위에 몰린 분포가 된다</button><button class="opt">더 균등해진다</button><button class="opt" data-correct>원래와 완전히 같다</button><button class="opt">합이 1이 아니게 된다</button>
+      </div><div class="quiz-exp">\(e^{z_k+c}/\sum_j e^{z_j+c} = e^c e^{z_k}/(e^c\sum_j e^{z_j})\)로 \(e^c\)가 약분된다. 실제 구현은 이 성질을 이용해 최대 로짓을 빼서 오버플로를 막는다. 분포를 날카롭게/평평하게 바꾸는 것은 덧셈이 아니라 온도(나눗셈)다.</div></div>
+      <div class="quiz-q"><p>6. Llama 3 8B의 FFN(d = 4096, 은닉 14,336, SwiGLU, 편향 없음) 한 블록의 파라미터 수에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 59M</button><button class="opt">약 117M</button><button class="opt" data-correct>약 176M</button><button class="opt">약 470M</button>
+      </div><div class="quiz-exp">SwiGLU는 gate·up·down 행렬 3개를 쓴다: 3 × 4096 × 14336 = 176,160,768. 32층이면 약 5.64B로 전체 약 8.03B의 70% 정도가 FFN이다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ======================================================== 공통 헬퍼 */
+  function ptr(cv, e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  function dragger(cv, h) {
+    var active = false;
+    cv.style.touchAction = "none";
+    cv.addEventListener("pointerdown", function (e) {
+      var p = ptr(cv, e);
+      if (h.down(p, e) === false) return;
+      active = true; try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    cv.addEventListener("pointermove", function (e) {
+      var p = ptr(cv, e);
+      if (active) { h.move && h.move(p, e); e.preventDefault(); }
+      else if (h.hover) cv.style.cursor = h.hover(p) || "";
+    });
+    function end(e) { if (!active) return; active = false; h.up && h.up(ptr(cv, e), e); }
+    cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  }
+  function arrow(ctx, x0, y0, x1, y1, col, lw, head) {
+    var dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy); if (L < 1) return;
+    var hs = head || 10, ux = dx / L, uy = dy / L;
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw || 2.5;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * hs * 0.8, y1 - uy * hs * 0.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * hs - uy * hs * 0.45, y1 - uy * hs + ux * hs * 0.45); ctx.lineTo(x1 - ux * hs + uy * hs * 0.45, y1 - uy * hs - ux * hs * 0.45); ctx.closePath(); ctx.fill();
+  }
+  function font(ctx, px, mono, bold) { ctx.font = (bold ? "600 " : "") + px + "px " + (mono ? "JetBrains Mono, ui-monospace, monospace" : getComputedStyle(document.body).getPropertyValue("--font")); }
+  function dot(ctx, x, y, r, fill, stroke, lw) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1.5; ctx.stroke(); } }
+  function f2(x) { return (Math.abs(x) < 0.005 ? 0 : x).toFixed(2); }
+  // 직선 w·x + b = 0을 사각형 [x0,x1]×[y0,y1]에 자른 두 끝점 (월드 좌표)
+  function clipLine(w, b, x0, x1, y0, y1) {
+    var out = [];
+    if (Math.abs(w[1]) > 1e-9) { [x0, x1].forEach(function (x) { var y = -(w[0] * x + b) / w[1]; if (y >= y0 - 1e-9 && y <= y1 + 1e-9) out.push([x, y]); }); }
+    if (Math.abs(w[0]) > 1e-9) { [y0, y1].forEach(function (y) { var x = -(w[1] * y + b) / w[0]; if (x >= x0 - 1e-9 && x <= x1 + 1e-9) out.push([x, y]); }); }
+    return out.length >= 2 ? [out[0], out[out.length - 1]] : null;
+  }
+  // 캔버스 색 LUT: t∈[-1,1] → accent-2 … bg … accent (진하기 k)
+  function divLUT(n, k) {
+    var bg = AB.rgb(AB.color("canvas-bg")), a = AB.rgb(AB.color("accent")), b = AB.rgb(AB.color("accent-2")), out = [];
+    for (var i = 0; i < n; i++) {
+      var t = (i / (n - 1)) * 2 - 1, c = t >= 0 ? a : b, s = Math.abs(t) * k;
+      out.push([bg[0] + (c[0] - bg[0]) * s, bg[1] + (c[1] - bg[1]) * s, bg[2] + (c[2] - bg[2]) * s]);
+    }
+    return out;
+  }
+
+  /* ======================================================== SIM 1: 퍼셉트론 */
+  (function () {
+    var el = document.getElementById("nr-cv-perc");
+    var pts = [], w = [0.3, 1], b = 0.1, nUpd = 0, cursor = 0, lastIdx = -1, V = { ox: 0, oy: 0, s: 1 }, drag = null, auto = false;
+    var mode = AB.seg("nr-pc-mode");
+    var eta = AB.range("nr-pc-eta", function (v) { return v.toFixed(2); });
+    function gen(kind) {
+      var r = AB.rng(kind === "lin" ? 3 : kind === "ovl" ? 4 : 5); pts = [];
+      if (kind === "xor") {
+        [[-0.5, -0.5, 1], [0.5, 0.5, 1], [-0.5, 0.5, -1], [0.5, -0.5, -1]].forEach(function (c) { for (var i = 0; i < 7; i++) pts.push({ x: c[0] + r.n() * 0.13, y: c[1] + r.n() * 0.13, c: c[2] }); });
+      } else {
+        var sd = kind === "lin" ? 0.17 : 0.32;
+        for (var i = 0; i < 14; i++) { pts.push({ x: -0.4 + r.n() * sd, y: -0.3 + r.n() * sd, c: -1 }); pts.push({ x: 0.4 + r.n() * sd, y: 0.35 + r.n() * sd, c: 1 }); }
+      }
+      pts.forEach(function (p) { p.x = AB.clamp(p.x, -1.05, 1.05); p.y = AB.clamp(p.y, -1.05, 1.05); });
+      nUpd = 0; lastIdx = -1;
+    }
+    function z(p) { return w[0] * p.x + w[1] * p.y + b; }
+    function wrong(p) { return p.c * z(p) <= 0; }
+    function anchor() { var n2 = w[0] * w[0] + w[1] * w[1]; return [-b * w[0] / n2, -b * w[1] / n2]; }
+    function W2S(x, y) { return [V.ox + x * V.s, V.oy - y * V.s]; }
+    function S2W(p) { return [(p.x - V.ox) / V.s, (V.oy - p.y) / V.s]; }
+    function handles() {
+      var a = anchor(), n = Math.hypot(w[0], w[1]);
+      // 앵커가 화면 밖이면 화면 중앙에 가장 가까운 선 위의 점은 곧 anchor(원점 기준) — 범위 제한
+      var A = [AB.clamp(a[0], -1.1, 1.1), AB.clamp(a[1], -1.1, 1.1)];
+      // 제한된 점을 다시 선 위로 투영
+      var d = (w[0] * A[0] + w[1] * A[1] + b) / (n * n); A = [A[0] - d * w[0], A[1] - d * w[1]];
+      return { A: A, T: [A[0] + w[0] / n * 0.38, A[1] + w[1] / n * 0.38] };
+    }
+    var cv = AB.canvas(el, function (ctx, W, H) {
+      var P = AB.palette();
+      V.ox = W / 2; V.oy = H / 2; V.s = Math.min(W, H) / 2.5;
+      var xr = V.ox / V.s, yr = V.oy / V.s;
+      // 반평면 색
+      ctx.fillStyle = AB.alpha(P.accent2, 0.09); ctx.fillRect(0, 0, W, H);
+      var n = Math.hypot(w[0], w[1]), u = [w[0] / n, w[1] / n], a = anchor(), t = [-u[1], u[0]];
+      var poly = [[a[0] + t[0] * 50, a[1] + t[1] * 50], [a[0] - t[0] * 50, a[1] - t[1] * 50], [a[0] - t[0] * 50 + u[0] * 50, a[1] - t[1] * 50 + u[1] * 50], [a[0] + t[0] * 50 + u[0] * 50, a[1] + t[1] * 50 + u[1] * 50]];
+      ctx.fillStyle = P.bg; ctx.beginPath(); poly.forEach(function (q, i) { var s = W2S(q[0], q[1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = AB.alpha(P.accent, 0.1); ctx.fill();
+      // 격자
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      for (var g = -3; g <= 3; g++) { var gs = W2S(g * 0.5, g * 0.5); ctx.beginPath(); ctx.moveTo(gs[0], 0); ctx.lineTo(gs[0], H); ctx.moveTo(0, gs[1]); ctx.lineTo(W, gs[1]); ctx.stroke(); }
+      ctx.strokeStyle = P.axis; var o = W2S(0, 0); ctx.beginPath(); ctx.moveTo(0, o[1]); ctx.lineTo(W, o[1]); ctx.moveTo(o[0], 0); ctx.lineTo(o[0], H); ctx.stroke();
+      // 경계선
+      var seg = clipLine(w, b, -xr, xr, -yr, yr);
+      if (seg) { var s1 = W2S(seg[0][0], seg[0][1]), s2 = W2S(seg[1][0], seg[1][1]); ctx.strokeStyle = P.text; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(s1[0], s1[1]); ctx.lineTo(s2[0], s2[1]); ctx.stroke(); }
+      // 점
+      pts.forEach(function (p, i) {
+        var s = W2S(p.x, p.y), col = p.c > 0 ? P.accent : P.accent2;
+        if (i === lastIdx) dot(ctx, s[0], s[1], 12, AB.alpha(P.warn, 0.35), P.warn, 2);
+        dot(ctx, s[0], s[1], 6.5, col, wrong(p) ? P.bad : P.bg, wrong(p) ? 2.4 : 1.5);
+        if (wrong(p)) { ctx.strokeStyle = P.bad; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(s[0] - 3, s[1] - 3); ctx.lineTo(s[0] + 3, s[1] + 3); ctx.moveTo(s[0] + 3, s[1] - 3); ctx.lineTo(s[0] - 3, s[1] + 3); ctx.stroke(); }
+      });
+      // 손잡이
+      var hd = handles(), A = W2S(hd.A[0], hd.A[1]), T = W2S(hd.T[0], hd.T[1]);
+      arrow(ctx, A[0], A[1], T[0], T[1], P.ok, 2.6);
+      dot(ctx, A[0], A[1], 7, P.bg, P.text, 2.4);
+      dot(ctx, T[0], T[1], 6, P.bg, P.ok, 2.4);
+      font(ctx, 13, true, true); ctx.fillStyle = P.ok; ctx.textBaseline = "middle"; ctx.fillText("w", T[0] + 9, T[1] - 8);
+      font(ctx, 12); ctx.fillStyle = P.accent; ctx.textBaseline = "top"; ctx.fillText("z > 0 → +1", 10, 8);
+      ctx.fillStyle = P.accent2; ctx.fillText("z < 0 → −1", 10, 26);
+      // 판독
+      var acc = pts.length ? pts.filter(function (p) { return !wrong(p); }).length / pts.length : 0;
+      AB.stat("nr-pc-w", "(" + f2(w[0]) + ", " + f2(w[1]) + ")");
+      AB.stat("nr-pc-b", f2(b));
+      AB.stat("nr-pc-acc", (acc * 100).toFixed(1) + "%");
+      AB.stat("nr-pc-n", nUpd);
+      AB.stat("nr-pc-st", acc === 1 ? '<span style="color:var(--ok)">모두 정분류</span>' : auto ? "학습 중…" : "오분류 " + pts.filter(wrong).length + "개");
+    }, { aspect: 0.72, maxHeight: 480, minHeight: 300 });
+    function learnStep() {
+      if (!pts.length) return false;
+      for (var k = 0; k < pts.length; k++) {
+        var i = (cursor + k) % pts.length, p = pts[i];
+        if (wrong(p)) {
+          var e = eta(); w[0] += e * p.c * p.x; w[1] += e * p.c * p.y; b += e * p.c;
+          if (Math.hypot(w[0], w[1]) < 1e-3) w = [1e-3, 0];
+          nUpd++; lastIdx = i; cursor = (i + 1) % pts.length; return true;
+        }
+      }
+      lastIdx = -1; return false;
+    }
+    var autoBtn = document.getElementById("nr-pc-auto"), tacc = 0;
+    function setAuto(v) { auto = v; autoBtn.textContent = v ? "❚❚ 정지" : "▶ 자동"; v ? loop.start() : loop.stop(); cv.redraw(); }
+    var loop = AB.loop(el, function (dt) {
+      if (!auto) return;
+      tacc += dt;
+      if (tacc < 0.12) return; tacc = 0;
+      if (!learnStep() || nUpd > 3000) setAuto(false); else cv.redraw();
+    });
+    loop.stop();
+    autoBtn.addEventListener("click", function () { setAuto(!auto); });
+    document.getElementById("nr-pc-step").addEventListener("click", function () { learnStep(); cv.redraw(); });
+    var rr = AB.rng(99);
+    document.getElementById("nr-pc-rand").addEventListener("click", function () { var t = rr() * 2 * Math.PI; w = [Math.cos(t), Math.sin(t)]; b = (rr() - 0.5) * 0.8; nUpd = 0; lastIdx = -1; cv.redraw(); });
+    document.querySelectorAll("[data-nrpd]").forEach(function (bt) { bt.addEventListener("click", function () { gen(bt.dataset.nrpd); cv.redraw(); }); });
+    function hit(p) {
+      var hd = handles(), A = W2S(hd.A[0], hd.A[1]), T = W2S(hd.T[0], hd.T[1]);
+      if (Math.hypot(p.x - T[0], p.y - T[1]) < 16) return { k: "tip" };
+      if (Math.hypot(p.x - A[0], p.y - A[1]) < 16) return { k: "anc" };
+      var best = -1, bd = 14;
+      pts.forEach(function (q, i) { var s = W2S(q.x, q.y), d = Math.hypot(p.x - s[0], p.y - s[1]); if (d < bd) { bd = d; best = i; } });
+      return best >= 0 ? { k: "pt", i: best } : null;
+    }
+    dragger(el, {
+      down: function (p) {
+        var h = hit(p), wp = S2W(p);
+        if (!h) {
+          if (mode() !== "del") { pts.push({ x: wp[0], y: wp[1], c: +mode() }); cv.redraw(); }
+          return false;
+        }
+        drag = h; drag.p0 = p; drag.moved = false;
+      },
+      move: function (p) {
+        if (!drag) return;
+        if (Math.hypot(p.x - drag.p0.x, p.y - drag.p0.y) > 3) drag.moved = true;
+        var wp = S2W(p), n = Math.hypot(w[0], w[1]);
+        if (drag.k === "pt" && drag.moved) { pts[drag.i].x = AB.clamp(wp[0], -1.3, 1.3); pts[drag.i].y = AB.clamp(wp[1], -1.3, 1.3); }
+        else if (drag.k === "anc") { b = -(w[0] * wp[0] + w[1] * wp[1]); }
+        else if (drag.k === "tip") {
+          var A = handles().A, d = [wp[0] - A[0], wp[1] - A[1]], dn = Math.hypot(d[0], d[1]);
+          if (dn > 0.02) { w = [d[0] / dn * n, d[1] / dn * n]; b = -(w[0] * A[0] + w[1] * A[1]); }
+        }
+        cv.redraw();
+      },
+      up: function () {
+        if (drag && drag.k === "pt" && !drag.moved) {
+          if (mode() === "del") pts.splice(drag.i, 1); else pts[drag.i].c *= -1;
+          cv.redraw();
+        }
+        drag = null;
+      },
+      hover: function (p) { var h = hit(p); return h ? (h.k === "pt" ? "pointer" : "grab") : "crosshair"; },
+    });
+    gen("lin"); cv.redraw();
+  })();
+
+  /* ======================================================== SIM 2: 활성화 함수 */
+  (function () {
+    var F = {
+      step: function (z) { return z >= 0 ? 1 : 0; },
+      sigmoid: AB.sigmoid,
+      tanh: Math.tanh,
+      relu: function (z) { return Math.max(0, z); },
+      gelu: AB.gelu,
+      silu: function (z) { return z * AB.sigmoid(z); },
+    };
+    function D(name, z) {
+      if (name === "step") return 0;
+      if (name === "relu") return z > 0 ? 1 : 0;
+      if (name === "sigmoid") { var s = AB.sigmoid(z); return s * (1 - s); }
+      if (name === "tanh") { var t = Math.tanh(z); return 1 - t * t; }
+      var h = 1e-4; return (F[name](z + h) - F[name](z - h)) / (2 * h);
+    }
+    var NAMES = ["step", "sigmoid", "tanh", "relu", "gelu", "silu"];
+    var zc = 1.0, el = document.getElementById("nr-cv-act"), boxes = null;
+    var fsel = AB.seg("nr-act-f", function () { cv.redraw(); });
+    var Ld = AB.range("nr-act-L", function (v) { return v; }, function () { cv.redraw(); });
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      var P = AB.palette(), name = fsel(), all = document.getElementById("nr-act-all").checked, sat = document.getElementById("nr-act-sat").checked;
+      var h1 = Math.round((h - 20) * 0.58), b1 = { x: 50, y: 14, w: w - 66, h: h1 - 32 }, b2 = { x: 50, y: h1 + 14, w: w - 66, h: h - h1 - 54 };
+      boxes = [b1, b2];
+      var bands = [];
+      if (sat) {
+        var on = null;
+        for (var i = 0; i <= 400; i++) {
+          var x = -6 + 12 * i / 400, s = Math.abs(D(name, x)) < 0.05 && !(name === "step" && Math.abs(x) < 0.02);
+          if (s && on == null) on = x; if ((!s || i === 400) && on != null) { bands.push({ x0: on, x1: x, color: AB.alpha(P.bad, 0.09) }); on = null; }
+        }
+      }
+      function series(fn) { var d = []; for (var i = 0; i <= 480; i++) { var x = -6 + 12 * i / 480; d.push([x, fn(x)]); } return d; }
+      var others = all ? NAMES.filter(function (n) { return n !== name; }) : [];
+      var ch1 = AB.chart(ctx, b1, { x: [-6, 6], y: [-1.5, 3], yLabel: "φ(z)", bands: bands,
+        series: others.map(function (n) { return { data: series(F[n]), color: AB.alpha(P.dim, 0.35), width: 1.3 }; }).concat([{ data: name === "step" ? [[-6, 0], [0, 0], [0, 1], [6, 1]] : series(F[name]), color: P.accent, width: 2.6 }]),
+        hlines: [{ y: 0, color: P.axis, dash: [] }] });
+      var ch2 = AB.chart(ctx, b2, { x: [-6, 6], y: [-0.3, 1.3], xLabel: "z", yLabel: "φ′(z)", bands: bands,
+        series: others.map(function (n) { return { data: series(function (x) { return D(n, x); }), color: AB.alpha(P.dim, 0.35), width: 1.3 }; }).concat([{ data: name === "relu" ? [[-6, 0], [0, 0], [0, 1], [6, 1]] : series(function (x) { return D(name, x); }), color: P.accent2, width: 2.4 }]),
+        hlines: [{ y: 0, color: P.axis, dash: [] }, { y: 1, color: P.faint }] });
+      var y = F[name](zc), d = D(name, zc);
+      [[ch1, y, P.accent], [ch2, d, P.accent2]].forEach(function (c) {
+        var X = c[0].X(zc);
+        ctx.strokeStyle = P.warn; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(X, c[0].box.y); ctx.lineTo(X, c[0].box.y + c[0].box.h); ctx.stroke(); ctx.setLineDash([]);
+        dot(ctx, X, c[0].Y(AB.clamp(c[1], -1.5, 3)), 6, c[2], P.bg, 2);
+      });
+      if (name === "sigmoid" || name === "tanh" || name === "gelu" || name === "silu") {
+        // 접선
+        var X0 = zc - 1.2, X1 = zc + 1.2;
+        ctx.save(); ctx.beginPath(); ctx.rect(b1.x, b1.y, b1.w, b1.h); ctx.clip();
+        ctx.strokeStyle = P.warn; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(ch1.X(X0), ch1.Y(y - 1.2 * d)); ctx.lineTo(ch1.X(X1), ch1.Y(y + 1.2 * d)); ctx.stroke(); ctx.restore();
+      }
+      var g = Math.pow(Math.abs(d), Ld());
+      AB.stat("nr-act-z", zc.toFixed(2));
+      AB.stat("nr-act-y", AB.fmt(y, 4));
+      AB.stat("nr-act-d", AB.fmt(d, 4));
+      AB.stat("nr-act-g", g === 0 ? "0" : AB.fmt(g, 3));
+    }, { aspect: 0.7, maxHeight: 470, minHeight: 340 });
+    function setZ(p) { if (!boxes) return; var b = boxes[0]; zc = AB.clamp(-6 + 12 * (p.x - b.x) / b.w, -6, 6); zc = Math.round(zc * 20) / 20; cv.redraw(); }
+    dragger(el, { down: function (p) { setZ(p); }, move: setZ });
+    ["nr-act-all", "nr-act-sat"].forEach(function (id) { document.getElementById(id).addEventListener("change", function () { cv.redraw(); }); });
+  })();
+
+  /* ======================================================== SIM 3: 공간 접기 */
+  (function () {
+    var ids = ["w11", "w12", "b1", "w21", "w22", "b2"], R = {};
+    ids.forEach(function (k) { R[k] = AB.range("nr-f-" + k, function (v) { return v.toFixed(2); }, update); });
+    var useRelu = document.getElementById("nr-f-relu");
+    var data = [], r = AB.rng(21);
+    [[0, 0, 0], [1, 1, 0], [0, 1, 1], [1, 0, 1]].forEach(function (c) { for (var i = 0; i < 10; i++) data.push({ x: [c[0] + r.n() * 0.07, c[1] + r.n() * 0.07], y: c[2] }); });
+    var DOM = [-0.6, 1.6], fit = { v: [0, 0], c: 0, acc: 0 }, V1 = {}, drag = null;
+    function Wb() { return { W: [[R.w11(), R.w12()], [R.w21(), R.w22()]], b: [R.b1(), R.b2()] }; }
+    function hid(x, M) { var h = [M.W[0][0] * x[0] + M.W[0][1] * x[1] + M.b[0], M.W[1][0] * x[0] + M.W[1][1] * x[1] + M.b[1]]; if (useRelu.checked) { h[0] = Math.max(0, h[0]); h[1] = Math.max(0, h[1]); } return h; }
+    function logistic(H) {
+      // 특성 정규화 후 로지스틱 회귀 (경사하강)
+      var mu = [0, 0], sd = [0, 0], n = H.length, i, k;
+      for (i = 0; i < n; i++) for (k = 0; k < 2; k++) mu[k] += H[i][k] / n;
+      for (i = 0; i < n; i++) for (k = 0; k < 2; k++) sd[k] += Math.pow(H[i][k] - mu[k], 2) / n;
+      sd = sd.map(function (s) { return Math.sqrt(s) || 1; });
+      var X = H.map(function (h) { return [(h[0] - mu[0]) / sd[0], (h[1] - mu[1]) / sd[1]]; });
+      var v = [0, 0], c = 0;
+      for (var it = 0; it < 1500; it++) {
+        var g0 = 0, g1 = 0, gc = 0;
+        for (i = 0; i < n; i++) { var p = AB.sigmoid(v[0] * X[i][0] + v[1] * X[i][1] + c) - data[i].y; g0 += p * X[i][0]; g1 += p * X[i][1]; gc += p; }
+        var lr = 2.0 / n; v[0] -= lr * g0; v[1] -= lr * g1; c -= lr * gc;
+      }
+      // 원래 h 좌표계로 환산: v·((h−mu)/sd) + c
+      var vv = [v[0] / sd[0], v[1] / sd[1]], cc = c - vv[0] * mu[0] - vv[1] * mu[1];
+      var acc = 0; for (i = 0; i < n; i++) if ((vv[0] * H[i][0] + vv[1] * H[i][1] + cc > 0 ? 1 : 0) === data[i].y) acc++;
+      return { v: vv, c: cc, acc: acc / n };
+    }
+    function update() {
+      var M = Wb(), H = data.map(function (d) { return hid(d.x, M); });
+      fit = logistic(H);
+      AB.stat("nr-f-sep", fit.acc === 1 ? '<span style="color:var(--ok)">가능</span>' : '<span style="color:var(--bad)">불가</span>');
+      AB.stat("nr-f-acc", (fit.acc * 100).toFixed(0) + "%");
+      AB.stat("nr-f-h", [[0, 0], [1, 0], [0, 1], [1, 1]].map(function (x) { var h = hid(x, M); return "(" + f2(h[0]) + "," + f2(h[1]) + ")"; }).join(" "));
+      cv1.redraw(); cv2.redraw();
+    }
+    function gridLines() { var L = []; for (var g = -0.5; g <= 1.501; g += 0.25) { var a = [], b = []; for (var t = 0; t <= 60; t++) { var s = DOM[0] + (DOM[1] - DOM[0]) * t / 60; a.push([g, s]); b.push([s, g]); } L.push(a, b); } return L; }
+    var GL = gridLines();
+    var cv1 = AB.canvas(document.getElementById("nr-cv-fold1"), function (ctx, w, h) {
+      var P = AB.palette(), M = Wb(), sz = Math.min(w, h) - 30, s = sz / (DOM[1] - DOM[0]);
+      V1 = { x0: (w - sz) / 2, y0: (h - sz) / 2 + 8, s: s };
+      var S = function (x, y) { return [V1.x0 + (x - DOM[0]) * s, V1.y0 + sz - (y - DOM[0]) * s]; };
+      // 결정 영역 배경
+      var cell = 6;
+      for (var px = 0; px < sz; px += cell) for (var py = 0; py < sz; py += cell) {
+        var x = DOM[0] + (px + cell / 2) / s, y = DOM[0] + (sz - py - cell / 2) / s, hh = hid([x, y], M), zz = fit.v[0] * hh[0] + fit.v[1] * hh[1] + fit.c;
+        ctx.fillStyle = AB.alpha(zz > 0 ? P.accent : P.accent2, 0.13); ctx.fillRect(V1.x0 + px, V1.y0 + py, cell, cell);
+      }
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      GL.forEach(function (l) { ctx.beginPath(); l.forEach(function (q, i) { var p = S(q[0], q[1]); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.stroke(); });
+      ctx.strokeStyle = P.axis; var o = S(0, 0); ctx.beginPath(); ctx.moveTo(V1.x0, o[1]); ctx.lineTo(V1.x0 + sz, o[1]); ctx.moveTo(o[0], V1.y0); ctx.lineTo(o[0], V1.y0 + sz); ctx.stroke();
+      // 접는 선 (뉴런별)
+      [0, 1].forEach(function (j) {
+        var ww = M.W[j], bb = M.b[j], col = j ? P.warn : P.ok, seg = clipLine(ww, bb, DOM[0], DOM[1], DOM[0], DOM[1]);
+        if (!seg) return;
+        var a = S(seg[0][0], seg[0][1]), c = S(seg[1][0], seg[1][1]);
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.setLineDash([]);
+        var hd = handleOf(j, M); if (!hd) return;
+        var A = S(hd.A[0], hd.A[1]), T = S(hd.T[0], hd.T[1]);
+        arrow(ctx, A[0], A[1], T[0], T[1], col, 2, 8); dot(ctx, A[0], A[1], 6, P.bg, col, 2.2); dot(ctx, T[0], T[1], 5, P.bg, col, 2);
+        font(ctx, 12, true, true); ctx.fillStyle = col; ctx.textBaseline = "middle"; ctx.fillText("h" + (j + 1), T[0] + 7, T[1] - 7);
+      });
+      data.forEach(function (d) { var p = S(d.x[0], d.x[1]); dot(ctx, p[0], p[1], 4.5, d.y ? P.accent : P.accent2, P.bg, 1); });
+    }, { aspect: 1, maxHeight: 380, minHeight: 260 });
+    function handleOf(j, M) {
+      var w = M.W[j], b = M.b[j], n = Math.hypot(w[0], w[1]); if (n < 1e-6) return null;
+      var c = [0.5, 0.5], d = (w[0] * c[0] + w[1] * c[1] + b) / (n * n), A = [c[0] - d * w[0], c[1] - d * w[1]];
+      if (A[0] < DOM[0] || A[0] > DOM[1] || A[1] < DOM[0] || A[1] > DOM[1]) return null;
+      return { A: A, T: [A[0] + w[0] / n * 0.3, A[1] + w[1] / n * 0.3] };
+    }
+    var cv2 = AB.canvas(document.getElementById("nr-cv-fold2"), function (ctx, w, h) {
+      var P = AB.palette(), M = Wb();
+      var H = data.map(function (d) { return hid(d.x, M); });
+      var mn = [Infinity, Infinity], mx = [-Infinity, -Infinity];
+      H.concat([[0, 0]]).forEach(function (q) { for (var k = 0; k < 2; k++) { mn[k] = Math.min(mn[k], q[k]); mx[k] = Math.max(mx[k], q[k]); } });
+      var span = Math.max(mx[0] - mn[0], mx[1] - mn[1], 1) * 1.35, cx = (mn[0] + mx[0]) / 2, cy = (mn[1] + mx[1]) / 2;
+      var sz = Math.min(w, h) - 30, s = sz / span, x0 = (w - sz) / 2, y0 = (h - sz) / 2 + 8;
+      var S = function (x, y) { return [x0 + (x - cx + span / 2) * s, y0 + sz - (y - cy + span / 2) * s]; };
+      var lo = [cx - span / 2, cy - span / 2], hi = [cx + span / 2, cy + span / 2];
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, sz, sz); ctx.clip();
+      // 분류 반평면
+      var cell = 6;
+      for (var px = 0; px < sz; px += cell) for (var py = 0; py < sz; py += cell) {
+        var hx = lo[0] + (px + cell / 2) / s, hy = lo[1] + (sz - py - cell / 2) / s, zz = fit.v[0] * hx + fit.v[1] * hy + fit.c;
+        ctx.fillStyle = AB.alpha(zz > 0 ? P.accent : P.accent2, 0.1); ctx.fillRect(x0 + px, y0 + py, cell, cell);
+      }
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; var o = S(0, 0); ctx.beginPath(); ctx.moveTo(x0, o[1]); ctx.lineTo(x0 + sz, o[1]); ctx.moveTo(o[0], y0); ctx.lineTo(o[0], y0 + sz); ctx.stroke();
+      ctx.strokeStyle = AB.alpha(P.dim, 0.45);
+      GL.forEach(function (l) { ctx.beginPath(); l.forEach(function (q, i) { var hq = hid(q, M), p = S(hq[0], hq[1]); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.stroke(); });
+      var seg = clipLine(fit.v, fit.c, lo[0], hi[0], lo[1], hi[1]);
+      if (seg) { var a = S(seg[0][0], seg[0][1]), c = S(seg[1][0], seg[1][1]); ctx.strokeStyle = P.text; ctx.lineWidth = 2.2; ctx.setLineDash([7, 5]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.setLineDash([]); }
+      H.forEach(function (q, i) { var p = S(q[0], q[1]); dot(ctx, p[0], p[1], 4.5, data[i].y ? P.accent : P.accent2, P.bg, 1); });
+      ctx.restore();
+      font(ctx, 11, true); ctx.fillStyle = P.ok; ctx.textBaseline = "top"; ctx.fillText("h1 →", x0 + sz - 40, o[1] + 4 > y0 + sz - 14 ? y0 + sz - 14 : o[1] + 4);
+      ctx.fillStyle = P.warn; ctx.fillText("h2 ↑", AB.clamp(o[0] + 4, x0, x0 + sz - 40), y0 + 18);
+    }, { aspect: 1, maxHeight: 380, minHeight: 260 });
+    function S2W1(p) { return [DOM[0] + (p.x - V1.x0) / V1.s, DOM[0] + (V1.y0 + (DOM[1] - DOM[0]) * V1.s - p.y) / V1.s]; }
+    var el1 = document.getElementById("nr-cv-fold1");
+    function hitF(p) {
+      var M = Wb(), S = function (x, y) { return [V1.x0 + (x - DOM[0]) * V1.s, V1.y0 + (DOM[1] - DOM[0]) * V1.s - (y - DOM[0]) * V1.s]; };
+      for (var j = 0; j < 2; j++) {
+        var hd = handleOf(j, M); if (!hd) continue;
+        var A = S(hd.A[0], hd.A[1]), T = S(hd.T[0], hd.T[1]);
+        if (Math.hypot(p.x - T[0], p.y - T[1]) < 15) return { j: j, k: "tip", A: hd.A };
+        if (Math.hypot(p.x - A[0], p.y - A[1]) < 15) return { j: j, k: "anc" };
+      }
+      return null;
+    }
+    function setRow(j, w, b) {
+      var k = j ? ["w21", "w22", "b2"] : ["w11", "w12", "b1"];
+      var m = Math.max(Math.abs(w[0]), Math.abs(w[1]), Math.abs(b) / 1, 1e-9), sc = m > 2 ? 2 / m : 1;
+      document.getElementById("nr-f-" + k[0]).value = w[0] * sc; document.getElementById("nr-f-" + k[1]).value = w[1] * sc; document.getElementById("nr-f-" + k[2]).value = AB.clamp(b * sc, -2, 2);
+      k.forEach(function (q) { R[q].set(+document.getElementById("nr-f-" + q).value); });
+    }
+    var busy = false;
+    dragger(el1, {
+      down: function (p) { drag = hitF(p); if (!drag) return false; },
+      move: function (p) {
+        if (!drag || busy) return;
+        var M = Wb(), w = M.W[drag.j], b = M.b[drag.j], q = S2W1(p), n = Math.hypot(w[0], w[1]);
+        busy = true;
+        if (drag.k === "anc") setRow(drag.j, w, -(w[0] * q[0] + w[1] * q[1]));
+        else { var d = [q[0] - drag.A[0], q[1] - drag.A[1]], dn = Math.hypot(d[0], d[1]); if (dn > 0.03) { var nw = [d[0] / dn * n, d[1] / dn * n]; setRow(drag.j, nw, -(nw[0] * drag.A[0] + nw[1] * drag.A[1])); } }
+        busy = false;
+      },
+      up: function () { drag = null; },
+      hover: function (p) { return hitF(p) ? "grab" : ""; },
+    });
+    var PRE = { xor: [1, 1, 0, 1, 1, -1], lin: [1, -0.5, 0.2, 0.5, 1, 0.2] };
+    var rr = AB.rng(8);
+    document.querySelectorAll("[data-nrf]").forEach(function (bt) {
+      bt.addEventListener("click", function () {
+        var v = PRE[bt.dataset.nrf] || ids.map(function () { return Math.round((rr() * 3 - 1.5) * 20) / 20; });
+        if (bt.dataset.nrf !== "lin") useRelu.checked = true;
+        ids.forEach(function (k, i) { document.getElementById("nr-f-" + k).value = v[i]; R[k].set(v[i]); });
+      });
+    });
+    useRelu.addEventListener("change", update);
+    // 슬라이더 set이 update를 여러 번 부르므로 처음엔 직접 호출
+    update();
+  })();
+
+  /* ======================================================== SIM 4: 신경망 플레이그라운드 */
+  (function () {
+    var LRS = [0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1];
+    var dsSel = AB.seg("nr-pl-ds", function () { makeData(); resetNet(); });
+    var Lr = AB.range("nr-pl-L", function (v) { return v; }, function () { resetNet(); });
+    var Hr = AB.range("nr-pl-H", function (v) { return v; }, function () { resetNet(); });
+    var actSel = AB.seg("nr-pl-act", function () { resetNet(); });
+    var optSel = AB.seg("nr-pl-opt", function () { resetOpt(); });
+    var lrR = AB.range("nr-pl-lr", function (v) { return LRS[v]; });
+    var addSel = AB.seg("nr-pl-add");
+    var train = [], test = [], net = null, steps = 0, hist = [], running = false, frame = 0, seedN = 1;
+
+    function makeData() {
+      var kind = dsSel(), r = AB.rng(kind.length * 31 + 7), all = [], n = 300, i;
+      function push(x, y, c) { all.push({ x: [x, y], y: c }); }
+      for (i = 0; i < n; i++) {
+        var c = i % 2;
+        if (kind === "circle") {
+          var rad = c ? r() * 0.45 : 0.68 + r() * 0.3, t = r() * 2 * Math.PI;
+          push(rad * Math.cos(t) + r.n() * 0.03, rad * Math.sin(t) + r.n() * 0.03, c);
+        } else if (kind === "xor") {
+          var x = r() * 2 - 1, y = r() * 2 - 1;
+          x += x > 0 ? 0.04 : -0.04; y += y > 0 ? 0.04 : -0.04;
+          push(x * 0.95, y * 0.95, x * y > 0 ? 1 : 0);
+        } else if (kind === "moons") {
+          var tt = r() * Math.PI, px, py;
+          if (c) { px = Math.cos(tt); py = Math.sin(tt); } else { px = 1 - Math.cos(tt); py = 0.5 - Math.sin(tt); }
+          push((px - 0.5) * 0.85 + r.n() * 0.06, (py - 0.25) * 0.85 + r.n() * 0.06, c);
+        } else {
+          var k = Math.floor(i / 2), rr = 0.08 + 0.85 * k / (n / 2), th = 1.75 * 2 * Math.PI * k / (n / 2) + (c ? 0 : Math.PI);
+          push(rr * Math.sin(th) + r.n() * 0.025, rr * Math.cos(th) + r.n() * 0.025, c);
+        }
+      }
+      // 섞어서 2/3 학습, 1/3 테스트
+      for (i = all.length - 1; i > 0; i--) { var j = Math.floor(r() * (i + 1)), tmp = all[i]; all[i] = all[j]; all[j] = tmp; }
+      train = all.slice(0, 200); test = all.slice(200);
+    }
+    function resetNet() {
+      var L = Lr(), H = Hr(), act = actSel(), sizes = [2];
+      for (var l = 0; l < L; l++) sizes.push(H); sizes.push(1);
+      var r = AB.rng(1000 + seedN * 17 + L * 3 + H), W = [], B = [];
+      for (l = 0; l < sizes.length - 1; l++) {
+        var nin = sizes[l], nout = sizes[l + 1], std = act === "relu" && l < sizes.length - 2 ? Math.sqrt(2 / nin) : Math.sqrt(1 / nin);
+        var w = new Float64Array(nin * nout); for (var i = 0; i < w.length; i++) w[i] = r.n() * std;
+        W.push(w); B.push(new Float64Array(nout).fill(act === "relu" && l < sizes.length - 2 ? 0.05 : 0));
+      }
+      net = { sizes: sizes, act: act, W: W, B: B, L: sizes.length - 1 };
+      net.A = sizes.map(function (s) { return new Float64Array(s); });
+      net.Zs = sizes.map(function (s) { return new Float64Array(s); });
+      net.D = sizes.map(function (s) { return new Float64Array(s); });
+      net.gW = W.map(function (w) { return new Float64Array(w.length); }); net.gB = B.map(function (b) { return new Float64Array(b.length); });
+      resetOpt();
+      steps = 0; hist = []; frame = 0;
+      var np = 0; for (l = 0; l < net.L; l++) np += W[l].length + B[l].length;
+      AB.stat("nr-pl-np", np);
+      resizeNetPanel();
+      evalLoss(); drawAll(true);
+    }
+    function resetOpt() {
+      if (!net) return;
+      net.mW = net.W.map(function (w) { return new Float64Array(w.length); }); net.vW = net.W.map(function (w) { return new Float64Array(w.length); });
+      net.mB = net.B.map(function (b) { return new Float64Array(b.length); }); net.vB = net.B.map(function (b) { return new Float64Array(b.length); });
+      net.t = 0;
+    }
+    function forward(x) {
+      var A = net.A, Z = net.Zs, relu = net.act === "relu";
+      A[0][0] = x[0]; A[0][1] = x[1];
+      for (var l = 0; l < net.L; l++) {
+        var nin = net.sizes[l], nout = net.sizes[l + 1], w = net.W[l], b = net.B[l], a = A[l], zl = Z[l + 1], al = A[l + 1], last = l === net.L - 1;
+        for (var o = 0; o < nout; o++) {
+          var s = b[o], off = o * nin; for (var i = 0; i < nin; i++) s += w[off + i] * a[i];
+          zl[o] = s; al[o] = last ? 1 / (1 + Math.exp(-s)) : relu ? (s > 0 ? s : 0) : Math.tanh(s);
+        }
+      }
+      return A[net.L][0];
+    }
+    function trainStep(bs) {
+      var l, i, o, relu = net.act === "relu";
+      for (l = 0; l < net.L; l++) { net.gW[l].fill(0); net.gB[l].fill(0); }
+      for (var s = 0; s < bs; s++) {
+        var d = train[Math.floor(Math.random() * train.length)];
+        var p = forward(d.x);
+        net.D[net.L][0] = p - d.y; // BCE + sigmoid
+        for (l = net.L - 1; l >= 0; l--) {
+          var nin = net.sizes[l], nout = net.sizes[l + 1], w = net.W[l], a = net.A[l], dl = net.D[l + 1], gW = net.gW[l], gB = net.gB[l];
+          for (o = 0; o < nout; o++) { var g = dl[o]; gB[o] += g; var off = o * nin; for (i = 0; i < nin; i++) gW[off + i] += g * a[i]; }
+          if (l > 0) {
+            var dp = net.D[l], zp = net.Zs[l], ap = net.A[l];
+            for (i = 0; i < nin; i++) {
+              var sum = 0; for (o = 0; o < nout; o++) sum += w[o * nin + i] * dl[o];
+              dp[i] = sum * (relu ? (zp[i] > 0 ? 1 : 0) : 1 - ap[i] * ap[i]);
+            }
+          }
+        }
+      }
+      var lr = LRS[lrR()], adam = optSel() === "adam", b1 = 0.9, b2 = 0.999, eps = 1e-8;
+      net.t++;
+      var c1 = 1 - Math.pow(b1, net.t), c2 = 1 - Math.pow(b2, net.t);
+      for (l = 0; l < net.L; l++) {
+        [[net.W[l], net.gW[l], net.mW[l], net.vW[l]], [net.B[l], net.gB[l], net.mB[l], net.vB[l]]].forEach(function (q) {
+          var P = q[0], G = q[1], m = q[2], v = q[3];
+          for (var k = 0; k < P.length; k++) {
+            var gk = G[k] / bs;
+            if (adam) { m[k] = b1 * m[k] + (1 - b1) * gk; v[k] = b2 * v[k] + (1 - b2) * gk * gk; P[k] -= lr * (m[k] / c1) / (Math.sqrt(v[k] / c2) + eps); }
+            else P[k] -= lr * gk;
+          }
+        });
+      }
+      steps++;
+    }
+    function lossOn(set) {
+      var L = 0, acc = 0;
+      set.forEach(function (d) { var p = AB.clamp(forward(d.x), 1e-7, 1 - 1e-7); L -= d.y ? Math.log(p) : Math.log(1 - p); if ((p > 0.5 ? 1 : 0) === d.y) acc++; });
+      return { L: L / set.length, acc: acc / set.length };
+    }
+    var cur = { tr: null, te: null };
+    function evalLoss() {
+      var a = lossOn(train), b = lossOn(test);
+      cur = { tr: a.L, te: b.L, acc: b.acc };
+      var ep = steps * 10 / train.length;
+      hist.push([ep, a.L, b.L]); if (hist.length > 600) hist = hist.filter(function (_, i) { return i % 2 === 0; });
+      AB.stat("nr-pl-ep", Math.floor(ep));
+      AB.stat("nr-pl-tr", isFinite(a.L) ? a.L.toFixed(3) : "발산");
+      AB.stat("nr-pl-te", isFinite(b.L) ? b.L.toFixed(3) : "발산");
+      AB.stat("nr-pl-acc", (b.acc * 100).toFixed(1) + "%");
+    }
+    // ----- 그리기
+    var RES = 44, off = document.createElement("canvas"); off.width = RES; off.height = RES;
+    var offCtx = off.getContext("2d"), img = offCtx.createImageData(RES, RES), lut = null, view = {};
+    AB.onTheme(function () { lut = null; });
+    var cvP = AB.canvas(document.getElementById("nr-cv-play"), function (ctx, w, h) {
+      if (!net) return;
+      var P = AB.palette();
+      if (!lut) lut = divLUT(101, 0.62);
+      var sz = Math.min(w, h), x0 = (w - sz) / 2, y0 = (h - sz) / 2;
+      view = { x0: x0, y0: y0, sz: sz };
+      for (var j = 0; j < RES; j++) for (var i = 0; i < RES; i++) {
+        var p = forward([-1.2 + 2.4 * (i + 0.5) / RES, 1.2 - 2.4 * (j + 0.5) / RES]);
+        if (!isFinite(p)) p = 0.5;
+        var c = lut[Math.round(p * 100)], k = (j * RES + i) * 4;
+        img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 255;
+      }
+      offCtx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = true; ctx.drawImage(off, x0, y0, sz, sz);
+      var S = function (x) { return [x0 + (x[0] + 1.2) / 2.4 * sz, y0 + (1.2 - x[1]) / 2.4 * sz]; };
+      ctx.strokeStyle = AB.alpha(P.text, 0.15); ctx.lineWidth = 1; var o = S([0, 0]);
+      ctx.beginPath(); ctx.moveTo(x0, o[1]); ctx.lineTo(x0 + sz, o[1]); ctx.moveTo(o[0], y0); ctx.lineTo(o[0], y0 + sz); ctx.stroke();
+      train.forEach(function (d) { var s = S(d.x); dot(ctx, s[0], s[1], 3.6, d.y ? P.accent : P.accent2, P.bg, 1); });
+      if (document.getElementById("nr-pl-test").checked) test.forEach(function (d) { var s = S(d.x); dot(ctx, s[0], s[1], 3.6, null, d.y ? P.accent : P.accent2, 1.6); });
+    }, { aspect: 1, maxHeight: 440, minHeight: 280 });
+    var cvL = AB.canvas(document.getElementById("nr-cv-loss"), function (ctx, w, h) {
+      var P = AB.palette();
+      var xm = Math.max(10, hist.length ? hist[hist.length - 1][0] : 10);
+      var ym = 0.8; hist.forEach(function (q) { if (isFinite(q[1])) ym = Math.max(ym, Math.min(q[1], 3)); });
+      AB.chart(ctx, { x: 46, y: 10, w: w - 60, h: h - 52 }, { x: [0, xm], y: [0, ym], xLabel: "에폭", yLabel: "손실",
+        series: [{ data: hist.map(function (q) { return [q[0], q[1]]; }), color: P.accent, width: 2 }, { data: hist.map(function (q) { return [q[0], q[2]]; }), color: P.accent2, width: 1.6, dash: [5, 3] }] });
+    }, { height: 150 });
+    var netOpts = { height: 120 };
+    var cvN = AB.canvas(document.getElementById("nr-cv-net"), function (ctx, w, h) {
+      if (!net) return;
+      var P = AB.palette(), T = 30, G = 6, R2 = 14, rows = net.L, bg = AB.rgb(P.bg), ca = AB.rgb(P.accent), cb = AB.rgb(P.accent2);
+      font(ctx, 11, true);
+      var tile = document.createElement("canvas"); tile.width = R2; tile.height = R2; var tctx = tile.getContext("2d"), tim = tctx.createImageData(R2, R2);
+      for (var l = 1; l <= rows; l++) {
+        var y = 6 + (l - 1) * (T + 10), n = net.sizes[l];
+        ctx.fillStyle = P.dim; ctx.textBaseline = "middle"; ctx.fillText(l === rows ? "출력" : "층 " + l, 0, y + T / 2);
+        var vals = [];
+        for (var j = 0; j < R2; j++) for (var i = 0; i < R2; i++) { forward([-1.2 + 2.4 * (i + 0.5) / R2, 1.2 - 2.4 * (j + 0.5) / R2]); var row = []; for (var q = 0; q < n; q++) row.push(net.A[l][q]); vals.push(row); }
+        for (q = 0; q < n; q++) {
+          var mx = 1e-9; if (net.act === "relu" && l < rows) vals.forEach(function (r) { mx = Math.max(mx, r[q]); });
+          for (var k = 0; k < vals.length; k++) {
+            var v = vals[k][q], t = l === rows ? v * 2 - 1 : net.act === "relu" ? v / mx : v;
+            var c = t >= 0 ? ca : cb, s = Math.min(1, Math.abs(t)) * 0.8;
+            tim.data[k * 4] = bg[0] + (c[0] - bg[0]) * s; tim.data[k * 4 + 1] = bg[1] + (c[1] - bg[1]) * s; tim.data[k * 4 + 2] = bg[2] + (c[2] - bg[2]) * s; tim.data[k * 4 + 3] = 255;
+          }
+          tctx.putImageData(tim, 0, 0);
+          var x = 44 + q * (T + G);
+          ctx.imageSmoothingEnabled = true; ctx.drawImage(tile, x, y, T, T);
+          ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+        }
+      }
+    }, netOpts);
+    function resizeNetPanel() { netOpts.height = 12 + net.L * 40; cvN.resize(); }
+    function drawAll(full) { cvP.redraw(); cvL.redraw(); if (full) cvN.redraw(); }
+    // ----- 루프
+    var runBtn = document.getElementById("nr-pl-run");
+    var loop = AB.loop(document.getElementById("sim-nr-play"), function () {
+      if (!running) return;
+      for (var k = 0; k < 10; k++) trainStep(10);
+      frame++;
+      if (frame % 3 === 0) evalLoss();
+      if (!isFinite(cur.tr) && frame > 3) { running = false; runBtn.textContent = "▶ 학습 시작"; }
+      drawAll(frame % 8 === 0);
+    });
+    loop.stop();
+    runBtn.addEventListener("click", function () { running = !running; runBtn.textContent = running ? "❚❚ 일시정지" : "▶ 학습 시작"; running ? loop.start() : (loop.stop(), drawAll(true)); });
+    document.getElementById("nr-pl-reset").addEventListener("click", function () { seedN++; resetNet(); });
+    document.getElementById("nr-pl-test").addEventListener("change", function () { cvP.redraw(); });
+    var elP = document.getElementById("nr-cv-play");
+    elP.addEventListener("pointerdown", function (e) {
+      var p = ptr(elP, e); if (!view.sz) return;
+      var x = (p.x - view.x0) / view.sz * 2.4 - 1.2, y = 1.2 - (p.y - view.y0) / view.sz * 2.4;
+      if (Math.abs(x) > 1.2 || Math.abs(y) > 1.2) return;
+      train.push({ x: [x, y], y: +addSel() }); cvP.redraw();
+    });
+    makeData(); resetNet();
+  })();
+
+  /* ======================================================== SIM 5: ReLU 근사 */
+  (function () {
+    var el = document.getElementById("nr-cv-uat");
+    var fSel = AB.seg("nr-u-f", function () { solve(); });
+    var Nr = AB.range("nr-u-N", function (v) { return v; }, function () { solve(); });
+    var kSel = AB.seg("nr-u-knot", function () { solve(); });
+    var CX = [], CY = []; for (var i = 0; i <= 10; i++) { CX.push(i / 10); CY.push(0); }
+    var TG = {
+      sin: function (x) { return Math.sin(2 * Math.PI * x); },
+      step: function (x) { return x < 0.5 ? -0.7 : 0.7; },
+      bump: function (x) { return 1.6 * Math.exp(-Math.pow((x - 0.5) / 0.1, 2)) - 0.6; },
+      abs: function (x) { return 1.6 * Math.abs(Math.sin(3 * Math.PI * x)) - 0.8; },
+      user: function (x) { var k = Math.min(9, Math.floor(x * 10)), t = x * 10 - k; return CY[k] * (1 - t) + CY[k + 1] * t; },
+    };
+    var M = 400, XS = []; for (i = 0; i < M; i++) XS.push((i + 0.5) / M);
+    var sol = null, drag = -1, box = null;
+    function knots(N) {
+      var t = [0];
+      if (kSel() === "uni") for (var k = 1; k < N; k++) t.push(k / N);
+      else { var r = AB.rng(3 + N); var arr = []; for (k = 1; k < N; k++) arr.push(r()); arr.sort(function (a, b) { return a - b; }); t = t.concat(arr); }
+      return t;
+    }
+    function gauss(A, b) { // 부분 피벗 가우스 소거
+      var n = b.length, i, j, k;
+      for (i = 0; i < n; i++) {
+        var mx = i; for (j = i + 1; j < n; j++) if (Math.abs(A[j][i]) > Math.abs(A[mx][i])) mx = j;
+        var t = A[i]; A[i] = A[mx]; A[mx] = t; var tb = b[i]; b[i] = b[mx]; b[mx] = tb;
+        var piv = A[i][i] || 1e-300;
+        for (j = i + 1; j < n; j++) { var f = A[j][i] / piv; if (!f) continue; for (k = i; k < n; k++) A[j][k] -= f * A[i][k]; b[j] -= f * b[i]; }
+      }
+      var x = new Array(n).fill(0);
+      for (i = n - 1; i >= 0; i--) { var s = b[i]; for (j = i + 1; j < n; j++) s -= A[i][j] * x[j]; x[i] = s / (A[i][i] || 1e-300); }
+      return x;
+    }
+    function solve() {
+      var N = Nr(), t = knots(N), f = TG[fSel()], n = N + 1, i, j, k;
+      var phi = function (x, j) { return j === 0 ? 1 : Math.max(0, x - t[j - 1]); };
+      var A = [], b = new Array(n).fill(0);
+      for (i = 0; i < n; i++) A.push(new Array(n).fill(0));
+      var Y = XS.map(f);
+      for (k = 0; k < M; k++) { var row = []; for (j = 0; j < n; j++) row.push(phi(XS[k], j)); for (i = 0; i < n; i++) { b[i] += row[i] * Y[k]; for (j = 0; j < n; j++) A[i][j] += row[i] * row[j]; } }
+      var tr = 0; for (i = 0; i < n; i++) tr += A[i][i];
+      for (i = 0; i < n; i++) A[i][i] += 1e-10 * tr;
+      var a = gauss(A, b);
+      var se = 0, me = 0;
+      for (k = 0; k < M; k++) { var yh = 0; for (j = 0; j < n; j++) yh += a[j] * phi(XS[k], j); var e = Math.abs(yh - Y[k]); se += e * e; me = Math.max(me, e); }
+      sol = { a: a, t: t, phi: phi, f: f };
+      AB.stat("nr-u-n", N);
+      AB.stat("nr-u-p", 3 * N + 1);
+      AB.stat("nr-u-rmse", AB.fmt(Math.sqrt(se / M), 3));
+      AB.stat("nr-u-max", AB.fmt(me, 3));
+      cv.redraw();
+    }
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      if (!sol) return;
+      var P = AB.palette(), N = sol.t.length;
+      var tg = [], ap = [];
+      for (var k = 0; k <= 300; k++) { var x = k / 300, yh = 0; for (var j = 0; j <= N; j++) yh += sol.a[j] * sol.phi(x, j); tg.push([x, sol.f(x)]); ap.push([x, yh]); }
+      var series = [];
+      if (document.getElementById("nr-u-units").checked && N <= 48) {
+        for (j = 1; j <= N; j++) { (function (jj) { var d = []; for (var k = 0; k <= 60; k++) { var x = k / 60; d.push([x, sol.a[0] / N + sol.a[jj] * sol.phi(x, jj)]); } series.push({ data: d, color: AB.alpha(P.accent2, 0.35), width: 1 }); })(j); }
+      }
+      series.push({ data: tg, color: AB.alpha(P.dim, 0.6), width: 5 });
+      series.push({ data: ap, color: P.accent, width: 2.4 });
+      var ch = AB.chart(ctx, null, { x: [0, 1], y: [-1.4, 1.4], xLabel: "x", yLabel: "f(x)", series: series });
+      box = ch;
+      // 꺾이는 위치
+      ctx.strokeStyle = P.warn; ctx.lineWidth = 1.5;
+      sol.t.forEach(function (t) { var X = ch.X(t); ctx.beginPath(); ctx.moveTo(X, ch.box.y + ch.box.h); ctx.lineTo(X, ch.box.y + ch.box.h - 8); ctx.stroke(); });
+      if (fSel() === "user") CX.forEach(function (x, i) { dot(ctx, ch.X(x), ch.Y(CY[i]), 6, P.bg, P.text, 2); });
+      font(ctx, 12); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.dim; ctx.fillText("굵은 회색: 목표 · 보라: 근사 · 분홍: 유닛 · 주황 눈금: tₖ", ch.box.x + ch.box.w - 4, ch.box.y + 4);
+    }, { aspect: 0.6, maxHeight: 420, minHeight: 280 });
+    function toUser() {
+      if (fSel() !== "user") { var f = TG[fSel()]; for (var i = 0; i <= 10; i++) CY[i] = AB.clamp(f(CX[i]), -1.3, 1.3); fSel.set("user", false); }
+    }
+    function setPt(p) {
+      if (!box || drag < 0) return;
+      var y = AB.clamp(-1.4 + 2.8 * (box.box.y + box.box.h - p.y) / box.box.h, -1.3, 1.3);
+      CY[drag] = Math.round(y * 50) / 50; solve();
+    }
+    dragger(el, {
+      down: function (p) {
+        if (!box) return false;
+        var x = (p.x - box.box.x) / box.box.w; if (x < -0.05 || x > 1.05) return false;
+        toUser(); drag = Math.round(AB.clamp(x, 0, 1) * 10); setPt(p);
+      },
+      move: setPt,
+      up: function () { drag = -1; },
+    });
+    document.getElementById("nr-u-units").addEventListener("change", function () { cv.redraw(); });
+    solve();
+  })();
+
+  /* ======================================================== SIM 6: 소프트맥스 */
+  (function () {
+    var el = document.getElementById("nr-cv-soft");
+    var NAMES = ["고양이", "개", "여우", "자동차", "비행기"], Z0 = [2, 1.2, 0.8, -1, -2];
+    var z = Z0.slice(), tgt = 0, drag = -1, lay = null;
+    var Tr = AB.range("nr-s-T", function (v) { return v.toFixed(2); }, function () { cv.redraw(); });
+    var cv = AB.canvas(el, function (ctx, w, h) {
+      var P = AB.palette(), T = Tr(), p = AB.softmax(z, T), K = z.length;
+      var gap = 18, pw = (w - 40 - gap) / 2, top = 28, bot = h - 34, ph = bot - top;
+      lay = { x1: 30, pw: pw, top: top, ph: ph, bot: bot, x2: 30 + pw + gap, bw: pw / K };
+      font(ctx, 12, false, true); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("로짓 z (끌기)", lay.x1, 6); ctx.fillText("확률 p = softmax(z / T)", lay.x2, 6);
+      var Yz = function (v) { return top + ph * (1 - (v + 6) / 12); }, Yp = function (v) { return bot - ph * v; };
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(lay.x1, Yz(0)); ctx.lineTo(lay.x1 + pw, Yz(0)); ctx.moveTo(lay.x2, bot); ctx.lineTo(lay.x2 + pw, bot); ctx.stroke();
+      ctx.strokeStyle = P.grid; [-4, -2, 2, 4].forEach(function (g) { ctx.beginPath(); ctx.moveTo(lay.x1, Yz(g)); ctx.lineTo(lay.x1 + pw, Yz(g)); ctx.stroke(); });
+      [0.25, 0.5, 0.75, 1].forEach(function (g) { ctx.beginPath(); ctx.moveTo(lay.x2, Yp(g)); ctx.lineTo(lay.x2 + pw, Yp(g)); ctx.stroke(); });
+      font(ctx, 10, true); ctx.fillStyle = P.faint; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      [-4, 0, 4].forEach(function (g) { ctx.fillText(g, lay.x1 - 4, Yz(g)); });
+      for (var k = 0; k < K; k++) {
+        var bx = lay.x1 + k * lay.bw + lay.bw * 0.18, bw = lay.bw * 0.64, y0 = Yz(0), y1 = Yz(z[k]);
+        ctx.fillStyle = z[k] >= 0 ? P.accent : P.accent2; ctx.fillRect(bx, Math.min(y0, y1), bw, Math.abs(y1 - y0) || 1);
+        font(ctx, 11, true, true); ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.textBaseline = z[k] >= 0 ? "bottom" : "top";
+        ctx.fillText(z[k].toFixed(1), bx + bw / 2, z[k] >= 0 ? y1 - 2 : y1 + 2);
+        var qx = lay.x2 + k * lay.bw + lay.bw * 0.18;
+        if (k === tgt) { ctx.strokeStyle = P.ok; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.strokeRect(qx - 2, Yp(1), bw + 4, ph); ctx.setLineDash([]); }
+        ctx.fillStyle = k === tgt ? P.ok : AB.alpha(P.accent, 0.8); ctx.fillRect(qx, Yp(p[k]), bw, bot - Yp(p[k]));
+        ctx.fillStyle = P.text; ctx.textBaseline = "bottom"; ctx.fillText(p[k] >= 0.995 ? "1.00" : p[k].toFixed(2).replace(/^0/, ""), qx + bw / 2, Yp(p[k]) - 2);
+        font(ctx, 12, false, k === tgt); ctx.fillStyle = k === tgt ? P.ok : P.dim; ctx.textBaseline = "top";
+        ctx.fillText(NAMES[k], bx + bw / 2, bot + 8); ctx.fillText(NAMES[k], qx + bw / 2, bot + 8);
+      }
+      var pt = p[tgt], H = AB.entropy(p);
+      AB.stat("nr-s-pt", pt.toFixed(3));
+      AB.stat("nr-s-ce", (-Math.log(Math.max(pt, 1e-300))).toFixed(3));
+      AB.stat("nr-s-H", H.toFixed(3));
+      AB.stat("nr-s-g", "[" + p.map(function (v, k) { return ((v - (k === tgt ? 1 : 0)) / T).toFixed(2); }).join(", ") + "]");
+    }, { aspect: 0.55, maxHeight: 360, minHeight: 260 });
+    function which(p) {
+      if (!lay) return null;
+      var inL = p.x >= lay.x1 && p.x < lay.x1 + lay.pw, inR = p.x >= lay.x2 && p.x < lay.x2 + lay.pw;
+      if (!inL && !inR) return null;
+      var k = Math.floor((p.x - (inL ? lay.x1 : lay.x2)) / lay.bw);
+      if (k < 0 || k >= z.length) return null;
+      return { k: k, label: p.y > lay.bot + 2, left: inL };
+    }
+    function setZ(p) { z[drag] = AB.clamp(Math.round((((lay.top + lay.ph - p.y) / lay.ph) * 12 - 6) * 10) / 10, -6, 6); cv.redraw(); }
+    dragger(el, {
+      down: function (p) {
+        var h = which(p); if (!h) return false;
+        if (h.label || !h.left) { tgt = h.k; cv.redraw(); return false; }
+        drag = h.k; setZ(p);
+      },
+      move: function (p) { if (drag >= 0) setZ(p); },
+      up: function () { drag = -1; },
+      hover: function (p) { var h = which(p); return h ? (h.label || !h.left ? "pointer" : "ns-resize") : ""; },
+    });
+    document.getElementById("nr-s-shift").addEventListener("click", function () { var m = Math.max.apply(null, z); if (m < 6) z = z.map(function (v) { return Math.min(6, v + 1); }); cv.redraw(); });
+    document.getElementById("nr-s-reset").addEventListener("click", function () { z = Z0.slice(); tgt = 0; Tr.set(1); cv.redraw(); });
+    document.getElementById("nr-s-grad").addEventListener("click", function () { var T = Tr(), p = AB.softmax(z, T); z = z.map(function (v, k) { return AB.clamp(v - 1.0 * (p[k] - (k === tgt ? 1 : 0)) / T, -6, 6); }); cv.redraw(); });
+  })();
+
+  /* ======================================================== SIM 7: 파라미터 계산기 */
+  (function () {
+    var inp = document.getElementById("nr-pm-sizes"), bias = document.getElementById("nr-pm-bias"), glu = document.getElementById("nr-pm-glu");
+    var rep = AB.range("nr-pm-rep", function (v) { return "×" + v; }, calc);
+    var tbl = document.getElementById("nr-pm-table");
+    function calc() {
+      var s = inp.value.split(/[^0-9]+/).filter(Boolean).map(Number).filter(function (v) { return v > 0; });
+      if (s.length < 2) { tbl.innerHTML = '<tr><td>층 크기를 2개 이상 입력하세요 (예: 784, 256, 10)</td></tr>'; return; }
+      var rows = "", tot = 0, wsum = 0;
+      for (var l = 1; l < s.length; l++) {
+        var wN = s[l - 1] * s[l], g = glu.checked && l < s.length - 1 ? wN : 0, bN = bias.checked ? s[l] * (g ? 2 : 1) : 0, sum = wN + g + bN;
+        tot += sum; wsum += wN + g;
+        rows += "<tr><td>층 " + l + "</td><td class=\"num\">" + s[l - 1].toLocaleString() + " → " + s[l].toLocaleString() + "</td><td class=\"num\">" + wN.toLocaleString() + (g ? " + " + g.toLocaleString() + " (게이트)" : "") + "</td><td class=\"num\">" + bN.toLocaleString() + "</td><td class=\"num\">" + sum.toLocaleString() + "</td></tr>";
+      }
+      tbl.innerHTML = "<thead><tr><th>층</th><th class=\"num\">크기</th><th class=\"num\">가중치</th><th class=\"num\">편향</th><th class=\"num\">합</th></tr></thead><tbody>" + rows + "</tbody>";
+      var R = rep(), all = tot * R;
+      AB.stat("nr-pm-one", tot.toLocaleString());
+      AB.stat("nr-pm-all", all.toLocaleString() + " <small>(" + AB.big(all) + ")</small>");
+      AB.stat("nr-pm-mem", AB.si(all * 4, "B") + " / " + AB.si(all * 2, "B"));
+      AB.stat("nr-pm-fl", AB.si(2 * wsum * R, "FLOP"));
+    }
+    var PRE = {
+      mnist: ["784, 256, 128, 10", 1, true, false], gpt2: ["768, 3072, 768", 12, true, false], llama: ["4096, 14336, 4096", 32, false, true],
+      deep: ["2, 8, 8, 8, 8, 1", 1, true, false], wide: ["2, 64, 1", 1, true, false],
+    };
+    document.querySelectorAll("[data-nrpm]").forEach(function (b) {
+      b.addEventListener("click", function () { var p = PRE[b.dataset.nrpm]; inp.value = p[0]; bias.checked = p[2]; glu.checked = p[3]; rep.set(p[1]); calc(); });
+    });
+    [inp, bias, glu].forEach(function (x) { x.addEventListener("input", calc); x.addEventListener("change", calc); });
+    calc();
+  })();
+})();
+</script>
+</body>
+</html>

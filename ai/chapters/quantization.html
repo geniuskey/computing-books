@@ -1,0 +1,1667 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>양자화 · AIBook</title>
+<meta name="description" content="FP32·BF16·FP8·FP4의 비트 구조, 스케일과 영점으로 만드는 정수 양자화, per-tensor·per-channel·per-group 입도, 활성값 이상치와 SmoothQuant, GPTQ·AWQ, 그리고 모델 크기와 디코딩 속도의 관계.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .qz-bitrow { display: flex; flex-wrap: wrap; gap: 3px; padding: 16px 18px 8px; justify-content: center; }
+  .qz-bit { font: 600 14px var(--mono); width: 26px; height: 36px; border-radius: 6px; border: 1.5px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; padding: 0; display: grid; place-items: center; user-select: none; touch-action: manipulation; }
+  .qz-bitrow.dense .qz-bit { width: 21px; height: 32px; font-size: 13px; }
+  .qz-bit.s { border-color: var(--accent-2); background: var(--accent-2-soft); }
+  .qz-bit.e { border-color: var(--accent); background: var(--accent-soft); }
+  .qz-bit.m { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .qz-bit.one { color: var(--on-accent); }
+  .qz-bit.s.one { background: var(--accent-2); }
+  .qz-bit.e.one { background: var(--accent); }
+  .qz-bit.m.one { background: var(--warn); color: #1b1300; }
+  .qz-bit:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .qz-gap { width: 8px; }
+  .qz-decode { padding: 4px 18px 14px; text-align: center; font-family: var(--mono); font-size: 14px; color: var(--text-dim); line-height: 1.7; overflow-wrap: anywhere; }
+  .qz-decode b { color: var(--text); }
+  .qz-decode .sg { color: var(--accent-2); } .qz-decode .ex { color: var(--accent); } .qz-decode .mn { color: var(--warn); }
+  .qz-inrow { display: flex; gap: 8px; }
+  .qz-inrow .ab-input { flex: 1; min-width: 0; }
+  .sim-view canvas + canvas { border-top: 1px solid var(--border); }
+  .qz-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .qz-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .qz-presets .btn { padding: 5px 10px; font-size: 13px; }
+  .qz-verdict.ok { color: var(--ok); } .qz-verdict.bad { color: var(--bad); }
+  figure.diagram svg.qz-narrow { max-width: 640px; margin: 0 auto; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="quantization">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 09</div>
+    <h1>양자화</h1>
+    <p class="lead">Llama 3 70B를 BF16으로 저장하면 140 GB다. H100 한 장(80 GB)에 들어가지 않고, 들어간다 해도 토큰 하나를 만들 때마다 그 140 GB를 메모리에서 통째로 읽어야 한다. 숫자 하나에 16비트를 쓰던 것을 8비트, 4비트로 줄이면 모델이 작아지고 디코딩이 빨라진다. 문제는 "얼마나 망가지는가"다. 이 장에서는 비트 하나하나를 직접 뒤집어 부동소수점의 구조를 보고, 실수를 정수 격자에 맞추는 스케일과 영점, 스케일을 얼마나 잘게 나눌지(입도), 이상치가 왜 골칫거리인지, GPTQ·SmoothQuant 같은 방법이 오차를 어떻게 줄이는지, 그리고 Blackwell·Rubin 세대의 표준이 된 블록 스케일 FP4(MXFP4·NVFP4)까지 실제 계산으로 따라간다.</p>
+    <ul class="objectives">
+      <li>LLM 디코딩이 메모리 대역폭에 묶여 있어서, 가중치 비트 수가 곧 속도를 결정한다는 것을 설명할 수 있다.</li>
+      <li>FP32·FP16·BF16·FP8(E4M3/E5M2)·FP4의 부호·지수·가수 구조를 해석하고, 범위와 정밀도의 트레이드오프를 비교할 수 있다.</li>
+      <li>스케일 \(s\)와 영점 \(z\)로 정수 양자화를 수행하고, 반올림 오차와 클리핑 오차의 균형을 이해한다.</li>
+      <li>per-tensor·per-channel·per-group 입도의 차이와 스케일 저장 비용(유효 비트)을 계산할 수 있다.</li>
+      <li>활성값 이상치 채널이 왜 INT8 양자화를 어렵게 하는지, SmoothQuant가 이를 어떻게 가중치로 옮기는지 안다.</li>
+      <li>GPTQ가 헤시안을 이용해 오차를 남은 열로 보정하는 원리, AWQ·NF4·k-quant·MX 포맷의 핵심 아이디어를 설명할 수 있다.</li>
+      <li>MXFP4(블록 32, E8M0 스케일)와 NVFP4(블록 16, E4M3 + 텐서 스케일)를 직접 인코딩해 보고, 유효 비트와 오차의 차이를 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="why">
+    <h2>왜 양자화인가: 토큰당 읽는 바이트</h2>
+    <p>신경망의 파라미터는 결국 숫자 배열이다. 학습은 보통 FP32 마스터 가중치와 BF16 연산으로 하고, 공개되는 체크포인트는 BF16(파라미터당 2바이트)인 경우가 많다. 그러면 모델 크기는 단순한 곱셈이다. 70B(700억) 파라미터 × 2바이트 = <strong>140 GB</strong>, 8B 모델(Llama 3 8B, 약 8.03B) × 2바이트 ≈ 16 GB다.</p>
+    <p>크기가 문제인 이유는 두 가지다. 첫째는 <strong>용량</strong>이다. 140 GB는 80 GB짜리 H100 한 장에 들어가지 않는다. 둘째, 더 중요한 이유는 <strong>속도</strong>다. <a href="generation.html">8장</a>에서 본 것처럼 자기회귀 디코딩은 토큰을 하나씩 만든다. 배치가 1이면 토큰 하나를 만들 때 각 가중치는 곱셈·덧셈 한 번(2 FLOP)에만 쓰이고 버려진다. 즉 바이트당 연산이 고작 1 FLOP 정도다. H100은 초당 약 989조 번(BF16 dense) 계산할 수 있지만 메모리에서는 초당 약 3.35 TB밖에 읽지 못한다. 계산기는 대부분의 시간을 <strong>가중치가 도착하기를 기다리며</strong> 논다. 이런 상태를 <span class="term">메모리 대역폭 바운드</span><span class="en">(memory-bandwidth bound)</span>라고 한다(<a href="design.html">12장</a>의 루프라인에서 자세히 다룬다).</p>
+    <div class="formula">$$t_{\text{token}} \;\gtrsim\; \frac{\text{토큰당 읽는 바이트}}{\text{메모리 대역폭}} \;\approx\; \frac{N_{\text{param}} \times (b/8)}{BW}$$<div class="where">여기서 \(b\)는 가중치 하나당 비트 수, \(BW\)는 GPU 메모리 대역폭이다. 배치 1, KV 캐시 읽기는 무시한 상한이다.</div></div>
+    <p>70B·BF16을 H100 대역폭으로 읽으면 140 GB ÷ 3.35 TB/s ≈ 42 ms, 즉 이론 상한이 초당 약 24 토큰이다. 같은 모델을 4비트로 줄이면 읽을 바이트가 4분의 1이 되어 상한이 약 4배 오른다. 양자화는 계산을 빠르게 하는 기술이기 이전에 <strong>읽어야 할 바이트를 줄이는</strong> 기술이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 290" role="img" aria-label="디코딩 한 토큰마다 HBM에서 가중치 전체를 읽는 구조와 정밀도별 토큰당 시간">
+        <defs>
+          <marker id="qz-ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+        </defs>
+        <rect x="30" y="40" width="170" height="170" rx="12" class="f-surface"/>
+        <text x="115" y="66" text-anchor="middle" class="t-acc">HBM (80 GB)</text>
+        <rect x="50" y="82" width="130" height="22" rx="4" class="f-acc-soft"/>
+        <rect x="50" y="108" width="130" height="22" rx="4" class="f-acc-soft"/>
+        <rect x="50" y="134" width="130" height="22" rx="4" class="f-acc-soft"/>
+        <rect x="50" y="160" width="130" height="22" rx="4" class="f-acc2-soft"/>
+        <text x="115" y="97" text-anchor="middle" class="t-mono">층 1 가중치</text>
+        <text x="115" y="123" text-anchor="middle" class="t-mono">층 2 가중치</text>
+        <text x="115" y="149" text-anchor="middle" class="t-mono">⋮  층 L</text>
+        <text x="115" y="175" text-anchor="middle" class="t-mono">KV 캐시</text>
+        <text x="115" y="200" text-anchor="middle" class="t-dim">토큰마다 전부 읽음</text>
+        <path d="M205 125 H300" class="s-acc" marker-end="url(#qz-ar1)" style="stroke-width:5"/>
+        <text x="252" y="112" text-anchor="middle" class="t-mono">≈3.35 TB/s</text>
+        <text x="252" y="148" text-anchor="middle" class="t-dim">좁은 길</text>
+        <rect x="305" y="70" width="110" height="110" rx="12" class="f-elev"/>
+        <text x="360" y="112" text-anchor="middle" class="t-acc">연산기</text>
+        <text x="360" y="132" text-anchor="middle" class="t-mono">≈989 TFLOPS</text>
+        <text x="360" y="152" text-anchor="middle" class="t-dim">대부분 대기</text>
+        <text x="360" y="230" text-anchor="middle" class="t-dim">H100 SXM, 배치 1 디코딩</text>
+        <!-- bars -->
+        <text x="610" y="30" text-anchor="middle" class="t-acc">70B 모델, 토큰당 읽기 시간 (상한)</text>
+        <path d="M470 50 V250" class="s-axis"/>
+        <rect x="470" y="60" width="300" height="30" rx="3" class="f-acc-soft"/>
+        <text x="462" y="80" text-anchor="end" class="t">BF16</text>
+        <text x="760" y="80" text-anchor="end" class="t-mono">140 GB · 42 ms · ~24 tok/s</text>
+        <rect x="470" y="110" width="150" height="30" rx="3" class="f-acc-soft"/>
+        <text x="462" y="130" text-anchor="end" class="t">FP8</text>
+        <text x="628" y="130" class="t-mono">70 GB · 21 ms · ~48</text>
+        <rect x="470" y="160" width="77" height="30" rx="3" class="f-acc-soft"/>
+        <text x="462" y="180" text-anchor="end" class="t">INT4</text>
+        <text x="555" y="180" class="t-mono">36 GB · 11 ms · ~93</text>
+        <rect x="470" y="210" width="58" height="30" rx="3" class="f-acc2-soft"/>
+        <text x="462" y="230" text-anchor="end" class="t">3비트</text>
+        <text x="536" y="230" class="t-mono">27 GB · 8 ms · ~124</text>
+        <text x="620" y="272" text-anchor="middle" class="t-dim">막대 길이 = 읽을 바이트 = 토큰당 최소 시간</text>
+      </svg>
+      <figcaption><b>그림 9-1.</b> 배치 1 디코딩에서는 토큰을 하나 만들 때마다 모든 층의 가중치를 HBM에서 읽어 와야 한다. 연산기는 충분히 빠르므로 토큰당 시간은 '읽을 바이트 ÷ 대역폭'으로 정해진다. INT4는 그룹 스케일 오버헤드를 포함한 약 4.125비트로 계산했다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>정밀도</th><th class="num">비트/파라미터</th><th class="num">Llama 3 8B</th><th class="num">Llama 3 70B</th><th>쓰임</th></tr></thead>
+      <tbody>
+        <tr><td>FP32</td><td class="num">32</td><td class="num">32.1 GB</td><td class="num">282 GB</td><td>학습 마스터 가중치, 옵티마이저 상태</td></tr>
+        <tr><td>BF16 / FP16</td><td class="num">16</td><td class="num">16.1 GB</td><td class="num">141 GB</td><td>학습 연산, 표준 배포 체크포인트</td></tr>
+        <tr><td>FP8 / INT8</td><td class="num">8 (+ε)</td><td class="num">8.0 GB</td><td class="num">71 GB</td><td>H100급 서빙(FP8), W8A8</td></tr>
+        <tr><td>INT4 (g128)</td><td class="num">≈4.125</td><td class="num">4.1 GB</td><td class="num">36 GB</td><td>GPTQ·AWQ, 소비자 GPU·로컬 추론</td></tr>
+        <tr><td>3비트급</td><td class="num">≈3.1~3.5</td><td class="num">≈3.3 GB</td><td class="num">≈29 GB</td><td>GGUF Q3_K 등, 품질 손실 눈에 띔</td></tr>
+        <tr><td>2비트급</td><td class="num">≈2.1~2.6</td><td class="num">≈2.4 GB</td><td class="num">≈21 GB</td><td>연구·극한 압축, 큰 품질 손실</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 값은 가중치만 센 것이다(70.6B 파라미터 기준). 실제 서빙에서는 여기에 KV 캐시와 활성값 작업 공간이 더해진다(<a href="design.html">12장</a>). 그리고 임베딩·출력층·정규화 파라미터는 보통 더 높은 정밀도로 남겨 두므로, 실제 파일 크기는 표보다 조금 크다.</p>
+    <div class="callout"><strong>무엇을 양자화하는가</strong>
+      <p>양자화 대상은 셋이다. <b>가중치</b>(W)는 한 번 변환해 두면 끝이라 가장 쉽고 이득이 가장 크다(가중치 전용 양자화, 예: W4A16). <b>활성값</b>(A)까지 낮추면 행렬곱 자체를 INT8/FP8 텐서 코어로 돌려 계산량이 큰 프리필이 빨라진다(W8A8). <b>KV 캐시</b>를 낮추면 긴 컨텍스트와 큰 배치에서 메모리와 대역폭을 아낀다. 표기 "W4A16"은 가중치 4비트, 활성값 16비트라는 뜻이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="float">
+    <h2>부동소수점의 구조: 범위와 정밀도</h2>
+    <p>컴퓨터가 실수를 저장하는 표준 방법은 <span class="term">부동소수점</span><span class="en">(floating point)</span>이다. 과학적 표기법 \(6.02 \times 10^{23}\)을 이진수로 옮긴 것이다. 비트열을 세 부분으로 나눈다.</p>
+    <div class="formula">$$x = (-1)^{S} \times 2^{\,E - \text{bias}} \times \left(1 + \frac{M}{2^{m}}\right), \qquad \text{bias} = 2^{e-1} - 1$$<div class="where">\(S\): 부호 1비트. \(E\): \(e\)비트 지수 필드(부호 없는 정수). \(M\): \(m\)비트 가수 필드. 맨 앞의 1은 저장하지 않는 '숨은 비트'다. \(E = 0\)이면 숨은 비트가 0이 되는 <b>비정규수</b>(subnormal) \(x = (-1)^S \times 2^{1-\text{bias}} \times M/2^m\)로, 0 근처를 메운다.</div></div>
+    <p>지수 비트 수 \(e\)는 <strong>범위</strong>(얼마나 크고 작은 수를 담을 수 있나)를, 가수 비트 수 \(m\)은 <strong>정밀도</strong>(한 옥타브 \([2^k, 2^{k+1})\) 안에 값이 몇 개 있나)를 정한다. 한 옥타브 안에는 항상 \(2^m\)개의 값이 균일 간격으로 있고, 옥타브가 하나 올라갈 때마다 간격이 두 배가 된다. 그래서 부동소수점의 <strong>상대 오차</strong>는 크기와 무관하게 대략 \(2^{-m-1}\)로 일정하다. 이것이 정수와의 결정적 차이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 300" role="img" aria-label="FP32, FP16, BF16, FP8, FP4의 비트 배치">
+        <text x="20" y="49" class="t">FP32</text><text x="20" y="64" class="t-mono">bias 127</text>
+        <rect x="130" y="30" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="30" width="152" height="30" class="f-acc-soft"/><rect x="301" y="30" width="437" height="30" class="f-warn-soft"/>
+        <text x="225" y="50" text-anchor="middle" class="t-mono">지수 8</text><text x="520" y="50" text-anchor="middle" class="t-mono">가수 23 · 최대 ≈3.4×10³⁸ · 유효 ≈7.2자리</text>
+        <text x="20" y="91" class="t">FP16</text><text x="20" y="106" class="t-mono">bias 15</text>
+        <rect x="130" y="72" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="72" width="95" height="30" class="f-acc-soft"/><rect x="244" y="72" width="190" height="30" class="f-warn-soft"/>
+        <text x="196" y="92" text-anchor="middle" class="t-mono">지수 5</text><text x="339" y="92" text-anchor="middle" class="t-mono">가수 10</text>
+        <text x="448" y="92" class="t-dim">최대 65504 · 유효 ≈3.3자리</text>
+        <text x="20" y="133" class="t">BF16</text><text x="20" y="148" class="t-mono">bias 127</text>
+        <rect x="130" y="114" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="114" width="152" height="30" class="f-acc-soft"/><rect x="301" y="114" width="133" height="30" class="f-warn-soft"/>
+        <text x="225" y="134" text-anchor="middle" class="t-mono">지수 8</text><text x="367" y="134" text-anchor="middle" class="t-mono">가수 7</text>
+        <text x="448" y="134" class="t-dim">FP32와 같은 범위 · 유효 ≈2.4자리</text>
+        <text x="20" y="175" class="t">FP8 E4M3</text><text x="20" y="190" class="t-mono">bias 7</text>
+        <rect x="130" y="156" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="156" width="76" height="30" class="f-acc-soft"/><rect x="225" y="156" width="57" height="30" class="f-warn-soft"/>
+        <text x="187" y="176" text-anchor="middle" class="t-mono">4</text><text x="253" y="176" text-anchor="middle" class="t-mono">3</text>
+        <text x="296" y="176" class="t-dim">최대 448 · Inf 없음 · 추론·순전파용</text>
+        <text x="20" y="217" class="t">FP8 E5M2</text><text x="20" y="232" class="t-mono">bias 15</text>
+        <rect x="130" y="198" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="198" width="95" height="30" class="f-acc-soft"/><rect x="244" y="198" width="38" height="30" class="f-warn-soft"/>
+        <text x="196" y="218" text-anchor="middle" class="t-mono">5</text><text x="263" y="218" text-anchor="middle" class="t-mono">2</text>
+        <text x="296" y="218" class="t-dim">최대 57344 · IEEE식 Inf/NaN · 기울기용</text>
+        <text x="20" y="259" class="t">FP4 E2M1</text><text x="20" y="274" class="t-mono">bias 1</text>
+        <rect x="130" y="240" width="19" height="30" class="f-acc2-soft"/><rect x="149" y="240" width="38" height="30" class="f-acc-soft"/><rect x="187" y="240" width="19" height="30" class="f-warn-soft"/>
+        <text x="220" y="260" class="t-dim">값 ±{0, 0.5, 1, 1.5, 2, 3, 4, 6} · 블록 스케일과 함께 사용</text>
+        <text x="139" y="22" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">S</text>
+      </svg>
+      <figcaption><b>그림 9-2.</b> 주요 형식의 비트 배치(한 칸 = 1비트). 분홍 = 부호, 보라 = 지수, 주황 = 가수. BF16은 FP32의 상위 16비트를 그대로 잘라 낸 것이어서 범위는 FP32와 같고 정밀도만 낮다. FP16은 반대로 정밀도는 높지만 범위가 좁아(최대 65504) 학습 중 오버플로를 막으려면 손실 스케일링이 필요했다.</figcaption>
+    </figure>
+    <p>딥러닝이 BF16을 선호하는 이유가 여기 있다. 학습 중의 기울기와 활성값은 \(10^{-6}\)부터 \(10^{4}\)까지 넓게 퍼져 있어 <strong>범위</strong>가 정밀도보다 중요하다. 신경망은 개별 값의 작은 잡음에 강하지만, 오버플로로 생긴 Inf 하나는 학습 전체를 망친다. FP8은 한 걸음 더 나가서 용도별로 두 형식을 쓴다. 순전파의 가중치·활성값에는 정밀도가 조금 나은 <b>E4M3</b>를, 범위가 넓어야 하는 역전파의 기울기에는 <b>E5M2</b>를 쓴다. OCP(Open Compute Project) FP8 규격의 E4M3는 Inf를 없애고 그 비트 패턴을 일반 값으로 돌려써서 최대값을 240이 아닌 <b>448</b>까지 늘렸다(NaN은 S.1111.111 하나만 남긴다).</p>
+
+    <div class="sim" id="sim-bits">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>비트 편집기: 부동소수점 해부</h3></div>
+      <div class="sim-body">
+        <div class="qz-bitrow" id="qz-bitrow" aria-label="비트를 눌러 토글"></div>
+        <div class="qz-decode" id="qz-decode">—</div>
+        <div class="sim-view"><canvas id="cv-qz-range"></canvas><canvas id="cv-qz-zoom" style="touch-action:none;cursor:crosshair"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>형식</span><div class="seg" id="qz-fmt"><button data-value="fp32">FP32</button><button data-value="fp16">FP16</button><button data-value="bf16" class="on">BF16</button><button data-value="e4m3">E4M3</button><button data-value="e5m2">E5M2</button><button data-value="e2m1">FP4</button></div></div>
+          <div class="ctrl"><span>숫자 입력 → 가장 가까운 표현값</span><div class="qz-inrow"><input class="ab-input" id="qz-num" type="text" inputmode="decimal" value="3.14159265" aria-label="변환할 숫자"><button class="btn primary" id="qz-go">변환</button></div></div>
+          <div class="ctrl"><span>빠른 값</span><div class="qz-presets" id="qz-quick"><button class="btn" data-v="0.1">0.1</button><button class="btn" data-v="1">1</button><button class="btn" data-v="300">300</button><button class="btn" data-v="70000">70000</button><button class="btn" data-v="1e-5">1e-5</button><button class="btn" data-v="max">최대값</button><button class="btn" data-v="minsub">최소 비정규</button></div></div>
+          <div class="ctrl"><span>아래 숫자선 범위</span><div class="seg" id="qz-zr"><button data-value="1">0 ~ 1</button><button data-value="8" class="on">0 ~ 8</button><button data-value="64">0 ~ 64</button><button data-value="512">0 ~ 512</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">디코딩 값</span><span class="v" id="qz-o-val">—</span></div>
+        <div class="stat"><span class="k">종류</span><span class="v" id="qz-o-kind">—</span></div>
+        <div class="stat"><span class="k">이 위치의 간격 (ULP)</span><span class="v" id="qz-o-ulp">—</span></div>
+        <div class="stat"><span class="k">입력 대비 오차</span><span class="v" id="qz-o-err">—</span></div>
+      </div>
+      <div class="sim-note">비트 칸을 누르면 0/1이 바뀌고 값이 바로 다시 디코딩된다. 위 그래프는 형식별로 표현 가능한 양수 범위(log₂ 축, 옅은 부분 = 비정규수)와 현재 값의 위치, 아래 숫자선은 현재 형식의 표현 가능한 값을 모두 찍은 것이다(눌러서 끌면 그 위치의 가장 가까운 값으로 이동). 해볼 것: ① BF16과 FP16에서 70000을 변환해 보자. FP16은 Inf가 되고 BF16은 70144가 된다(범위 vs 정밀도). ② 0.1을 FP32·BF16·E4M3로 바꿔 상대 오차가 가수 비트에 따라 어떻게 커지는지 보자. ③ E4M3에서 지수를 1111, 가수를 111로 만들면 NaN, 가수 110이면 448이다. E5M2에서 지수 11111은 Inf/NaN이다. ④ 숫자선을 0~8로 두고 FP4와 E4M3를 비교하면 1을 넘을 때마다 간격이 두 배가 되는 것이 보인다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>형식</th><th class="num">지수/가수</th><th class="num">최대값</th><th class="num">최소 정규</th><th class="num">최소 비정규</th><th class="num">1 근처 간격</th></tr></thead>
+      <tbody>
+        <tr><td>FP32</td><td class="num">8 / 23</td><td class="num">3.40×10³⁸</td><td class="num">1.18×10⁻³⁸</td><td class="num">1.4×10⁻⁴⁵</td><td class="num">2⁻²³ ≈ 1.2×10⁻⁷</td></tr>
+        <tr><td>FP16</td><td class="num">5 / 10</td><td class="num">65504</td><td class="num">6.1×10⁻⁵</td><td class="num">6.0×10⁻⁸</td><td class="num">2⁻¹⁰ ≈ 9.8×10⁻⁴</td></tr>
+        <tr><td>BF16</td><td class="num">8 / 7</td><td class="num">3.39×10³⁸</td><td class="num">1.18×10⁻³⁸</td><td class="num">9.2×10⁻⁴¹</td><td class="num">2⁻⁷ ≈ 7.8×10⁻³</td></tr>
+        <tr><td>FP8 E4M3 (OCP)</td><td class="num">4 / 3</td><td class="num">448</td><td class="num">2⁻⁶ ≈ 0.0156</td><td class="num">2⁻⁹ ≈ 0.00195</td><td class="num">0.125</td></tr>
+        <tr><td>FP8 E5M2</td><td class="num">5 / 2</td><td class="num">57344</td><td class="num">2⁻¹⁴ ≈ 6.1×10⁻⁵</td><td class="num">2⁻¹⁶ ≈ 1.5×10⁻⁵</td><td class="num">0.25</td></tr>
+        <tr><td>FP4 E2M1</td><td class="num">2 / 1</td><td class="num">6</td><td class="num">1</td><td class="num">0.5</td><td class="num">0.5</td></tr>
+      </tbody>
+    </table></div>
+    <p>FP8의 최대값 448은 작아 보이지만, 실제로는 텐서마다(또는 블록마다) <strong>스케일</strong>을 곱해 값을 이 범위 안으로 옮긴 뒤 저장한다. 즉 FP8 양자화도 다음 절의 정수 양자화와 똑같이 "스케일 + 격자"라는 구조를 갖는다. 다른 점은 격자 간격이 균일하지 않고 0 근처가 촘촘하다는 것뿐이다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="int">
+    <h2>정수 양자화: 스케일과 영점</h2>
+    <p>가장 널리 쓰이는 양자화는 실수 \(x\)를 \(b\)비트 정수 \(q\)로 바꾸는 <span class="term">균일 양자화</span><span class="en">(uniform / affine quantization)</span>다. 실수 축 위에 간격 \(s\)짜리 격자를 깔고, 각 값을 가장 가까운 격자점으로 보낸다.</p>
+    <div class="formula">$$q = \operatorname{clamp}\!\left(\operatorname{round}\!\left(\frac{x}{s}\right) + z,\; q_{\min},\; q_{\max}\right), \qquad \hat{x} = s\,(q - z)$$<div class="where">\(s\): 스케일(격자 간격, 실수). \(z\): 영점(zero point, 정수) — 실수 0이 대응하는 정수. \(\hat x\): 역양자화(dequantize)한 근사값. 저장하는 것은 \(q\)(b비트)와 그룹마다 하나씩인 \(s, z\)다.</div></div>
+    <p>두 가지 흔한 방식이 있다.</p>
+    <ul>
+      <li><strong>대칭</strong>(symmetric): \(z = 0\), \(s = \alpha / q_{\max}\). 클리핑 경계 \(\pm\alpha\)를 정하면 끝이다. INT8이면 \(q \in [-127, 127]\)를 쓴다(−128은 대칭을 위해 보통 버린다). 0이 정확히 표현되고 곱셈 커널이 단순하다. 가중치는 대개 0을 중심으로 대칭 분포라 이 방식을 쓴다.</li>
+      <li><strong>비대칭</strong>(asymmetric): 범위 \([\beta, \alpha]\)를 \([0, 2^b-1]\)에 맞춘다. \(s = (\alpha-\beta)/(2^b-1)\), \(z = \operatorname{round}(-\beta/s)\). ReLU 뒤 활성값처럼 한쪽으로 치우친 분포에서 격자를 낭비하지 않는다. 대신 \(z\)를 저장하고 계산에 반영해야 한다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 270" role="img" aria-label="대칭 양자화와 비대칭 양자화의 실수-정수 대응">
+        <text x="20" y="30" class="t-acc">대칭 (z = 0)</text>
+        <path d="M80 70 H700" class="s-axis"/>
+        <text x="80" y="58" text-anchor="middle" class="t-mono">−α</text><text x="390" y="58" text-anchor="middle" class="t-mono">0</text><text x="700" y="58" text-anchor="middle" class="t-mono">+α</text>
+        <rect x="80" y="64" width="620" height="12" class="f-acc-soft" style="stroke:none"/>
+        <path d="M80 110 H700" class="s-axis"/>
+        <g class="s-line" style="stroke-width:1">
+          <path d="M80 70 L80 110 M157.5 70 L157.5 110 M235 70 L235 110 M312.5 70 L312.5 110 M390 70 L390 110 M467.5 70 L467.5 110 M545 70 L545 110 M622.5 70 L622.5 110 M700 70 L700 110"/>
+        </g>
+        <text x="80" y="128" text-anchor="middle" class="t-mono">−7</text><text x="157.5" y="128" text-anchor="middle" class="t-mono">−5</text><text x="235" y="128" text-anchor="middle" class="t-mono">−3</text><text x="312.5" y="128" text-anchor="middle" class="t-mono">−1</text><text x="390" y="128" text-anchor="middle" class="t-mono">0</text><text x="467.5" y="128" text-anchor="middle" class="t-mono">1</text><text x="545" y="128" text-anchor="middle" class="t-mono">3</text><text x="622.5" y="128" text-anchor="middle" class="t-mono">5</text><text x="700" y="128" text-anchor="middle" class="t-mono">7</text>
+        <text x="740" y="74" class="t-dim">x</text><text x="740" y="114" class="t-dim">q</text>
+        <text x="20" y="168" class="t-acc">비대칭 (z ≠ 0)</text>
+        <path d="M80 200 H700" class="s-axis"/>
+        <rect x="200" y="194" width="500" height="12" class="f-acc2-soft" style="stroke:none"/>
+        <text x="200" y="188" text-anchor="middle" class="t-mono">β = −1</text><text x="290" y="188" text-anchor="middle" class="t-mono">0</text><text x="700" y="188" text-anchor="middle" class="t-mono">α = 6</text>
+        <path d="M80 240 H700" class="s-axis"/>
+        <g class="s-line" style="stroke-width:1">
+          <path d="M200 200 L200 240 M262.5 200 L262.5 240 M325 200 L325 240 M387.5 200 L387.5 240 M450 200 L450 240 M512.5 200 L512.5 240 M575 200 L575 240 M637.5 200 L637.5 240 M700 200 L700 240"/>
+        </g>
+        <path d="M290 200 L262.5 240" style="stroke:var(--accent-2);stroke-width:2;fill:none"/>
+        <text x="200" y="258" text-anchor="middle" class="t-mono">0</text><text x="262.5" y="258" text-anchor="middle" class="t-mono">z≈2</text><text x="450" y="258" text-anchor="middle" class="t-mono">⋯</text><text x="700" y="258" text-anchor="middle" class="t-mono">15</text>
+        <text x="110" y="226" class="t-dim">격자 낭비 없음</text>
+      </svg>
+      <figcaption><b>그림 9-3.</b> 4비트 예. 위: 대칭 양자화는 \([-\alpha, \alpha]\)를 \(-7 \ldots 7\)에 대응시킨다(간략히 하려고 홀수 정수만 눈금을 그렸다). 분포가 한쪽으로 치우쳐 있으면 반대쪽 격자가 놀게 된다. 아래: 비대칭은 실제 범위 \([\beta, \alpha]\)에 16개 격자를 모두 깔고, 실수 0은 정수 영점 \(z\)로 간다.</figcaption>
+    </figure>
+    <h3>반올림 오차와 클리핑 오차</h3>
+    <p>범위 \([\beta,\alpha]\)를 어떻게 잡을지가 핵심 설계 문제다. 가장 단순한 선택은 데이터의 최소·최대값(<b>absmax</b>)을 쓰는 것이다. 그런데 분포에 이상치가 하나라도 있으면 범위가 넓어지고, 격자 간격 \(s\)가 커져 대부분의 '평범한' 값들이 거친 격자에 놓인다. 반대로 범위를 좁히면(<b>클리핑</b>) 격자가 촘촘해지지만 범위를 벗어난 값은 경계로 잘려 큰 오차를 낸다. 격자 안쪽 값의 반올림 오차는 균일 분포라 가정하면 평균 제곱이 \(s^2/12\)다.</p>
+    <div class="formula">$$\text{MSE}(\alpha) \;\approx\; \underbrace{\frac{s(\alpha)^2}{12}\,P(|x|\le\alpha)}_{\text{반올림 }(\alpha\uparrow\ \Rightarrow\ \uparrow)} \;+\; \underbrace{\mathbb{E}\big[(|x|-\alpha)^2;\,|x|>\alpha\big]}_{\text{클리핑 }(\alpha\uparrow\ \Rightarrow\ \downarrow)}, \qquad \text{SQNR} = 10\log_{10}\frac{\mathbb{E}[x^2]}{\text{MSE}}\ \text{dB}$$<div class="where">대칭 양자화에서 \(s(\alpha) = \alpha / (2^{b-1}-1)\). 두 항이 반대로 움직이므로 MSE를 최소로 하는 최적 \(\alpha^*\)가 존재한다. 비트가 1개 늘 때마다 \(s\)가 절반이 되어 반올림 SQNR이 약 6.02 dB씩 오른다.</div></div>
+
+    <div class="sim" id="sim-qline">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>양자화 숫자선: 클리핑 범위를 끌어 보자</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-line" style="touch-action:none;cursor:ew-resize"></canvas><canvas id="cv-qz-mse" style="touch-action:none;cursor:crosshair"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>비트 수 b <output id="qz-qb-out"></output></span><input type="range" id="qz-qb" min="2" max="8" step="1" value="4"></label>
+          <div class="ctrl"><span>방식</span><div class="seg" id="qz-qmode"><button data-value="sym" class="on">대칭</button><button data-value="asym">비대칭</button></div></div>
+          <div class="ctrl"><span>분포</span><div class="seg" id="qz-qdist"><button data-value="normal" class="on">정규</button><button data-value="laplace">라플라스</button><button data-value="relu">GELU 뒤</button></div></div>
+          <label class="check"><input type="checkbox" id="qz-qout" checked> 이상치 0.5% 섞기</label>
+          <div class="qz-btns"><button class="btn primary" id="qz-qopt">최적 클리핑 찾기</button><button class="btn" id="qz-qmax">absmax로</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">클리핑 범위 [β, α]</span><span class="v" id="qz-q-rng">—</span></div>
+        <div class="stat"><span class="k">스케일 s</span><span class="v" id="qz-q-s">—</span></div>
+        <div class="stat"><span class="k">MSE (반올림 + 클리핑)</span><span class="v" id="qz-q-mse">—</span></div>
+        <div class="stat"><span class="k">SQNR</span><span class="v" id="qz-q-sqnr">—</span></div>
+        <div class="stat"><span class="k">잘린 값 비율</span><span class="v" id="qz-q-clip">—</span></div>
+      </div>
+      <div class="sim-note">위: 4000개 샘플(시드 고정)의 히스토그램과 양자화 격자(세로선), 분홍 막대는 양자화 후 각 격자점에 모인 샘플 수다. 양 끝의 둥근 핸들을 끌어 클리핑 범위를 바꾼다(대칭 모드에서는 두 핸들이 함께 움직인다). 아래: 클리핑 배율(α / max|x|)에 따른 MSE를 반올림·클리핑 성분으로 나눠 그린 곡선 — 눌러서 그 배율로 이동한다. 해볼 것: ① 4비트·이상치 켜기에서 absmax와 최적 클리핑의 SQNR을 비교하자. 이상치 몇 개 때문에 수 dB 이상을 잃는다. ② 비트를 8로 올리면 최적점이 오른쪽(덜 자르기)으로 이동한다 — 격자가 촘촘하면 클리핑이 상대적으로 비싸다. ③ 라플라스 분포는 꼬리가 두꺼워 같은 비트에서 SQNR이 낮다. ④ 'GELU 뒤' 분포에서 대칭 ↔ 비대칭을 바꾸면 비대칭이 약 6 dB(1비트만큼) 이득이다.</div>
+    </div>
+    <p>실무에서 쓰는 범위 결정법(<span class="term">보정</span><span class="en">(calibration)</span>)은 absmax, 백분위수(예: 99.99%), MSE 최소화, KL 발산 최소화(TensorRT의 엔트로피 보정) 등이 있다. 가중치는 값을 모두 알고 있으니 MSE 최적 클리핑을 직접 찾을 수 있지만, 활성값은 입력마다 달라지므로 보정 데이터 수백 개를 흘려 통계를 모으거나(<b>정적</b> 양자화), 실행 중에 토큰마다 범위를 계산한다(<b>동적</b> 양자화).</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="gran">
+    <h2>입도: 스케일을 얼마나 잘게 나눌까</h2>
+    <p>스케일 \(s\)를 텐서 전체에 하나만 둘 수도, 더 잘게 나눠 여러 개 둘 수도 있다. 이 단위를 <span class="term">입도</span><span class="en">(granularity)</span>라고 한다. 선형층 \(y = Wx\)의 가중치 \(W \in \mathbb{R}^{d_{out}\times d_{in}}\)을 예로 들자.</p>
+    <ul>
+      <li><strong>per-tensor</strong>: 행렬 전체에 스케일 1개. 저장 비용은 0에 가깝지만, 어느 한 곳의 큰 값이 전체 격자를 거칠게 만든다.</li>
+      <li><strong>per-channel</strong>(per-row): 출력 채널(행)마다 스케일 1개. 행마다 크기가 다른 경우를 흡수한다. \(y_i = s_i \sum_j q_{ij} x_j\)처럼 스케일을 행렬곱 밖으로 빼낼 수 있어 INT8 커널에 바로 쓴다. INT8 가중치 양자화의 표준이다.</li>
+      <li><strong>per-group</strong>: 한 행을 입력 방향으로 \(g\)개(보통 128)씩 끊어 그룹마다 스케일. 입력 채널 방향의 이상치까지 국소화한다. 4비트 이하에서는 사실상 필수다. 대신 스케일이 행렬곱 안쪽 합에 걸리므로 커널이 그룹마다 역양자화를 해야 한다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="per-tensor, per-channel, per-group 스케일 영역 비교">
+        <defs>
+          <pattern id="qz-grid" width="15" height="15" patternUnits="userSpaceOnUse"><path d="M15 0 V15 H0" style="fill:none;stroke:var(--border);stroke-width:1"/></pattern>
+        </defs>
+        <text x="130" y="28" text-anchor="middle" class="t-acc">per-tensor</text>
+        <rect x="40" y="45" width="180" height="120" class="f-acc-soft"/>
+        <rect x="40" y="45" width="180" height="120" style="fill:url(#qz-grid)"/>
+        <text x="130" y="190" text-anchor="middle" class="t-mono">스케일 1개</text>
+        <text x="390" y="28" text-anchor="middle" class="t-acc">per-channel (행마다)</text>
+        <rect x="300" y="45" width="180" height="20" style="fill:var(--accent);opacity:.18"/>
+        <rect x="300" y="65" width="180" height="20" style="fill:var(--accent);opacity:.42"/>
+        <rect x="300" y="85" width="180" height="20" style="fill:var(--accent);opacity:.10"/>
+        <rect x="300" y="105" width="180" height="20" style="fill:var(--accent);opacity:.30"/>
+        <rect x="300" y="125" width="180" height="20" style="fill:var(--accent);opacity:.55"/>
+        <rect x="300" y="145" width="180" height="20" style="fill:var(--accent);opacity:.22"/>
+        <rect x="300" y="45" width="180" height="120" style="fill:url(#qz-grid);stroke:var(--accent)"/>
+        <text x="390" y="190" text-anchor="middle" class="t-mono">스케일 d_out개</text>
+        <text x="650" y="28" text-anchor="middle" class="t-acc">per-group (g = 4)</text>
+        <g>
+          <rect x="560" y="45" width="60" height="20" style="fill:var(--accent);opacity:.20"/><rect x="620" y="45" width="60" height="20" style="fill:var(--accent-2);opacity:.45"/><rect x="680" y="45" width="60" height="20" style="fill:var(--accent);opacity:.14"/>
+          <rect x="560" y="65" width="60" height="20" style="fill:var(--accent);opacity:.36"/><rect x="620" y="65" width="60" height="20" style="fill:var(--accent-2);opacity:.50"/><rect x="680" y="65" width="60" height="20" style="fill:var(--accent);opacity:.28"/>
+          <rect x="560" y="85" width="60" height="20" style="fill:var(--accent);opacity:.12"/><rect x="620" y="85" width="60" height="20" style="fill:var(--accent-2);opacity:.40"/><rect x="680" y="85" width="60" height="20" style="fill:var(--accent);opacity:.18"/>
+          <rect x="560" y="105" width="60" height="20" style="fill:var(--accent);opacity:.26"/><rect x="620" y="105" width="60" height="20" style="fill:var(--accent-2);opacity:.55"/><rect x="680" y="105" width="60" height="20" style="fill:var(--accent);opacity:.34"/>
+          <rect x="560" y="125" width="60" height="20" style="fill:var(--accent);opacity:.48"/><rect x="620" y="125" width="60" height="20" style="fill:var(--accent-2);opacity:.48"/><rect x="680" y="125" width="60" height="20" style="fill:var(--accent);opacity:.22"/>
+          <rect x="560" y="145" width="60" height="20" style="fill:var(--accent);opacity:.16"/><rect x="620" y="145" width="60" height="20" style="fill:var(--accent-2);opacity:.42"/><rect x="680" y="145" width="60" height="20" style="fill:var(--accent);opacity:.30"/>
+        </g>
+        <rect x="560" y="45" width="180" height="120" style="fill:url(#qz-grid);stroke:var(--accent)"/>
+        <path d="M620 45 V165 M680 45 V165" style="stroke:var(--accent);stroke-width:2"/>
+        <text x="650" y="190" text-anchor="middle" class="t-mono">스케일 d_out × d_in / g개</text>
+        <text x="650" y="208" text-anchor="middle" class="t-dim">가운데 그룹 = 이상치 입력 채널</text>
+        <path d="M40 228 H740" class="s-axis"/>
+        <text x="40" y="244" class="t-dim">← 입력 차원 d_in (행 = 출력 채널)</text>
+        <text x="740" y="244" text-anchor="end" class="t-dim">정확도 ↑ · 스케일 저장·커널 복잡도 ↑ →</text>
+      </svg>
+      <figcaption><b>그림 9-4.</b> 같은 6×12 가중치 행렬을 세 가지 입도로 양자화할 때 스케일을 공유하는 영역(같은 색 = 같은 스케일). 그룹 양자화는 큰 값을 가진 입력 채널(가운데 열 묶음)의 영향을 그 그룹 안에 가둔다.</figcaption>
+    </figure>
+    <p>그룹을 잘게 나눌수록 정확해지지만 공짜는 아니다. 그룹마다 FP16 스케일(16비트)을 저장하면 가중치 하나당 \(16/g\)비트가 추가된다. 비대칭이면 영점도 저장해야 한다.</p>
+    <div class="formula">$$b_{\text{eff}} = b + \frac{b_s + b_z}{g} \qquad \text{예: INT4, } g = 128, \text{ FP16 스케일만} \;\Rightarrow\; 4 + \tfrac{16}{128} = 4.125 \text{ 비트/가중치}$$<div class="where">\(b_s\): 스케일 비트(FP16이면 16), \(b_z\): 영점 비트(대칭이면 0, 비대칭이면 보통 4~16). \(g = 32\)이면 4.5비트, \(g = 64\)이면 4.25비트가 된다.</div></div>
+
+    <div class="sim" id="sim-wmat">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>가중치 행렬 양자화: 입도와 그룹 크기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-wmat" style="touch-action:none;cursor:pointer"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>입도</span><div class="seg" id="qz-wg"><button data-value="tensor">텐서</button><button data-value="channel">채널(행)</button><button data-value="group" class="on">그룹</button></div></div>
+          <div class="ctrl"><span>그룹 크기 g</span><div class="seg" id="qz-wgs"><button data-value="32">32</button><button data-value="64">64</button><button data-value="128" class="on">128</button></div></div>
+          <div class="ctrl"><span>비트 수</span><div class="seg" id="qz-wb"><button data-value="8">8</button><button data-value="4" class="on">4</button><button data-value="3">3</button><button data-value="2">2</button></div></div>
+          <label class="check"><input type="checkbox" id="qz-wasym"> 비대칭(영점 FP16 저장)</label>
+          <div class="qz-btns"><button class="btn" id="qz-wreset">이상치 초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가중치 상대 오차 ‖W−Ŵ‖/‖W‖</span><span class="v" id="qz-w-err">—</span></div>
+        <div class="stat"><span class="k">출력 상대 오차 ‖Wx−Ŵx‖/‖Wx‖</span><span class="v" id="qz-w-out">—</span></div>
+        <div class="stat"><span class="k">SQNR</span><span class="v" id="qz-w-sqnr">—</span></div>
+        <div class="stat"><span class="k">유효 비트/가중치</span><span class="v" id="qz-w-bits">—</span></div>
+        <div class="stat"><span class="k">70B 모델로 환산</span><span class="v" id="qz-w-70">—</span></div>
+      </div>
+      <div class="sim-note">시드 고정 난수로 만든 64×256 가중치(출력 64 × 입력 256)다. 실제 LLM처럼 몇몇 입력 열(채널)과 출력 행이 유난히 크고, 드문드문 큰 값이 박혀 있다. 위부터 원본 W, 양자화 후 Ŵ(같은 색 척도), 오차 W−Ŵ(오차 최대값 기준으로 확대). 원본 맵을 누르거나 문지르면 그 자리에 큰 이상치를 심는다. 출력 오차는 무작위 입력 벡터 16개에 대한 평균이다. 해볼 것: ① 4비트에서 텐서 → 채널 → 그룹(128 → 32)으로 바꾸며 출력 오차가 몇 배 줄어드는지 보자. ② 텐서 입도에서 원본 맵 아무 곳에나 이상치 하나를 심으면 전체 오차 맵이 밝아진다. 그룹 입도에서는 그 그룹만 밝아진다. ③ 3비트·g32 비대칭과 4비트·g128 대칭의 유효 비트와 오차를 비교하자 — 비트를 그룹 스케일에 쓰는 것이 이득일 때가 있다.</div>
+    </div>
+    <p>실제 4비트 LLM 양자화(GPTQ, AWQ, bitsandbytes NF4, GGUF)는 거의 모두 그룹 크기 32~128을 쓴다. Llama 3 70B의 FFN 행렬은 \(28672 \times 8192\)이므로 g = 128이면 행마다 64개, 행렬 하나에 약 180만 개의 스케일이 생긴다. 많아 보여도 가중치(약 2.35억 개)의 0.8% 수준이다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="outlier">
+    <h2>활성값 이상치와 SmoothQuant</h2>
+    <p>가중치는 비교적 얌전한 분포를 갖는다. 문제는 <strong>활성값</strong>이다. 2022년 LLM.int8() 논문(Dettmers 외)은 모델이 약 6.7B 파라미터를 넘으면 은닉 상태의 <strong>몇 개 특정 채널</strong>에서 다른 채널보다 수십~100배 큰 값이 거의 모든 토큰에 걸쳐 나타난다고 보고했다. 차원은 수천 개인데 이상치 채널은 손에 꼽을 정도로 적지만, 이 채널을 0으로 만들면 모델 성능이 무너질 만큼 중요하다.</p>
+    <p>활성값 \(X \in \mathbb{R}^{T\times C}\)(토큰 × 채널)를 INT8로 양자화하는 효율적인 방법은 per-tensor 또는 per-token(행마다) 스케일이다. 행렬곱 \(XW\)에서 스케일을 밖으로 빼려면 \(X\)는 행(토큰) 방향, \(W\)는 열(출력) 방향으로만 스케일을 나눌 수 있다. 그런데 이상치는 <strong>채널(열) 방향</strong>으로 몰려 있다. 결국 이상치 채널이 스케일을 결정해 버리고, 나머지 채널은 몇 개의 격자점만 쓰게 된다. LLM.int8()은 이상치 채널을 따로 떼어 FP16으로 계산하는 혼합 정밀도 분해로 이 문제를 풀었지만, 커널이 복잡하고 느렸다.</p>
+    <p><span class="term">SmoothQuant</span>(Xiao 외, 2022)는 더 간단한 수학적 트릭을 쓴다. 행렬곱은 채널별 스케일을 한쪽에서 나누고 다른 쪽에서 곱해도 결과가 변하지 않는다.</p>
+    <div class="formula">$$Y = XW = \big(X\,\operatorname{diag}(\mathbf{s})^{-1}\big)\big(\operatorname{diag}(\mathbf{s})\,W\big) = \hat X \hat W, \qquad s_j = \frac{\max_t |X_{tj}|^{\alpha}}{\max_k |W_{jk}|^{1-\alpha}}$$<div class="where">\(j\): 입력 채널. \(\alpha \in [0,1]\): 양자화 난이도를 활성값에서 가중치로 얼마나 옮길지 정하는 '이동 강도'. \(\alpha = 0.5\)이면 \(\max|\hat X_j| = \max|\hat W_j| = \sqrt{\max|X_j|\max|W_j|}\)로 두 쪽의 채널 최대값이 같아진다. \(\operatorname{diag}(\mathbf s)^{-1}\)은 앞 LayerNorm의 가중치에 미리 흡수할 수 있어 실행 비용이 0이다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="SmoothQuant: 활성값 이상치 채널을 스케일로 나누어 가중치로 옮김">
+        <text x="120" y="24" text-anchor="middle" class="t-acc">활성값 X: 채널별 max|·|</text>
+        <path d="M30 190 H220" class="s-axis"/>
+        <rect x="34" y="172" width="11" height="18" class="f-acc-soft"/><rect x="50" y="168" width="11" height="22" class="f-acc-soft"/><rect x="66" y="40" width="11" height="150" class="f-acc2-soft"/><rect x="82" y="174" width="11" height="16" class="f-acc-soft"/><rect x="98" y="170" width="11" height="20" class="f-acc-soft"/><rect x="114" y="166" width="11" height="24" class="f-acc-soft"/><rect x="130" y="173" width="11" height="17" class="f-acc-soft"/><rect x="146" y="60" width="11" height="130" class="f-acc2-soft"/><rect x="162" y="171" width="11" height="19" class="f-acc-soft"/><rect x="178" y="169" width="11" height="21" class="f-acc-soft"/><rect x="194" y="175" width="11" height="15" class="f-acc-soft"/>
+        <text x="120" y="210" text-anchor="middle" class="t-dim">이상치 채널이 스케일을 독점</text>
+        <text x="390" y="24" text-anchor="middle" class="t-acc">가중치 W: 입력 채널별 max|·|</text>
+        <path d="M300 190 H490" class="s-axis"/>
+        <rect x="304" y="150" width="11" height="40" class="f-acc-soft"/><rect x="320" y="146" width="11" height="44" class="f-acc-soft"/><rect x="336" y="152" width="11" height="38" class="f-acc-soft"/><rect x="352" y="144" width="11" height="46" class="f-acc-soft"/><rect x="368" y="149" width="11" height="41" class="f-acc-soft"/><rect x="384" y="147" width="11" height="43" class="f-acc-soft"/><rect x="400" y="151" width="11" height="39" class="f-acc-soft"/><rect x="416" y="145" width="11" height="45" class="f-acc-soft"/><rect x="432" y="150" width="11" height="40" class="f-acc-soft"/><rect x="448" y="148" width="11" height="42" class="f-acc-soft"/><rect x="464" y="153" width="11" height="37" class="f-acc-soft"/>
+        <text x="390" y="210" text-anchor="middle" class="t-dim">가중치는 고르다 (양자화 쉬움)</text>
+        <text x="650" y="24" text-anchor="middle" class="t-acc">스무딩 후 (α = 0.5)</text>
+        <path d="M560 190 H750" class="s-axis"/>
+        <rect x="564" y="150" width="7" height="40" class="f-acc-soft"/><rect x="580" y="148" width="7" height="42" class="f-acc-soft"/><rect x="596" y="118" width="7" height="72" class="f-acc2-soft"/><rect x="612" y="152" width="7" height="38" class="f-acc-soft"/><rect x="628" y="148" width="7" height="42" class="f-acc-soft"/><rect x="644" y="147" width="7" height="43" class="f-acc-soft"/><rect x="660" y="151" width="7" height="39" class="f-acc-soft"/><rect x="676" y="122" width="7" height="68" class="f-acc2-soft"/><rect x="692" y="150" width="7" height="40" class="f-acc-soft"/><rect x="708" y="149" width="7" height="41" class="f-acc-soft"/><rect x="724" y="153" width="7" height="37" class="f-acc-soft"/>
+        <rect x="572" y="150" width="7" height="40" class="f-warn-soft"/><rect x="588" y="148" width="7" height="42" class="f-warn-soft"/><rect x="604" y="118" width="7" height="72" class="f-warn-soft"/><rect x="620" y="152" width="7" height="38" class="f-warn-soft"/><rect x="636" y="148" width="7" height="42" class="f-warn-soft"/><rect x="652" y="147" width="7" height="43" class="f-warn-soft"/><rect x="668" y="151" width="7" height="39" class="f-warn-soft"/><rect x="684" y="122" width="7" height="68" class="f-warn-soft"/><rect x="700" y="150" width="7" height="40" class="f-warn-soft"/><rect x="716" y="149" width="7" height="41" class="f-warn-soft"/><rect x="732" y="153" width="7" height="37" class="f-warn-soft"/>
+        <text x="650" y="210" text-anchor="middle" class="t-dim">X/s (보라) · s·W (주황) 높이가 같아짐</text>
+        <path d="M230 110 Q 400 70 548 110" style="stroke:var(--accent-2);stroke-width:1.8;fill:none;stroke-dasharray:5 4"/>
+        <text x="390" y="74" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">÷ s_j  ↔  × s_j</text>
+        <text x="390" y="238" text-anchor="middle" class="t-dim">곱 XW는 그대로 · 양자화 난이도만 두 쪽에 나눠 가짐</text>
+      </svg>
+      <figcaption><b>그림 9-5.</b> SmoothQuant의 난이도 이동. 활성값의 이상치 채널을 채널별 스케일 \(s_j\)로 나누고, 같은 \(s_j\)를 가중치의 해당 입력 채널(행)에 곱한다. 수학적으로 등가인 변환이지만, 두 행렬이 모두 '양자화하기 쉬운' 모양이 된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-smooth">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SmoothQuant: 이동 강도 α</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-sbars"></canvas><canvas id="cv-qz-scurve" style="touch-action:none;cursor:ew-resize"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>이동 강도 α <output id="qz-sa-out"></output></span><input type="range" id="qz-sa" min="0" max="1" step="0.01" value="0.5"></label>
+          <div class="ctrl"><span>양자화 비트 (W·X 모두)</span><div class="seg" id="qz-sb"><button data-value="8" class="on">INT8</button><button data-value="6">INT6</button><button data-value="4">INT4</button></div></div>
+          <label class="ctrl"><span>이상치 크기 (× 보통 채널) <output id="qz-sm-out"></output></span><input type="range" id="qz-sm" min="1" max="100" step="1" value="40"></label>
+          <button class="btn primary" id="qz-sbest">최적 α로</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">X 양자화 오차</span><span class="v" id="qz-s-x">—</span></div>
+        <div class="stat"><span class="k">W 양자화 오차</span><span class="v" id="qz-s-w">—</span></div>
+        <div class="stat"><span class="k">출력 오차 ‖Y−Ŷ‖/‖Y‖</span><span class="v" id="qz-s-y">—</span></div>
+        <div class="stat"><span class="k">스무딩 없을 때</span><span class="v" id="qz-s-base">—</span></div>
+        <div class="stat"><span class="k">최적 α</span><span class="v" id="qz-s-best">—</span></div>
+      </div>
+      <div class="sim-note">교육용으로 만든 작은 예시: 토큰 64개 × 채널 32개 활성값 X(채널 5·19·27이 이상치), 32×32 가중치 W. X와 W를 각각 per-tensor 대칭 양자화한 뒤 곱해 원래 Y = XW와 비교한다. 위: 채널별 max|X̂<sub>j</sub>|(보라)와 max|Ŵ<sub>j</sub>|(주황)를 각 텐서의 최대값으로 정규화해 그린 막대, 옅은 막대는 스무딩 전. 아래: α에 따른 세 오차(로그 축). 아래 그래프를 누르거나 끌어 α를 바꿀 수 있다. 해볼 것: ① α = 0(활성값이 난이도를 모두 떠안음)에서 1(가중치가 모두 떠안음)로 끌며 X 오차는 줄고 W 오차는 느는 것을 보자. 출력 오차는 그 사이 어딘가에서 최소다. ② 이상치 크기를 1로 줄이면 스무딩 이득이 거의 사라진다. ③ INT4로 바꾸면 최적 α에서도 오차가 커서, W4A4가 왜 훨씬 어려운지 보인다.</div>
+    </div>
+    <p>SmoothQuant 논문은 대부분의 모델에서 \(\alpha \approx 0.5\)가, 이상치가 심한 일부 모델(GLM-130B 등)에서는 0.75 정도가 좋다고 보고했다. 이 방법으로 OPT-175B 같은 대형 모델도 W8A8로 정확도를 거의 잃지 않고 돌릴 수 있게 됐다. 이후 연구는 채널별 스케일 대신 직교 회전 행렬 \(R\)(\(XW = (XR)(R^\top W)\))을 곱해 이상치를 모든 채널에 골고루 퍼뜨리는 방향(QuaRot, SpinQuant 등, 2024)으로 발전했고, 이로써 W4A4에 가까운 설정도 시도되고 있다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="ptq">
+    <h2>PTQ와 QAT, 그리고 GPTQ</h2>
+    <p>양자화를 언제 하느냐에 따라 두 갈래가 있다.</p>
+    <ul>
+      <li><strong>PTQ</strong>(Post-Training Quantization): 학습이 끝난 모델을 소량의 보정 데이터(수백 문장)만으로 양자화한다. 재학습이 없어 70B 모델도 GPU 한 장으로 몇 시간이면 끝난다. LLM 양자화의 주류다.</li>
+      <li><strong>QAT</strong>(Quantization-Aware Training): 학습(또는 미세조정) 중에 순전파에서 가중치를 가짜로 양자화(fake quant)하고, 역전파에서는 반올림의 기울기를 1로 취급하는 <b>STE</b>(straight-through estimator)로 통과시킨다. 모델이 양자화 잡음에 적응하므로 낮은 비트에서 품질이 좋지만, 학습 비용이 크다. 일부 모델은 QAT로 만든 4비트 체크포인트를 따로 공개하기도 한다.</li>
+    </ul>
+    <p>가장 단순한 PTQ는 각 가중치를 가장 가까운 격자점으로 보내는 <span class="term">RTN</span><span class="en">(round-to-nearest)</span>이다. RTN은 가중치 하나하나의 오차 \(|w - \hat w|\)를 최소화하지만, 우리가 진짜 신경 쓰는 것은 <strong>층의 출력</strong> \(WX\)다. 여러 가중치의 오차가 서로 상쇄되도록 고르면 개별 오차가 조금 커지더라도 출력 오차는 작아질 수 있다.</p>
+    <h3>GPTQ: 한 열씩 양자화하고, 오차를 남은 열에 떠넘긴다</h3>
+    <p>GPTQ(Frantar 외, 2022)는 층별 재구성 문제를 푼다. 보정 입력 \(X \in \mathbb{R}^{d_{in}\times N}\)에 대해 각 행 \(\mathbf w\)(출력 채널 하나)의 출력 오차는 이차식이다.</p>
+    <div class="formula">$$\min_{\hat{\mathbf w}}\ \|\mathbf w X - \hat{\mathbf w} X\|_2^2 = (\mathbf w - \hat{\mathbf w})\, H\, (\mathbf w - \hat{\mathbf w})^\top, \qquad H = 2XX^\top$$<div class="where">\(H\)는 이 이차 손실의 헤시안(\(d_{in}\times d_{in}\))이다. 입력 채널끼리 상관이 있으면 \(H\)가 대각이 아니고, 한 채널의 오차를 다른 채널 가중치를 조정해 보상할 수 있다.</div></div>
+    <p>알고리즘은 OBS(Optimal Brain Surgeon)에서 왔다. 입력 채널(열) \(q\)를 하나 골라 양자화하면 생긴 오차 \(\delta_q = w_q - \hat w_q\)를, 아직 양자화하지 않은 나머지 가중치를 다음처럼 움직여 최적으로 보상한다.</p>
+    <div class="formula">$$\mathbf w_{F} \leftarrow \mathbf w_{F} - \frac{\delta_q}{[H_F^{-1}]_{qq}}\,[H_F^{-1}]_{q,F}, \qquad H_{F\setminus q}^{-1} = H_F^{-1} - \frac{[H_F^{-1}]_{:,q}[H_F^{-1}]_{q,:}}{[H_F^{-1}]_{qq}}$$<div class="where">\(F\): 아직 양자화하지 않은 열의 집합. GPTQ의 핵심 관찰은 (1) 모든 행이 같은 열 순서를 쓰면 \(H^{-1}\) 갱신을 행끼리 공유할 수 있고, (2) 이 갱신이 촐레스키 분해 한 번으로 미리 계산된다는 것이다. 덕분에 175B 모델도 GPU 한 장으로 몇 시간 안에 양자화한다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 240" role="img" aria-label="GPTQ: 열 단위 양자화와 오차 보정">
+        <defs>
+          <marker id="qz-ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+          <pattern id="qz-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0 V6" style="stroke:var(--accent);stroke-width:2;opacity:.5"/></pattern>
+        </defs>
+        <text x="60" y="30" class="t-acc">가중치 W (행 = 출력 채널, 열 = 입력 채널)</text>
+        <rect x="60" y="50" width="120" height="140" class="f-acc-soft"/>
+        <rect x="60" y="50" width="120" height="140" style="fill:url(#qz-hatch)"/>
+        <rect x="180" y="50" width="30" height="140" style="fill:var(--accent-2);opacity:.75"/>
+        <rect x="210" y="50" width="330" height="140" class="f-surface"/>
+        <path d="M90 50 V190 M120 50 V190 M150 50 V190 M240 50 V190 M270 50 V190 M300 50 V190 M330 50 V190 M360 50 V190 M390 50 V190 M420 50 V190 M450 50 V190 M480 50 V190 M510 50 V190" style="stroke:var(--border);stroke-width:1"/>
+        <text x="120" y="210" text-anchor="middle" class="t-dim">양자화 완료 (고정)</text>
+        <text x="195" y="210" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">열 q</text>
+        <text x="375" y="210" text-anchor="middle" class="t-dim">아직 실수 — 보정으로 계속 갱신</text>
+        <path d="M212 90 C 280 60, 330 60, 380 88" class="s-acc2" marker-end="url(#qz-ar6)"/>
+        <path d="M212 120 C 300 100, 420 100, 500 118" class="s-acc2" marker-end="url(#qz-ar6)"/>
+        <text x="600" y="70" class="t">① 열 q를 반올림</text>
+        <text x="600" y="92" class="t-mono">ŵ_q = Q(w_q)</text>
+        <text x="600" y="122" class="t">② 오차 δ를 분배</text>
+        <text x="600" y="144" class="t-mono">w_F −= δ·H⁻¹_qF / H⁻¹_qq</text>
+        <text x="600" y="174" class="t">③ H⁻¹에서 q 제거</text>
+        <text x="600" y="196" class="t-mono">다음 열로 →</text>
+      </svg>
+      <figcaption><b>그림 9-6.</b> GPTQ는 왼쪽 열부터 차례로 양자화한다. 열 \(q\)를 반올림해 생긴 오차를, 입력 상관(헤시안 역행렬)에 비례해 오른쪽의 아직 양자화되지 않은 열에 미리 반영해 둔다. 마지막 열에 가까워질수록 보정할 여지가 줄어든다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-gptq">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RTN vs GPTQ: 오차 보정의 효과</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-gmat"></canvas><canvas id="cv-qz-gbar" style="touch-action:none;cursor:pointer"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>비트 수 <output id="qz-gb-out"></output></span><input type="range" id="qz-gb" min="2" max="8" step="1" value="3"></label>
+          <div class="ctrl"><span>보정 입력 X</span><div class="seg" id="qz-gx"><button data-value="corr" class="on">채널 상관 강함</button><button data-value="indep">채널 독립</button></div></div>
+          <div class="ctrl"><span>GPTQ 진행</span><div class="qz-btns"><button class="btn primary" id="qz-gplay">재생</button><button class="btn" id="qz-gstep">한 열 →</button><button class="btn" id="qz-greset">처음</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">RTN 출력 MSE</span><span class="v" id="qz-g-rtn">—</span></div>
+        <div class="stat"><span class="k">GPTQ 출력 MSE</span><span class="v" id="qz-g-gptq">—</span></div>
+        <div class="stat"><span class="k">개선 (RTN / GPTQ)</span><span class="v" id="qz-g-gain">—</span></div>
+        <div class="stat"><span class="k">진행</span><span class="v" id="qz-g-step">—</span></div>
+      </div>
+      <div class="sim-note">교육용으로 만든 작은 층: W는 16×32(출력 16, 입력 32), 보정 입력 X는 32차원 × 256개 샘플이다. '상관 강함'은 X를 8차원 잠재 변수에서 만들어 채널끼리 강하게 얽혀 있고, '독립'은 채널마다 따로 뽑는다. 두 방법 모두 행마다 같은 대칭 격자(행 absmax 스케일)를 쓰고, GPTQ는 위 식을 그대로(헤시안 역행렬 갱신, 1% 감쇠) 계산한다. 위: 원본 W / 진행 중인 W(왼쪽부터 양자화된 열, 오른쪽은 보정으로 바뀐 실수 열) / 원본과의 차이. 아래: 비트별 출력 MSE(로그 축), 막대를 누르면 그 비트로 바뀐다. 해볼 것: ① '한 열 →'을 여러 번 눌러 오른쪽 열들이 미리 조금씩 바뀌는 것을 보자. ② 3비트에서 RTN 대비 GPTQ의 MSE가 몇 배 줄어드는지 확인하자. ③ '채널 독립'으로 바꾸면 H가 거의 대각이 되어 보정할 상대가 없고, GPTQ ≈ RTN이 된다.</div>
+    </div>
+    <div class="callout deep"><strong>AWQ: 중요한 채널을 스케일로 보호한다</strong>
+      <p>AWQ(Activation-aware Weight Quantization, Lin 외, 2023)는 "가중치의 중요도는 그 가중치에 곱해지는 <b>활성값의 크기</b>가 정한다"는 관찰에서 출발한다. 활성값이 큰 입력 채널의 가중치 오차는 출력에 크게 증폭되므로, 그런 약 1%의 채널만 보호해도 품질이 크게 좋아진다. 그렇다고 그 채널만 FP16으로 두면 커널이 복잡해지므로, SmoothQuant와 같은 등가 변환을 쓴다. 중요 채널의 가중치에 \(s_j > 1\)을 곱해 키우고(상대 반올림 오차 감소) 활성값을 \(s_j\)로 나눈다. \(s_j = (\overline{|x_j|})^{\alpha}\) 꼴로 두고 보정 데이터에서 출력 오차가 최소가 되는 \(\alpha\)를 격자 탐색한다. 역전파도 헤시안도 필요 없어 빠르고, 보정 데이터에 덜 과적합한다는 장점이 있다. GPTQ와 함께 4비트 가중치 양자화의 양대 표준이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="more">
+    <h2>그 밖의 형식과 기법</h2>
+    <h3>KV 캐시 양자화</h3>
+    <p><a href="generation.html">8장</a>의 KV 캐시는 컨텍스트 길이와 배치에 비례해 자란다. Llama 3 70B(80층, KV 헤드 8개, 헤드 차원 128)는 BF16에서 토큰당 \(2 \times 80 \times 8 \times 128 \times 2\) 바이트 ≈ 320 KB, 128K 토큰이면 요청 하나에 약 43 GB다. 긴 컨텍스트에서는 가중치보다 KV 캐시가 더 커진다. KV를 FP8이나 INT8(토큰별·헤드별 스케일)로 저장하면 절반이 되고, 서빙 엔진(vLLM, TensorRT-LLM 등)은 FP8 KV 캐시를 옵션으로 지원한다. 키 벡터에는 특정 채널의 이상치가, 값 벡터에는 토큰별 변동이 커서, 키는 채널별·값은 토큰별 스케일을 쓰는 방식(KIVI 등)도 제안됐다.</p>
+    <h3>NF4와 QLoRA</h3>
+    <p>신경망 가중치는 대략 0을 중심으로 한 정규분포다. 균일 격자는 값이 드문 꼬리에도 격자점을 똑같이 배분하므로 낭비가 있다. <b>NF4</b>(NormalFloat4, QLoRA 논문, Dettmers 외 2023)는 표준정규분포의 분위수(quantile)에 격자점 16개를 놓아 각 격자 구간에 같은 확률 질량이 들어가게 한다. 블록(64개)마다 absmax로 정규화한 뒤 이 표에서 가장 가까운 값을 고른다. QLoRA는 기반 모델을 NF4로 얼려 두고(스케일까지 다시 8비트로 양자화하는 이중 양자화 포함), 그 위에 작은 LoRA 어댑터만 BF16으로 학습한다. 덕분에 65B 모델 미세조정이 48 GB GPU 한 장으로 가능해졌다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 260" role="img" aria-label="NF4와 INT4 격자점 비교">
+        <path d="M60.0 197.3 L68.5 196.7 L77.0 196.0 L85.5 195.2 L94.0 194.3 L102.5 193.2 L111.0 192.0 L119.5 190.6 L128.0 189.0 L136.5 187.2 L145.0 185.2 L153.5 182.9 L162.0 180.4 L170.5 177.6 L179.0 174.5 L187.5 171.2 L196.0 167.6 L204.5 163.7 L213.0 159.5 L221.5 155.1 L230.0 150.4 L238.5 145.6 L247.0 140.5 L255.5 135.2 L264.0 129.9 L272.5 124.4 L281.0 119.0 L289.5 113.5 L298.0 108.1 L306.5 102.9 L315.0 97.9 L323.5 93.1 L332.0 88.6 L340.5 84.5 L349.0 80.8 L357.5 77.6 L366.0 74.9 L374.5 72.8 L383.0 71.2 L391.5 70.3 L400.0 70.0 L408.5 70.3 L417.0 71.2 L425.5 72.8 L434.0 74.9 L442.5 77.6 L451.0 80.8 L459.5 84.5 L468.0 88.6 L476.5 93.1 L485.0 97.9 L493.5 102.9 L502.0 108.1 L510.5 113.5 L519.0 119.0 L527.5 124.4 L536.0 129.9 L544.5 135.2 L553.0 140.5 L561.5 145.6 L570.0 150.4 L578.5 155.1 L587.0 159.5 L595.5 163.7 L604.0 167.6 L612.5 171.2 L621.0 174.5 L629.5 177.6 L638.0 180.4 L646.5 182.9 L655.0 185.2 L663.5 187.2 L672.0 189.0 L680.5 190.6 L689.0 192.0 L697.5 193.2 L706.0 194.3 L714.5 195.2 L723.0 196.0 L731.5 196.7 L740.0 197.3 L740 200 L60 200 Z" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5"/>
+        <path d="M40 200 H760" class="s-axis"/>
+        <text x="400" y="40" text-anchor="middle" class="t-dim">가중치 분포 (블록 absmax로 정규화)</text>
+        <g style="stroke:var(--accent-2);stroke-width:2.2">
+          <path d="M60 200 V216 M163.3 200 V216 M221.5 200 V216 M265.7 200 V216 M303.3 200 V216 M337.2 200 V216 M369 200 V216 M400 200 V216 M427.1 200 V216 M454.7 200 V216 M483.7 200 V216 M514.9 200 V216 M549.8 200 V216 M591.3 200 V216 M645.8 200 V216 M740 200 V216"/>
+        </g>
+        <text x="772" y="214" text-anchor="end" class="t-mono" style="fill:var(--accent-2)">NF4</text>
+        <g style="stroke:var(--warn);stroke-width:2.2">
+          <path d="M60 226 V242 M108.6 226 V242 M157.1 226 V242 M205.7 226 V242 M254.3 226 V242 M302.9 226 V242 M351.4 226 V242 M400 226 V242 M448.6 226 V242 M497.1 226 V242 M545.7 226 V242 M594.3 226 V242 M642.9 226 V242 M691.4 226 V242 M740 226 V242"/>
+        </g>
+        <text x="772" y="240" text-anchor="end" class="t-mono" style="fill:var(--warn)">INT4</text>
+        <text x="60" y="256" text-anchor="middle" class="t-mono">−1</text><text x="400" y="256" text-anchor="middle" class="t-mono">0</text><text x="740" y="256" text-anchor="middle" class="t-mono">+1</text>
+      </svg>
+      <figcaption><b>그림 9-7.</b> NF4(분홍)는 정규분포의 분위수에 격자점을 둬서 값이 많은 0 근처가 촘촘하고 꼬리가 성기다. 대칭 INT4(주황, −7…7)는 균일 간격이다. NF4는 0을 정확히 포함하도록 양수 쪽 8개·음수 쪽 7개로 비대칭하게 설계됐다.</figcaption>
+    </figure>
+    <h3>GGUF와 k-quant</h3>
+    <p>llama.cpp의 파일 형식 <b>GGUF</b>는 CPU·Apple 실리콘·소비자 GPU에서 LLM을 돌리는 데 널리 쓰인다. 그 안의 <b>k-quant</b>(Q2_K ~ Q6_K)는 2단계 블록 구조를 쓴다. 대략 말하면 256개 가중치로 된 '슈퍼블록'을 16~32개짜리 하위 블록으로 나누고, 하위 블록의 스케일(과 최소값)을 다시 6비트 정도로 양자화한 뒤 슈퍼블록마다 FP16 스케일 하나만 둔다. 스케일 비용을 줄이면서 작은 블록의 이점을 얻는 방법이다. 이름의 숫자는 대략적 비트 수이고, 실제 유효 비트는 Q4_K_M ≈ 4.8, Q5_K_M ≈ 5.7, Q3_K_M ≈ 3.9비트 정도다(_S/_M/_L은 층마다 정밀도를 다르게 섞는 정도). 정확한 블록 구성은 버전에 따라 바뀌므로 여기서는 개념만 기억하자.</p>
+    <h3>FP8 학습과 MX 블록 포맷</h3>
+    <p>H100(Hopper)부터 텐서 코어가 FP8을 지원해 BF16 대비 약 2배 연산 처리량을 낸다. DeepSeek-V3(2024년 12월 보고)는 대부분의 행렬곱을 FP8로 학습했는데, 텐서 하나에 스케일 하나가 아니라 활성값은 1×128 타일, 가중치는 128×128 블록마다 스케일을 둬서 이상치 문제를 피했다. 이 '작은 블록마다 스케일'이라는 아이디어를 하드웨어 표준으로 만든 것이 OCP <b>MX</b>(Microscaling) 포맷이다. 32개 원소가 8비트 지수 스케일(E8M0, 2의 거듭제곱) 하나를 공유하고, 원소는 FP8·FP6·FP4(MXFP8/6/4) 또는 INT8로 저장한다. MXFP4는 원소 4비트 + 8/32 = 4.25비트다. NVIDIA Blackwell(B200, 2024~25)은 MXFP4와 자체 NVFP4(16개마다 FP8 스케일)를 텐서 코어에서 직접 지원한다. 블록 스케일이 하드웨어 안으로 들어오면서 '양자화된 형식으로 그대로 계산하기'가 표준이 되었다. 두 FP4 형식은 <a href="#fp4">마지막 절</a>에서 직접 비교한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방법</th><th>대상</th><th>핵심 아이디어</th><th>대표 설정</th></tr></thead>
+      <tbody>
+        <tr><td>RTN</td><td>W</td><td>가장 가까운 격자점</td><td>W8, W4 g128</td></tr>
+        <tr><td>LLM.int8()</td><td>W·A</td><td>이상치 채널만 FP16으로 분리</td><td>W8A8 + FP16 혼합</td></tr>
+        <tr><td>SmoothQuant</td><td>W·A</td><td>채널 스케일로 난이도 이동</td><td>W8A8</td></tr>
+        <tr><td>GPTQ</td><td>W</td><td>헤시안 기반 순차 오차 보정</td><td>W4/W3 g128</td></tr>
+        <tr><td>AWQ</td><td>W</td><td>활성값 기준 중요 채널 스케일 보호</td><td>W4 g128</td></tr>
+        <tr><td>NF4 / QLoRA</td><td>W</td><td>정규분포 분위수 격자 + LoRA 학습</td><td>W4 블록 64</td></tr>
+        <tr><td>GGUF k-quant</td><td>W</td><td>2단계 블록 스케일</td><td>Q4_K_M ≈ 4.8비트</td></tr>
+        <tr><td>FP8 (E4M3)</td><td>W·A·KV</td><td>텐서/블록 스케일 + FP8 텐서 코어</td><td>W8A8 FP8</td></tr>
+        <tr><td>MXFP4 / NVFP4</td><td>W·A</td><td>하드웨어 블록 스케일(32/16개)</td><td>W4A4 (Blackwell·Rubin), gpt-oss MoE 가중치(MXFP4)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><strong>양자화 말고도: 프루닝과 증류</strong>
+      <p><b>프루닝</b>(pruning)은 가중치의 일부를 0으로 만들어 없앤다. 아무 위치나 0으로 만드는 비정형 희소성은 하드웨어 이득을 얻기 어렵고, NVIDIA 텐서 코어는 4개 중 2개가 0인 <b>2:4 희소성</b>을 지원해 이론상 2배 처리량을 낸다(SparseGPT, Wanda 등). <b>지식 증류</b>(distillation)는 큰 '교사' 모델의 출력 분포를 작은 '학생' 모델이 따라 배우게 한다. Llama 3.2 1B/3B처럼 큰 모델의 로짓을 이용해 작은 모델을 만드는 것이 대표적이다. 세 기법은 서로 배타적이지 않아서, 증류한 작은 모델을 다시 4비트로 양자화해 휴대폰에서 돌리는 식으로 함께 쓴다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="calc">
+    <h2>크기와 속도 계산기</h2>
+    <p>지금까지의 내용을 하나의 계산으로 묶어 보자. 배치 1 디코딩의 토큰당 시간 하한은 "가중치 바이트 ÷ 대역폭"이다. 그룹 양자화의 스케일 오버헤드까지 넣으면 다음과 같다.</p>
+    <div class="formula">$$M_W = N \cdot \frac{b + 16/g}{8}\ \text{바이트}, \qquad \text{tok/s}_{\max} \approx \frac{BW}{M_W}$$<div class="where">\(N\): 파라미터 수, \(b\): 가중치 비트, \(g\): 그룹 크기(16비트 스케일 가정, 16비트 원본에는 오버헤드 없음), \(BW\): 메모리 대역폭. KV 캐시 읽기, 커널 효율(실제로는 대역폭의 약 60~85%)은 무시한 이론 상한이다. MoE 모델은 토큰마다 일부 전문가만 읽으므로 \(M_W\) 대신 활성 파라미터 바이트를 쓴다.</div></div>
+    <div class="sim" id="sim-calc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>모델 크기 · 디코딩 속도 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-calc" style="touch-action:none;cursor:pointer"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>파라미터 수 <output id="qz-cp-out"></output></span><input type="range" id="qz-cp" min="0" max="2.7" step="0.005" value="1.85"></label>
+          <div class="ctrl"><span>프리셋</span><div class="qz-presets" id="qz-cpre"><button class="btn" data-n="8.03">Llama 3 8B</button><button class="btn" data-n="70.6">70B</button><button class="btn" data-n="405">405B</button><button class="btn" data-n="46.7">Mixtral 8x7B</button></div></div>
+          <div class="ctrl"><span>가중치 비트</span><div class="seg" id="qz-cb"><button data-value="16">16</button><button data-value="8">8</button><button data-value="4" class="on">4</button><button data-value="3">3</button><button data-value="2">2</button></div></div>
+          <div class="ctrl"><span>그룹 크기 (스케일 FP16)</span><div class="seg" id="qz-cg"><button data-value="0">없음</button><button data-value="128" class="on">128</button><button data-value="64">64</button><button data-value="32">32</button></div></div>
+          <label class="ctrl"><span>GPU</span><select id="qz-cgpu">
+            <option value="4090">RTX 4090 · 24 GB · ~1.0 TB/s</option>
+            <option value="a100">A100 80GB · ~2.0 TB/s</option>
+            <option value="h100" selected>H100 SXM · 80 GB · ~3.35 TB/s</option>
+            <option value="h200">H200 · 141 GB · ~4.8 TB/s</option>
+            <option value="b200">B200 · ~180 GB · ~8 TB/s</option>
+            <option value="b300">B300 · 약 288 GB · 약 8 TB/s</option>
+            <option value="rubin">Rubin · 약 288 GB HBM4 · 약 19.2 TB/s</option>
+            <option value="m2u">M2 Ultra (통합) · 192 GB · ~0.8 TB/s</option>
+          </select></label>
+          <label class="ctrl"><span>KV·작업 공간 여유 <output id="qz-ckv-out"></output></span><input type="range" id="qz-ckv" min="0" max="40" step="1" value="6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">유효 비트/가중치</span><span class="v" id="qz-c-bits">—</span></div>
+        <div class="stat"><span class="k">가중치 메모리</span><span class="v" id="qz-c-mem">—</span></div>
+        <div class="stat"><span class="k">GPU 한 장에</span><span class="v" id="qz-c-fit">—</span></div>
+        <div class="stat"><span class="k">디코딩 상한 (배치 1)</span><span class="v" id="qz-c-tps">—</span></div>
+        <div class="stat"><span class="k">필요한 GPU 수 (최소)</span><span class="v" id="qz-c-ngpu">—</span></div>
+      </div>
+      <div class="sim-note">막대는 비트 수별 가중치 메모리(GB, 10진), 점선은 GPU 메모리에서 여유분을 뺀 '가중치에 쓸 수 있는 용량', 막대 위 숫자는 tok/s 상한이다. 막대를 누르면 그 비트를 선택한다. GPU 사양은 공개 자료 기준 근사값이며 B200은 2024~25년, B300(Blackwell Ultra, HBM3E)은 2025년, Rubin(HBM4, 2026년 하반기 공급)은 2026년 NVIDIA 발표치다. M2 Ultra는 통합 메모리라 GPU가 쓸 수 있는 양이 전체보다 적다(여기서는 75%로 가정). 해볼 것: ① 70B를 H100 한 장에 올리려면 몇 비트가 필요한가? ② 같은 70B 4비트를 RTX 4090과 M2 Ultra에서 비교하자 — 4090은 용량이 모자라고, M2 Ultra는 들어가지만 대역폭이 낮다. ③ 405B는 4비트(≈209 GB)로도 B200 한 장(~180 GB)을 넘는다. 3비트까지 내려야 겨우 들어간다. 그러나 B300·Rubin(약 288 GB)이라면 4비트로 한 장에 들어가고, Rubin은 대역폭이 H100의 약 6.5배라 같은 모델의 디코딩 상한도 그만큼 오른다. ④ 8B·4비트를 H100에서 돌리면 상한이 수백 tok/s지만, 실제로는 커널 오버헤드 때문에 이 상한에 한참 못 미친다.</div>
+    </div>
+    <p>이 계산은 서빙의 출발점일 뿐이다. 동시에 여러 사용자를 처리하면(배치 &gt; 1) 같은 가중치 읽기를 여러 토큰이 나눠 쓰므로 총 처리량이 크게 오르고, 대신 KV 캐시가 메모리를 차지한다. 이 트레이드오프는 <a href="design.html">12장</a>의 서빙 플레이그라운드에서 이어서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="quality">
+    <h2>품질에 미치는 영향</h2>
+    <p>양자화가 모델을 얼마나 망가뜨리는지는 모델 크기·구조·방법·평가 과제에 따라 크게 달라서 하나의 숫자로 말하기 어렵다. 다만 지난 몇 년의 보고들에서 반복되는 대략적인 경향은 있다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="가중치 비트 수에 따른 품질 손실의 대략적 경향">
+        <path d="M80 30 V220 H720" class="s-axis"/>
+        <text x="40" y="125" text-anchor="middle" class="t-dim" transform="rotate(-90 40 125)">품질 손실 (개념적)</text>
+        <rect x="80" y="30" width="200" height="190" class="f-bad-soft" style="stroke:none"/>
+        <rect x="280" y="30" width="160" height="190" class="f-warn-soft" style="stroke:none"/>
+        <rect x="440" y="30" width="280" height="190" class="f-ok-soft" style="stroke:none"/>
+        <path d="M110 40 C 170 120, 230 170, 300 192 C 360 206, 420 212, 480 215 C 560 217, 640 218, 710 218" style="stroke:var(--accent);stroke-width:2.6;fill:none"/>
+        <path d="M110 70 C 180 150, 250 190, 320 205 C 380 212, 440 215, 500 217 C 580 218, 650 219, 710 219" style="stroke:var(--accent-2);stroke-width:2;fill:none;stroke-dasharray:6 5"/>
+        <text x="110" y="240" text-anchor="middle" class="t-mono">2</text><text x="200" y="240" text-anchor="middle" class="t-mono">3</text><text x="320" y="240" text-anchor="middle" class="t-mono">4</text><text x="440" y="240" text-anchor="middle" class="t-mono">6</text><text x="560" y="240" text-anchor="middle" class="t-mono">8</text><text x="710" y="240" text-anchor="middle" class="t-mono">16</text>
+        <text x="400" y="262" text-anchor="middle" class="t-dim">가중치 비트 수 (로그에 가까운 눈금)</text>
+        <text x="180" y="50" class="t" style="font-weight:700">급격한 저하</text>
+        <text x="300" y="50" class="t" style="font-weight:700">소폭 손실</text>
+        <text x="520" y="50" class="t" style="font-weight:700">거의 무손실</text>
+        <text x="520" y="160" class="t-mono" style="fill:var(--accent)">― 단순 RTN</text>
+        <text x="520" y="180" class="t-mono" style="fill:var(--accent-2)">- - GPTQ·AWQ 등 보정</text>
+      </svg>
+      <figcaption><b>그림 9-8.</b> 가중치 비트 수와 품질 손실의 대략적 관계(개념도, 실측값 아님). 8비트는 거의 손실이 없고, 4비트는 좋은 방법을 쓰면 소폭이며, 3비트 이하에서는 급격히 나빠진다. 보정 기법은 곡선을 왼쪽으로 민다.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>8비트</strong>(INT8 W8A8, FP8): 대부분의 모델에서 퍼플렉시티·벤치마크 차이가 측정 잡음 수준이다. FP8은 현재 데이터센터 서빙의 사실상 기본값이 되어 가고 있다.</li>
+      <li><strong>4비트 가중치</strong>(GPTQ/AWQ g128, NF4, Q4_K_M): 퍼플렉시티가 소폭 오른다(대략 수 % 이내인 경우가 많다). 대화 품질 차이는 체감하기 어려운 경우가 많지만, 수학·코드·다국어처럼 정밀한 과제에서는 차이가 더 잘 드러난다는 보고가 있다.</li>
+      <li><strong>3비트 이하</strong>: 단순 방법으로는 급격히 나빠진다. 2비트는 벡터 양자화(QuIP#, AQLM 등)처럼 특별한 기법이 있어야 쓸 만해진다.</li>
+      <li><strong>큰 모델이 더 잘 견딘다</strong>: 같은 비트에서 파라미터가 많을수록 상대 손실이 작다. 그래서 "작은 모델의 16비트"보다 "큰 모델의 4비트"가 같은 메모리에서 나은 경우가 많다. 다만 많은 토큰으로 오래 학습한 최신 모델일수록 가중치에 정보가 빽빽해 양자화에 더 민감하다는 관찰도 있다(2024).</li>
+    </ul>
+    <div class="callout warn"><strong>숫자를 읽을 때 주의</strong>
+      <p>퍼플렉시티 비교는 같은 평가 데이터·같은 컨텍스트 길이·같은 토크나이저에서만 의미가 있다. 퍼플렉시티 차이가 작아도 특정 과제(긴 추론, 도구 호출 형식 지키기)에서는 차이가 날 수 있으므로, 실제 배포 전에는 그 용도의 평가 세트로 직접 확인해야 한다. 이 장의 수치들은 모두 "대략, 모델·방법에 따라 다름"으로 읽자.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="fp4">
+    <h2>블록 스케일 FP4: NVFP4 vs MXFP4</h2>
+    <p>4비트 부동소수점 E2M1은 부호 1비트, 지수 2비트, 가수 1비트로 양수 쪽에 겨우 8개 값 \(\{0, 0.5, 1, 1.5, 2, 3, 4, 6\}\)만 표현한다. 이 격자로 실제 가중치·활성값을 담으려면 <strong>작은 블록마다 스케일</strong>을 곱해 블록의 최댓값을 6 근처에 맞춰야 한다. 앞 절의 INT4 g128과 원리는 같지만 두 가지가 다르다. 블록이 16~32개로 훨씬 작고, 스케일 자체도 8비트 부동소수점이라 저장 비용이 작다. 무엇보다 Blackwell(B200·B300) 이후의 텐서 코어는 이 블록 스케일 형식을 <strong>직접 읽어 곱셈</strong>한다(2세대 Transformer Engine). 역양자화 없이 FP4 그대로 계산하므로 가중치뿐 아니라 활성값까지 4비트로 낮추는 W4A4가 실용 영역에 들어왔다.</p>
+    <p>표준은 둘이다. OCP의 <b>MXFP4</b>는 원소 32개가 지수만 있는 8비트 스케일 <b>E8M0</b>(2의 거듭제곱) 하나를 공유한다. NVIDIA의 <b>NVFP4</b>는 원소 16개마다 <b>E4M3</b>(FP8) 스케일을 두고, 텐서 전체에 FP32 스케일을 하나 더 곱하는 2단계 구조다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 312" role="img" aria-label="MXFP4와 NVFP4의 블록 비트 배치">
+        <text x="20" y="59" class="t">MXFP4</text><text x="20" y="76" class="t-mono t-dim" style="font-size:11px">OCP MX</text>
+        <rect x="150" y="40" width="32" height="28" class="f-acc" /><text x="166" y="58" text-anchor="middle" class="t-mono" style="fill:var(--on-accent);font-size:10px">E8M0</text>
+        <rect x="182" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="198" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="214" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="230" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="246" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="262" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="278" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="294" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="310" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="326" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="342" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="358" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="374" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="390" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="406" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="422" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="438" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="454" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="470" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="486" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="502" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="518" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="534" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="550" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="566" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="582" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="598" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="614" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="630" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="646" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="662" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="678" y="40" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/>
+        <text x="438" y="60" text-anchor="middle" class="t-mono" style="font-size:11px">원소 32개 × E2M1 (4비트)</text>
+        <text x="150" y="90" class="t-dim">(32 × 4 + 8) / 32 = <tspan class="t-acc">4.25비트/원소</tspan> · 스케일 = 2의 거듭제곱</text>
+        <text x="20" y="139" class="t">NVFP4</text><text x="20" y="156" class="t-mono t-dim" style="font-size:11px">NVIDIA</text>
+        <rect x="150" y="120" width="32" height="28" style="fill:var(--accent-2)"/><text x="166" y="138" text-anchor="middle" class="t-mono" style="fill:var(--on-accent);font-size:10px">E4M3</text>
+        <rect x="438" y="120" width="32" height="28" style="fill:var(--accent-2)"/><text x="454" y="138" text-anchor="middle" class="t-mono" style="fill:var(--on-accent);font-size:10px">E4M3</text>
+        <rect x="182" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="198" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="214" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="230" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="246" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="262" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="278" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="294" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="310" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="326" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="342" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="358" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="374" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="390" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="406" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="422" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="470" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="486" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="502" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="518" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="534" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="550" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="566" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="582" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="598" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="614" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="630" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="646" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="662" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="678" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="694" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/><rect x="710" y="120" width="16" height="28" class="f-warn-soft" style="stroke:var(--border)"/>
+        <text x="310" y="140" text-anchor="middle" class="t-mono" style="font-size:11px">16 × E2M1</text><text x="598" y="140" text-anchor="middle" class="t-mono" style="font-size:11px">16 × E2M1</text>
+        <rect x="740" y="120" width="44" height="28" rx="4" class="f-surface" style="stroke:var(--accent-2);stroke-dasharray:3 2"/><text x="762" y="138" text-anchor="middle" class="t-mono" style="font-size:10px">FP32</text>
+        <text x="762" y="164" text-anchor="middle" class="t-dim" style="font-size:11px">텐서당 1개</text>
+        <text x="150" y="170" class="t-dim">(16 × 4 + 8) / 16 = <tspan style="fill:var(--accent-2)">4.5비트/원소</tspan> + 텐서당 32비트 · 스케일 = FP8 값 × 텐서 스케일</text>
+        <path d="M20 190 H780" class="s-line" style="stroke-dasharray:2 4"/>
+        <text x="20" y="223" class="t">원소 E2M1</text><rect x="150" y="206" width="20" height="24" class="f-acc2-soft" style="stroke:var(--border)"/><text x="160" y="223" text-anchor="middle" class="t-mono" style="font-size:11px">S</text><rect x="170" y="206" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="180" y="223" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="190" y="206" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="200" y="223" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="210" y="206" width="20" height="24" class="f-warn-soft" style="stroke:var(--border)"/><text x="220" y="223" text-anchor="middle" class="t-mono" style="font-size:11px">M</text>
+        <text x="244" y="223" class="t-dim">±{0, 0.5, 1, 1.5, 2, 3, 4, 6} — 0.5는 비정규수, 최대 6</text>
+        <text x="20" y="257" class="t">스케일 E8M0</text><rect x="150" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="160" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="170" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="180" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="190" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="200" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="210" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="220" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="230" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="240" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="250" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="260" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="270" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="280" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="290" y="240" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="300" y="257" text-anchor="middle" class="t-mono" style="font-size:11px">E</text>
+        <text x="324" y="257" class="t-dim">2<tspan dy="-6" style="font-size:9px">E−127</tspan><tspan dy="6">: 지수만 있음</tspan> <tspan> → 스케일이 최대 2배까지 어긋남</tspan></text>
+        <text x="20" y="291" class="t">스케일 E4M3</text><rect x="150" y="274" width="20" height="24" class="f-acc2-soft" style="stroke:var(--border)"/><text x="160" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">S</text><rect x="170" y="274" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="180" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="190" y="274" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="200" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="210" y="274" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="220" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="230" y="274" width="20" height="24" class="f-acc-soft" style="stroke:var(--border)"/><text x="240" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">E</text><rect x="250" y="274" width="20" height="24" class="f-warn-soft" style="stroke:var(--border)"/><text x="260" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">M</text><rect x="270" y="274" width="20" height="24" class="f-warn-soft" style="stroke:var(--border)"/><text x="280" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">M</text><rect x="290" y="274" width="20" height="24" class="f-warn-soft" style="stroke:var(--border)"/><text x="300" y="291" text-anchor="middle" class="t-mono" style="font-size:11px">M</text>
+        <text x="324" y="291" class="t-dim">1.mmm × 2<tspan dy="-6" style="font-size:9px">e</tspan><tspan dy="6">: 한 옥타브를</tspan> 8단계로 <tspan> → 블록 최댓값에 거의 딱 맞춤</tspan></text>
+      </svg>
+      <figcaption><b>그림 9-9.</b> 같은 원소 32개를 담는 두 블록 형식. MXFP4는 32개가 2의 거듭제곱 스케일(E8M0) 하나를 공유하고, NVFP4는 16개마다 FP8(E4M3) 스케일을 두며 텐서 전체에 FP32 스케일 하나를 더 곱한다. 원소 자체는 둘 다 같은 E2M1이다.</figcaption>
+    </figure>
+    <div class="formula">$$\text{MXFP4: } X = 2^{\lfloor \log_2 \max|x| \rfloor - 2}, \quad \hat x_i = X \cdot \mathrm{E2M1}(x_i / X)$$
+    $$\text{NVFP4: } s_t = \frac{\max_{\text{텐서}}|x|}{6 \cdot 448}, \quad s_b = \mathrm{E4M3}\!\left(\frac{\max_{\text{블록}}|x|}{6\, s_t}\right), \quad \hat x_i = s_b s_t \cdot \mathrm{E2M1}\!\left(\frac{x_i}{s_b s_t}\right)$$
+      <div class="where">MX의 \(-2\)는 E2M1 최대값 6의 지수(\(6 = 1.5 \times 2^2\))다. 스케일이 2의 거듭제곱이라 블록 최댓값이 \(x/X\)에서 \([4, 8)\)에 떨어지고, 6을 넘는 값은 6으로 <strong>포화</strong>된다. 반대로 블록 최댓값이 4 바로 위면 격자 위쪽(6)을 거의 못 쓴다. NVFP4의 \(s_t\)는 블록 스케일들이 E4M3 범위(최대 448) 안에 들어오게 하는 텐서 단위 보정이다.</div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>형식</th><th>원소</th><th class="num">블록</th><th>블록 스케일</th><th class="num">유효 비트</th><th>하드웨어 FP4 연산</th></tr></thead>
+      <tbody>
+        <tr><td>INT4 g128 (GPTQ·AWQ식)</td><td>INT4</td><td class="num">128</td><td>FP16</td><td class="num">4.125</td><td>없음 (역양자화 후 BF16 계산)</td></tr>
+        <tr><td>MXFP4 (OCP MX)</td><td>E2M1</td><td class="num">32</td><td>E8M0 (2의 거듭제곱)</td><td class="num">4.25</td><td>Blackwell 이후, AMD MI350 등</td></tr>
+        <tr><td>NVFP4</td><td>E2M1</td><td class="num">16</td><td>E4M3 + 텐서 FP32</td><td class="num">4.5 + 32/N</td><td>Blackwell·Rubin</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 비트 수는 원소 수가 블록 크기의 배수일 때 값과 스케일만 세는 저장량이며, 하드웨어 정렬 패딩·메타데이터는 포함하지 않는다.</p>
+    <p>NVFP4가 0.25비트를 더 쓰는 대가로 얻는 것은 두 가지다. 블록이 절반이라 이상치 하나가 망치는 이웃이 15개뿐이고, 스케일이 2의 거듭제곱에 묶이지 않아 블록 최댓값을 6에 더 가깝게 맞출 수 있다. 다만 블록 스케일도 FP8로 반올림되므로 항상 정확히 6이 되는 것은 아니다. 아래 시뮬레이터로 그 차이를 직접 재 보자.</p>
+
+    <div class="sim" id="sim-fp4">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>블록 스케일 양자화 비교: INT4 g128 · MXFP4 · NVFP4</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qz-fp4" style="touch-action:none;cursor:pointer"></canvas><canvas id="cv-qz-fp4z" style="touch-action:none;cursor:ns-resize"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>데이터</span><div class="seg" id="qz-f-kind"><button data-value="w" class="on">가중치형</button><button data-value="a">활성값형</button></div></div>
+          <label class="ctrl"><span>이상치 세기 (σ 배) <output id="qz-f-out-out"></output></span><input type="range" id="qz-f-out" min="1" max="50" step="0.5" value="12"></label>
+          <div class="qz-btns"><button class="btn" id="qz-f-seed">새 데이터</button><button class="btn" id="qz-f-reset">드래그 되돌리기</button></div>
+          <p style="font-size:12px;color:var(--text-dim);margin:0">위: 512개 값과 방법별 블록 오차 띠(진할수록 블록 MSE가 큼, 로그 눈금). 띠를 눌러 32개 구간을 고른다. 아래: 고른 구간의 원래 값(막대)과 세 방법의 복원값(■ INT4, ▲ MXFP4, ● NVFP4). 막대를 위아래로 끌어 값을 바꿀 수 있다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">INT4 g128 SQNR · 4.125비트</span><span class="v" id="qz-f-int">—</span></div>
+        <div class="stat"><span class="k">MXFP4 SQNR · 4.25비트</span><span class="v" id="qz-f-mx">—</span></div>
+        <div class="stat"><span class="k">NVFP4 SQNR · 약 4.56비트</span><span class="v" id="qz-f-nv">—</span></div>
+        <div class="stat"><span class="k">고른 구간의 스케일</span><span class="v" id="qz-f-sc" style="font-size:13px">—</span></div>
+      </div>
+      <div class="sim-note">교육용으로 만든 시드 고정 데이터다. 가중치형 = 표준정규 + 약 1% 위치에 무작위 이상치, 활성값형 = 작은 값 + 고정된 몇 개 채널의 큰 이상치. 세 코덱은 E2M1 최근접 반올림(동점은 가수 0 쪽), E8M0 스케일 \(2^{\lfloor\log_2 \max\rfloor-2}\), E4M3 최근접 짝수 반올림·비정규수·448 포화를 그대로 구현했다(node 단위 테스트 통과). SQNR = 10 log₁₀(Σx² / Σ(x−x̂)²). 해볼 것: ① 기본값에서 NVFP4 &gt; MXFP4 &gt; INT4 g128 순서를 확인하자 — 셋의 차이는 대부분 이상치가 든 블록에서 난다(띠의 진한 칸). ② 이상치 세기를 1로 내리면(이상치 없음) 셋의 차이가 줄어든다. 이때도 MX가 NV보다 나쁜 이유는 2의 거듭제곱 스케일이 블록 최댓값을 6에 맞추지 못하기 때문이다. ③ 아래 그림에서 한 막대를 끌어 블록 최댓값을 바꾸며 MX 스케일이 2배씩 '계단'으로 뛰는 것, 그리고 최댓값이 6·X를 넘는 순간 ▲가 포화되는 것을 보자. ④ 전체 SQNR은 에너지가 큰 이상치가 지배하므로, 크기 상위 2%를 뺀 '나머지 98%' SQNR도 함께 보자. 활성값형 + 이상치 40에서 INT4 g128의 나머지 SQNR은 0 dB 근처로 무너진다 — 128개가 큰 채널 하나에 스케일을 맞추느라 나머지가 거의 전부 0으로 뭉개진다. MXFP4·NVFP4는 이상치의 피해가 32·16개 블록 안에 갇힌다. 작은 블록이 W4A4를 가능하게 하는 이유다.</div>
+    </div>
+
+    <h3>2026년의 FP4: 서빙에서 학습까지</h3>
+    <ul>
+      <li><strong>하드웨어</strong>: Blackwell(B200, B300/Blackwell Ultra)은 FP4 텐서 코어로 FP8의 약 2배 처리량을 내고, 2026년 하반기 공급되는 Vera Rubin GPU는 HBM4 288 GB·약 19~22 TB/s와 함께 NVIDIA 발표 기준 NVFP4 추론 약 50 PFLOPS를 내세운다.</li>
+      <li><strong>배포 형식</strong>: OpenAI의 gpt-oss(2025년 8월)는 MoE 전문가 가중치를 <b>MXFP4</b>로 배포해 117B 모델(gpt-oss-120b)을 80 GB GPU 한 장에 올렸다(나머지 층은 BF16). DeepSeek-V4(2026)의 인스트럭트 모델은 MoE 전문가 가중치를 FP4로, 나머지를 FP8로 배포한다(DeepSeek, 2026). 파라미터의 대부분이 전문가에 있는 MoE에서는 전문가만 4비트로 낮춰도 크기가 거의 4분의 1이 된다.</li>
+      <li><strong>FP4 학습</strong>: NVIDIA는 12B 모델을 10T 토큰 동안 NVFP4로 사전학습해 FP8 기준선에 근접한 손실·정확도를 보고했다(arXiv 2509.25149, 2025). 같은 보고의 8B 실험에서 MXFP4는 NVFP4와 같은 손실에 도달하는 데 약 36% 더 많은 토큰이 필요했다. 블록 크기와 스케일 정밀도의 차이가 학습에서도 드러난 것이다. 다만 이런 학습은 일부 민감한 층을 BF16으로 남기고 확률적 반올림·무작위 하다마드 변환 같은 보조 기법을 함께 쓴다.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>배치 1 디코딩은 메모리 대역폭 바운드다. 토큰당 시간 ≈ 가중치 바이트 ÷ 대역폭이므로 비트를 절반으로 줄이면 속도 상한이 두 배가 된다. 70B·BF16 = 140 GB, H100에서 이론 상한 ~24 tok/s.</li>
+      <li>부동소수점은 지수 비트로 범위를, 가수 비트로 정밀도를 산다. BF16은 FP32의 범위에 7비트 가수, FP8 E4M3는 최대 448(OCP, Inf 없음), E5M2는 범위가 넓어 기울기용이다.</li>
+      <li>정수 양자화 \(q = \operatorname{round}(x/s) + z\). 범위를 넓게 잡으면 반올림 오차가, 좁게 잡으면 클리핑 오차가 커지므로 MSE 최적 클리핑이 존재한다. 비트 1개 ≈ 6 dB SQNR.</li>
+      <li>입도를 텐서 → 채널 → 그룹으로 잘게 나눌수록 이상치가 국소화되어 정확해지고, 스케일 비용이 \(16/g\)비트씩 든다. INT4 g128 ≈ 4.125비트.</li>
+      <li>LLM 활성값에는 소수 채널의 큰 이상치가 있다. SmoothQuant는 \(XW = (X\,\mathrm{diag}(s)^{-1})(\mathrm{diag}(s)W)\)로 난이도를 가중치로 옮겨 W8A8을 가능하게 했다.</li>
+      <li>GPTQ는 헤시안 \(H = 2XX^\top\)을 써서 한 열의 반올림 오차를 남은 열로 보정하고, AWQ는 활성값이 큰 중요 채널을 스케일로 보호한다. 둘 다 재학습 없는 PTQ다.</li>
+      <li>NF4(정규 분위수 격자), GGUF k-quant(2단계 블록 스케일), MX/NVFP4(하드웨어 블록 스케일), FP8 KV 캐시 등 '작은 블록마다 스케일'이 현재 저비트 형식의 공통 원리다.</li>
+      <li>FP4(E2M1)는 ±{0, 0.5, 1, 1.5, 2, 3, 4, 6}뿐이라 블록 스케일이 필수다. MXFP4 = 32개 + E8M0(2의 거듭제곱) 스케일, 4.25비트. NVFP4 = 16개 + E4M3 스케일 + 텐서 FP32 스케일, 원소 N개에 대해 4.5 + 32/N비트(이 시뮬레이터의 512개에서는 4.5625비트). 작은 블록과 정밀한 스케일 덕분에 NVFP4가 대체로 더 정확하다.</li>
+      <li>FP4는 이제 하드웨어(Blackwell·Rubin FP4 텐서 코어)·배포(gpt-oss MXFP4 MoE, DeepSeek-V4 FP4 전문가 + FP8 나머지)·학습(NVFP4 12B·10T 토큰 사전학습)까지 들어왔다. MoE는 파라미터 대부분이 전문가라 전문가만 4비트로 낮춰도 크기가 크게 준다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 배치 1로 디코딩할 때 70B 모델을 BF16에서 INT4(g128)로 바꾸면 토큰 생성 속도의 이론 상한은 대략 어떻게 되는가?</p><div class="opts">
+        <button class="opt">거의 그대로다. 디코딩은 계산 바운드이기 때문이다</button><button class="opt" data-correct>약 3.9배 빨라진다. 읽을 바이트가 16 → 4.125비트로 줄기 때문이다</button><button class="opt">약 2배 빨라진다. INT4 텐서 코어가 2배 빠르기 때문이다</button><button class="opt">느려진다. 역양자화 계산이 추가되기 때문이다</button>
+      </div><div class="quiz-exp">배치 1 디코딩은 가중치를 읽는 시간이 지배한다. 16 / 4.125 ≈ 3.9배 적은 바이트를 읽으므로 상한도 그만큼 오른다. 역양자화 계산은 남는 연산 능력으로 감출 수 있어서(가중치 전용 양자화 커널) 대개 병목이 아니다.</div></div>
+      <div class="quiz-q"><p>2. BF16이 FP16보다 학습에 선호되는 주된 이유는?</p><div class="opts">
+        <button class="opt">가수 비트가 더 많아 정밀하다</button><button class="opt">비정규수를 지원하지 않아 빠르다</button><button class="opt" data-correct>지수 비트가 8개로 FP32와 같은 범위를 가져 오버플로·언더플로가 드물다</button><button class="opt">0을 정확히 표현할 수 있다</button>
+      </div><div class="quiz-exp">BF16은 FP32의 상위 16비트(부호 1 + 지수 8 + 가수 7)다. 정밀도는 FP16(가수 10)보다 낮지만 범위가 FP32와 같아 손실 스케일링 없이도 학습이 안정적이다. 신경망은 개별 값의 작은 잡음보다 범위 초과에 훨씬 취약하다.</div></div>
+      <div class="quiz-q"><p>3. 어떤 가중치 행의 절대값 최대가 2.54다. absmax 대칭 INT8 양자화(q ∈ [−127, 127])에서 스케일 s와 값 1.0의 양자화 정수 q는?</p><div class="opts">
+        <button class="opt">s = 0.01, q = 100</button><button class="opt" data-correct>s = 0.02, q = 50</button><button class="opt">s = 0.02, q = 51</button><button class="opt">s ≈ 0.00996, q = 100</button>
+      </div><div class="quiz-exp">s = 2.54 / 127 = 0.02. q = round(1.0 / 0.02) = 50. 역양자화하면 50 × 0.02 = 1.0으로 정확하다. 비대칭이 아니므로 영점은 0이다.</div></div>
+      <div class="quiz-q"><p>4. INT4 가중치를 그룹 크기 64, 그룹마다 FP16 스케일과 FP16 영점을 저장하면 가중치 하나당 유효 비트는?</p><div class="opts">
+        <button class="opt">4.125</button><button class="opt">4.25</button><button class="opt" data-correct>4.5</button><button class="opt">5.0</button>
+      </div><div class="quiz-exp">\(b_{\text{eff}} = 4 + (16 + 16)/64 = 4.5\)비트. 대칭(스케일만)이면 4.25비트, g128 대칭이면 4.125비트다.</div></div>
+      <div class="quiz-q"><p>5. SmoothQuant의 변환 \(XW = (X\,\mathrm{diag}(s)^{-1})(\mathrm{diag}(s)\,W)\)에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">출력이 근사적으로만 같아서 재학습이 필요하다</button><button class="opt">활성값의 이상치 토큰(행)을 줄인다</button><button class="opt" data-correct>양자화 전에는 정확히 등가이고, 활성값 이상치 채널의 크기를 가중치 쪽으로 옮겨 두 텐서 모두 양자화하기 쉽게 만든다</button><button class="opt">α = 1이면 가중치는 변하지 않는다</button>
+      </div><div class="quiz-exp">대각 스케일을 한쪽에서 나누고 다른 쪽에서 곱하므로 양자화 전에는 수학적으로 완전히 같다. 이상치는 채널(열) 방향에 몰려 있으므로 채널별 \(s_j\)로 나눈다. α = 1이면 \(s_j = \max|X_j|\)로 활성값을 완전히 평탄하게 만들고 그 대신 가중치가 그 크기를 모두 떠안는다.</div></div>
+      <div class="quiz-q"><p>6. 보정 입력 X의 채널들이 서로 완전히 무상관이어서 \(H = 2XX^\top\)가 대각 행렬이라면 GPTQ의 결과는?</p><div class="opts">
+        <button class="opt" data-correct>RTN과 같아진다</button><button class="opt">RTN보다 항상 2배 좋다</button><button class="opt">수렴하지 않는다</button><button class="opt">모든 가중치가 0이 된다</button>
+      </div><div class="quiz-exp">\(H^{-1}\)도 대각이므로 \([H^{-1}]_{q,F} = 0\)이고, 한 열의 오차를 다른 열로 넘길 통로가 없다. 각 가중치는 독립적으로 반올림되어 RTN과 같다. GPTQ의 이득은 입력 채널 사이의 상관에서 나온다(위 시뮬레이터의 '채널 독립').</div></div>
+      <div class="quiz-q"><p>7. MXFP4 블록(32개)의 절대값 최대가 5.0이다. OCP 규칙 \(X = 2^{\lfloor \log_2 5 \rfloor - 2}\)로 정한 스케일과, 값 5.0이 복원되는 값은?</p><div class="opts">
+        <button class="opt">X = 0.5, 5.0 → 5.0</button><button class="opt" data-correct>X = 1, 5.0 → 4 또는 6 중 가까운 값(동점이면 4)</button><button class="opt">X = 5/6, 5.0 → 5.0</button><button class="opt">X = 2, 5.0 → 4</button>
+      </div><div class="quiz-exp">\(\lfloor \log_2 5 \rfloor = 2\)이므로 \(X = 2^0 = 1\)이다. 5/1 = 5는 E2M1 격자 4와 6의 정확히 중간이라 가수 비트가 0인 4로 반올림된다(오차 1.0, 20%). X = 5/6처럼 블록 최댓값을 6에 정확히 맞추는 것은 스케일이 FP8(E4M3)인 NVFP4에서나 근사적으로 가능하다 — E4M3로 5/6 ≈ 0.833은 0.8125나 0.875로 반올림된다.</div></div>
+      <div class="quiz-q"><p>8. 117B 파라미터 중 MoE 전문가가 약 114B이고 나머지가 약 3B인 모델이 있다. 전문가는 MXFP4(4.25비트), 나머지는 BF16으로 저장할 때 가중치 크기에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 234 GB</button><button class="opt">약 117 GB</button><button class="opt" data-correct>약 67 GB</button><button class="opt">약 29 GB</button>
+      </div><div class="quiz-exp">114B × 4.25 / 8 ≈ 60.6 GB, 3B × 2 B = 6 GB, 합 약 67 GB다. BF16 전체(약 234 GB)의 30% 미만이라 80 GB GPU 한 장에 들어간다 — gpt-oss-120b가 택한 방식이다(실제 구성비는 이 문제의 가정과 조금 다르다).</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function font(px, mono, bold) { return (bold ? "600 " : "") + px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font"); }
+  var SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  function p2(k) { return "2" + String(k).split("").map(function (c) { return SUP[c] || c; }).join(""); }
+  function sci(v, d) {
+    d = d || 3;
+    if (!isFinite(v)) return "—";
+    if (v === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(v)));
+    if (e >= -3 && e < 5) return String(Number(v.toPrecision(d)));
+    var m = v / Math.pow(10, e);
+    if (Math.abs(m) >= 9.995) { m /= 10; e += 1; }
+    return m.toFixed(d - 1) + "×10<sup>" + e + "</sup>";
+  }
+  function pct(v) { return v >= 0.1 ? (v * 100).toFixed(1) + "<small> %</small>" : (v * 100).toPrecision(2) + "<small> %</small>"; }
+  function dB(v) { return isFinite(v) ? v.toFixed(1) + "<small> dB</small>" : "∞"; }
+  // 테마 색을 한 번 읽어 빠른 발산 색 함수 생성
+  function divFn() {
+    var bg = AB.rgb(AB.color("canvas-bg")), a = AB.rgb(AB.color("accent")), b = AB.rgb(AB.color("accent-2"));
+    return function (t, arr) {
+      t = Math.max(-1, Math.min(1, t));
+      var c = t >= 0 ? a : b, u = Math.abs(t);
+      var r = bg[0] + (c[0] - bg[0]) * u, g = bg[1] + (c[1] - bg[1]) * u, bl = bg[2] + (c[2] - bg[2]) * u;
+      if (arr) return [r, g, bl];
+      return "rgb(" + Math.round(r) + "," + Math.round(g) + "," + Math.round(bl) + ")";
+    };
+  }
+  function ptr(cv, onDown, onMove) {
+    var el = cv.canvas || cv, drag = false;
+    function pos(ev) { var r = el.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+    el.addEventListener("pointerdown", function (ev) { drag = true; try { el.setPointerCapture(ev.pointerId); } catch (e) {} var p = pos(ev); onDown(p[0], p[1]); ev.preventDefault(); });
+    el.addEventListener("pointermove", function (ev) { if (!drag) return; var p = pos(ev); (onMove || onDown)(p[0], p[1]); });
+    el.addEventListener("pointerup", function () { drag = false; });
+    el.addEventListener("pointercancel", function () { drag = false; });
+  }
+
+  /* =====================================================================
+     ① 비트 편집기
+     ===================================================================== */
+  var FMTS = {
+    fp32: { name: "FP32", E: 8, M: 23, ieee: true },
+    fp16: { name: "FP16", E: 5, M: 10, ieee: true },
+    bf16: { name: "BF16", E: 8, M: 7, ieee: true },
+    e4m3: { name: "E4M3", E: 4, M: 3, fn: true },
+    e5m2: { name: "E5M2", E: 5, M: 2, ieee: true },
+    e2m1: { name: "FP4", E: 2, M: 1 }
+  };
+  var ORDER = ["fp32", "fp16", "bf16", "e4m3", "e5m2", "e2m1"];
+  function bias(f) { return Math.pow(2, f.E - 1) - 1; }
+  function decode(f, s, e, m) {
+    var b = bias(f), emax = Math.pow(2, f.E) - 1, sg = s ? -1 : 1, mm = Math.pow(2, f.M);
+    if (f.ieee && e === emax) return m === 0 ? { v: sg * Infinity, kind: "inf" } : { v: NaN, kind: "nan" };
+    if (f.fn && e === emax && m === mm - 1) return { v: NaN, kind: "nan" };
+    if (e === 0) return { v: sg * (m / mm) * Math.pow(2, 1 - b), kind: m === 0 ? "zero" : "sub" };
+    return { v: sg * (1 + m / mm) * Math.pow(2, e - b), kind: "norm" };
+  }
+  var TABLES = {};
+  function table(key) {
+    if (TABLES[key]) return TABLES[key];
+    var f = FMTS[key], arr = [];
+    for (var e = 0; e < Math.pow(2, f.E); e++) for (var m = 0; m < Math.pow(2, f.M); m++) {
+      var d = decode(f, 0, e, m);
+      if (d.kind === "norm" || d.kind === "sub" || d.kind === "zero") arr.push({ v: d.v, e: e, m: m });
+    }
+    arr.sort(function (a, b) { return a.v - b.v; });
+    return (TABLES[key] = arr);
+  }
+  function fmtInfo(key) {
+    var f = FMTS[key], b = bias(f), emax = Math.pow(2, f.E) - 1, mm = Math.pow(2, f.M);
+    var topE = f.ieee ? emax - 1 : emax, topM = f.fn ? mm - 2 : mm - 1;
+    return { minSub: Math.pow(2, 1 - b - f.M), minNorm: Math.pow(2, 1 - b), max: (1 + topM / mm) * Math.pow(2, topE - b), topE: topE, topM: topM };
+  }
+  var dv = new DataView(new ArrayBuffer(4));
+  function encode(key, x) {
+    var f = FMTS[key], emax = Math.pow(2, f.E) - 1, mm = Math.pow(2, f.M);
+    if (key === "fp32") { dv.setFloat32(0, x); var u = dv.getUint32(0); return { s: u >>> 31, e: (u >>> 23) & 255, m: u & 0x7fffff }; }
+    var info = fmtInfo(key);
+    if (isNaN(x)) {
+      if (f.ieee) return { s: 0, e: emax, m: mm >> 1 };
+      if (f.fn) return { s: 0, e: emax, m: mm - 1 };
+      return { s: 0, e: info.topE, m: info.topM, sat: true };
+    }
+    var s = (x < 0 || Object.is(x, -0)) ? 1 : 0, a = Math.abs(x);
+    if (a > info.max) {
+      var ulpTop = Math.pow(2, info.topE - bias(f) - f.M);
+      if (f.ieee && a >= info.max + ulpTop / 2) return { s: s, e: emax, m: 0 };
+      return { s: s, e: info.topE, m: info.topM, sat: !f.ieee && a >= info.max + ulpTop / 2 };
+    }
+    var T = table(key), lo = 0, hi = T.length - 1;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (T[mid].v <= a) lo = mid; else hi = mid; }
+    var pick = T[lo];
+    if (lo < T.length - 1) {
+      var d0 = a - T[lo].v, d1 = T[hi].v - a;
+      if (d1 < d0 || (d1 === d0 && T[hi].m % 2 === 0)) pick = T[hi];
+    }
+    return { s: s, e: pick.e, m: pick.m };
+  }
+
+  var bitsKey = "bf16", BITS = [], inputVal = 3.14159265, fromInput = true;
+  var gFmt = AB.seg("qz-fmt", function (v) { bitsKey = v; if (fromInput) setFromValue(inputVal, true); else { setFromValue(curValue(), false); } buildBits(); updBits(); });
+  var gZr = AB.seg("qz-zr", function () { cvZoom.redraw(); });
+  function setFromValue(x, isInput) {
+    var f = FMTS[bitsKey], c = encode(bitsKey, x);
+    BITS = [c.s];
+    for (var i = f.E - 1; i >= 0; i--) BITS.push((c.e >> i) & 1);
+    for (var j = f.M - 1; j >= 0; j--) BITS.push((c.m >> j) & 1);
+    fromInput = isInput; if (isInput) inputVal = x;
+  }
+  function fields() {
+    var f = FMTS[bitsKey], e = 0, m = 0;
+    for (var i = 1; i <= f.E; i++) e = e * 2 + BITS[i];
+    for (var j = 1 + f.E; j < BITS.length; j++) m = m * 2 + BITS[j];
+    return { s: BITS[0], e: e, m: m };
+  }
+  function curValue() { var c = fields(); return decode(FMTS[bitsKey], c.s, c.e, c.m).v; }
+  function buildBits() {
+    var row = $("qz-bitrow"), f = FMTS[bitsKey];
+    row.innerHTML = "";
+    row.classList.toggle("dense", BITS.length > 16);
+    BITS.forEach(function (b, i) {
+      if (i === 1 || i === 1 + f.E) { var g = document.createElement("span"); g.className = "qz-gap"; row.appendChild(g); }
+      var el = document.createElement("button");
+      var kind = i === 0 ? "s" : i <= f.E ? "e" : "m";
+      el.className = "qz-bit " + kind;
+      el.type = "button";
+      el.title = i === 0 ? "부호" : i <= f.E ? "지수 비트 " + (f.E - i) : "가수 비트 " + (BITS.length - 1 - i);
+      el.addEventListener("click", function () { BITS[i] ^= 1; fromInput = false; updBits(); });
+      row.appendChild(el);
+    });
+  }
+  function updBits() {
+    var f = FMTS[bitsKey], c = fields(), d = decode(f, c.s, c.e, c.m), b = bias(f), mm = Math.pow(2, f.M);
+    var btns = $("qz-bitrow").querySelectorAll(".qz-bit");
+    btns.forEach(function (el, i) { el.textContent = BITS[i]; el.classList.toggle("one", BITS[i] === 1); el.setAttribute("aria-pressed", BITS[i] === 1); });
+    var eStr = BITS.slice(1, 1 + f.E).join(""), mStr = BITS.slice(1 + f.E).join("");
+    var hex = 0; for (var i = 0; i < BITS.length; i++) hex = hex * 2 + BITS[i];
+    var hx = "0x" + hex.toString(16).toUpperCase().padStart(Math.ceil(BITS.length / 4), "0");
+    var line1 = "S=<span class='sg'>" + c.s + "</span> · E=<span class='ex'>" + eStr + "</span>₂=" + c.e + " · M=<span class='mn'>" + mStr + "</span>₂=" + c.m + " · " + hx;
+    var sgn = c.s ? "(−1)" : "(+1)", line2;
+    if (d.kind === "inf") line2 = "지수 비트가 모두 1, 가수 0 → <b>" + (c.s ? "−∞" : "+∞") + "</b>";
+    else if (d.kind === "nan") line2 = f.fn ? "E4M3(OCP): S.1111.111만 NaN → <b>NaN</b>" : "지수 비트가 모두 1, 가수 ≠ 0 → <b>NaN</b>";
+    else if (d.kind === "norm") line2 = sgn + " × 2<sup>" + c.e + "−" + b + "</sup> × (1 + " + c.m + "/" + mm + ") = <b>" + valStr(d.v) + "</b>";
+    else line2 = sgn + " × 2<sup>1−" + b + "</sup> × (0 + " + c.m + "/" + mm + ") = <b>" + valStr(d.v) + "</b>" + (d.kind === "sub" ? " (비정규)" : "");
+    $("qz-decode").innerHTML = line1 + "<br>" + line2;
+    AB.stat("qz-o-val", d.kind === "nan" ? "NaN" : d.kind === "inf" ? (c.s ? "−∞" : "+∞") : valStr(d.v));
+    AB.stat("qz-o-kind", { norm: "정규수", sub: "비정규수", zero: c.s ? "−0" : "0", inf: "무한대", nan: "NaN" }[d.kind]);
+    if (d.kind === "norm" || d.kind === "sub" || d.kind === "zero") {
+      var ulp = d.kind === "norm" ? Math.pow(2, c.e - b - f.M) : Math.pow(2, 1 - b - f.M);
+      AB.stat("qz-o-ulp", sci(ulp) + (d.v !== 0 ? "<small> (값의 " + (ulp / Math.abs(d.v) * 100).toPrecision(2) + "%)</small>" : ""));
+    } else AB.stat("qz-o-ulp", "—");
+    if (fromInput) {
+      if (!isFinite(d.v)) AB.stat("qz-o-err", d.kind === "inf" ? "오버플로" : "—");
+      else {
+        var ae = Math.abs(d.v - inputVal), re = inputVal !== 0 ? ae / Math.abs(inputVal) : 0;
+        var sat = encode(bitsKey, inputVal).sat;
+        AB.stat("qz-o-err", (ae === 0 ? "0 (정확)" : sci(ae) + "<small> (" + (re * 100).toPrecision(2) + "%)</small>") + (sat ? "<small> 포화</small>" : ""));
+      }
+    } else AB.stat("qz-o-err", "<small>비트 직접 편집</small>");
+    cvRange.redraw(); cvZoom.redraw();
+  }
+  function valStr(v) {
+    if (v === 0) return Object.is(v, -0) ? "−0" : "0";
+    var a = Math.abs(v);
+    if (a >= 1e7 || a < 1e-5) return sci(v, 7);
+    return String(Number(v.toPrecision(9)));
+  }
+  function doInput() {
+    var t = $("qz-num").value.trim().replace(/,/g, "");
+    var x = Number(t);
+    if (t === "" || (isNaN(x) && t.toLowerCase() !== "nan")) { $("qz-num").style.borderColor = "var(--bad)"; return; }
+    $("qz-num").style.borderColor = "";
+    setFromValue(x, true); updBits();
+  }
+  $("qz-go").addEventListener("click", doInput);
+  $("qz-num").addEventListener("keydown", function (ev) { if (ev.key === "Enter") doInput(); });
+  $("qz-quick").querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.dataset.v, info = fmtInfo(bitsKey), x;
+      if (v === "max") x = bitsKey === "fp32" ? 3.4028234663852886e38 : info.max;
+      else if (v === "minsub") x = info.minSub;
+      else x = Number(v);
+      $("qz-num").value = String(x); setFromValue(x, true); updBits();
+    });
+  });
+
+  var cvRange = AB.canvas($("cv-qz-range"), function (ctx, w, h) {
+    var P = AB.palette(), L = Math.min(84, w * 0.2), R = w - 14, top = 14, rowH = (h - top - 34) / ORDER.length;
+    var lmin = -27, lmax = 19, X = function (l) { return L + (l - lmin) / (lmax - lmin) * (R - L); };
+    ctx.font = font(11, true);
+    var step = w < 520 ? 8 : 4;
+    for (var k = Math.ceil(lmin / step) * step; k <= lmax; k += step) {
+      ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(X(k), top); ctx.lineTo(X(k), h - 30); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(p2(k), X(k), h - 26);
+    }
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(X(0), top); ctx.lineTo(X(0), h - 30); ctx.stroke();
+    ORDER.forEach(function (key, i) {
+      var info = fmtInfo(key), y = top + i * rowH + rowH * 0.2, bh = rowH * 0.6, on = key === bitsKey;
+      var col = on ? P.accent : P.dim;
+      ctx.fillStyle = on ? P.text : P.dim; ctx.font = font(12, false, on); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText(FMTS[key].name, L - 8, y + bh / 2);
+      var ls = Math.log2(info.minSub), ln = Math.log2(info.minNorm), lx = Math.log2(info.max);
+      var x0 = X(Math.max(lmin, ls)), x1 = X(Math.max(lmin, ln)), x2 = X(Math.min(lmax, lx));
+      ctx.fillStyle = AB.alpha(col, on ? 0.22 : 0.12); ctx.fillRect(x0, y, Math.max(0, x1 - x0), bh);
+      ctx.fillStyle = AB.alpha(col, on ? 0.6 : 0.3); ctx.fillRect(x1, y, Math.max(0, x2 - x1), bh);
+      ctx.fillStyle = col; ctx.font = font(10, true);
+      if (ls < lmin) { ctx.textAlign = "left"; ctx.fillText("◀ " + p2(Math.round(ls)), L + 2, y + bh / 2); }
+      if (lx > lmax) { ctx.textAlign = "right"; ctx.fillText(p2(Math.round(lx)) + " ▶", R - 2, y + bh / 2); }
+    });
+    var v = curValue();
+    if (isFinite(v) && v !== 0) {
+      var lv = Math.log2(Math.abs(v)), xv = X(AB.clamp(lv, lmin, lmax));
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xv, top - 4); ctx.lineTo(xv, h - 30); ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = P.accent2; ctx.font = font(11, true, true); ctx.textAlign = xv > w - 90 ? "right" : "left"; ctx.textBaseline = "top";
+      ctx.fillText("|x| = " + p2(lv.toFixed(1)).replace(/\./, "."), xv + (xv > w - 90 ? -4 : 4), top - 10);
+    }
+  }, { aspect: 0.36, minHeight: 210, maxHeight: 260 });
+
+  var ZPAD = 18;
+  var cvZoom = AB.canvas($("cv-qz-zoom"), function (ctx, w, h) {
+    var P = AB.palette(), Z = Number(gZr()), L = ZPAD, R = w - ZPAD, y0 = 22, y1 = h - 34;
+    var ppu = (R - L) / Z, X = function (v) { return L + v * ppu; };
+    var f = FMTS[bitsKey], info = fmtInfo(bitsKey), b = bias(f);
+    ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(f.name + "의 표현 가능한 양수 (0 ~ " + Z + ")", L, 4);
+    if (info.max < Z) { ctx.fillStyle = AB.alpha(P.bad, 0.1); ctx.fillRect(X(info.max), y0, R - X(info.max), y1 - y0); ctx.fillStyle = P.bad; ctx.textAlign = "right"; ctx.fillText("범위 밖 (max " + valStr(info.max) + ")", R, 4); }
+    function dense(a, c, sp) { // 구간 [a,c)를 간격 sp로 채움
+      var a2 = Math.min(c, Math.min(Z, info.max)); if (a2 <= a) return;
+      var pxs = sp * ppu;
+      if (pxs >= 2.2) {
+        ctx.strokeStyle = P.accent; ctx.lineWidth = 1.2; ctx.beginPath();
+        for (var v = a; v <= a2 + 1e-12; v += sp) { var x = X(v); ctx.moveTo(x, y0 + 4); ctx.lineTo(x, y1); }
+        ctx.stroke();
+      } else {
+        var alpha = Math.min(0.85, 0.25 + 0.12 * Math.log2(2.2 / pxs));
+        ctx.fillStyle = AB.alpha(P.accent, alpha); ctx.fillRect(X(a), y0 + 4, Math.max(1, X(a2) - X(a)), y1 - y0 - 4);
+      }
+    }
+    var kTop = Math.floor(Math.log2(Math.min(Z, info.max))), kMin = 1 - b;
+    for (var k = kTop; k >= kMin; k--) {
+      var a = Math.pow(2, k);
+      if (2 * a * ppu < 1) { ctx.fillStyle = AB.alpha(P.accent, 0.85); ctx.fillRect(X(0), y0 + 4, Math.max(1, X(2 * a) - X(0)), y1 - y0 - 4); break; }
+      dense(a, 2 * a, Math.pow(2, k - f.M));
+      if (k === kMin) dense(0, a, Math.pow(2, 1 - b - f.M));
+    }
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, y1); ctx.lineTo(R, y1); ctx.stroke();
+    ctx.fillStyle = P.dim; ctx.font = font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    var nt = w < 500 ? 4 : 8;
+    for (var i = 0; i <= nt; i++) { var v = Z * i / nt; ctx.fillText(String(Number(v.toPrecision(3))), X(v), y1 + 6); }
+    var cv = curValue();
+    if (isFinite(cv) && Math.abs(cv) <= Z) {
+      var xv = X(Math.abs(cv));
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.moveTo(xv, y1 + 2); ctx.lineTo(xv - 6, y1 + 12); ctx.lineTo(xv + 6, y1 + 12); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xv, y0); ctx.lineTo(xv, y1); ctx.stroke(); ctx.lineWidth = 1;
+    }
+  }, { height: 120 });
+  ptr(cvZoom, function (x) {
+    var Z = Number(gZr()), v = AB.clamp((x - ZPAD) / (cvZoom.w - 2 * ZPAD) * Z, 0, Z);
+    var info = fmtInfo(bitsKey); v = Math.min(v, info.max);
+    $("qz-num").value = String(Number(v.toPrecision(5)));
+    setFromValue(Number(v.toPrecision(5)), true); updBits();
+  });
+  setFromValue(inputVal, true); buildBits(); updBits();
+
+  /* =====================================================================
+     ② 양자화 숫자선
+     ===================================================================== */
+  var QN = 4000, qData = null, qStat = null, qLo = -1, qHi = 1, qCurve = null;
+  var gQb = AB.range("qz-qb", function (v) { return v + " 비트 (" + Math.pow(2, v) + "단계)"; }, function () { qCurve = null; qDraw(); });
+  var gQm = AB.seg("qz-qmode", function () { qResetRange(); qCurve = null; qDraw(); });
+  var gQd = AB.seg("qz-qdist", function () { qGen(); qResetRange(); qDraw(); });
+  $("qz-qout").addEventListener("change", function () { qGen(); qResetRange(); qDraw(); });
+  function qGen() {
+    var dist = gQd(), r = AB.rng(dist === "normal" ? 11 : dist === "laplace" ? 12 : 13), a = new Float64Array(QN);
+    for (var i = 0; i < QN; i++) {
+      if (dist === "normal") a[i] = r.n();
+      else if (dist === "laplace") { var u = r() - 0.5; a[i] = -Math.sign(u) * Math.log(1 - 2 * Math.abs(u) + 1e-12) / Math.SQRT2; }
+      else a[i] = AB.gelu(r.n() * 1.3 + 0.4);
+    }
+    if ($("qz-qout").checked) {
+      var no = Math.round(QN * 0.005);
+      for (var j = 0; j < no; j++) { var idx = Math.floor(r() * QN), sg = dist === "relu" ? 1 : (r() < 0.5 ? -1 : 1); a[idx] = sg * (6 + 5 * r()); }
+    }
+    var mn = Infinity, mx = -Infinity, ms = 0;
+    for (var k = 0; k < QN; k++) { mn = Math.min(mn, a[k]); mx = Math.max(mx, a[k]); ms += a[k] * a[k]; }
+    qData = a; qStat = { min: mn, max: mx, amax: Math.max(-mn, mx), ms: ms / QN };
+    qCurve = null;
+  }
+  function qResetRange() { if (gQm() === "sym") { qHi = qStat.amax; qLo = -qHi; } else { qLo = qStat.min; qHi = qStat.max; } }
+  function qParams(lo, hi, bits, sym) {
+    if (sym) { var qm = Math.pow(2, bits - 1) - 1; return { s: hi / qm, z: 0, qmin: -qm, qmax: qm }; }
+    var n = Math.pow(2, bits) - 1, s = (hi - lo) / n; return { s: s, z: Math.round(-lo / s), qmin: 0, qmax: n };
+  }
+  function qEval(lo, hi, bits, sym, counts) {
+    var p = qParams(lo, hi, bits, sym), se = 0, sc = 0, nc = 0;
+    for (var i = 0; i < QN; i++) {
+      var x = qData[i], q = Math.round(x / p.s) + p.z, cl = false;
+      if (q < p.qmin) { q = p.qmin; cl = true; } else if (q > p.qmax) { q = p.qmax; cl = true; }
+      var xh = (q - p.z) * p.s, e = (x - xh) * (x - xh);
+      se += e; if (cl) { sc += e; nc++; }
+      if (counts) counts[q - p.qmin] = (counts[q - p.qmin] || 0) + 1;
+    }
+    return { mse: se / QN, clip: sc / QN, round: (se - sc) / QN, frac: nc / QN, p: p };
+  }
+  function qT() { return gQm() === "sym" ? qHi / qStat.amax : qHi / qStat.max; }
+  function qFromT(t) { if (gQm() === "sym") { qHi = t * qStat.amax; qLo = -qHi; } else { qLo = qStat.min * t; qHi = qStat.max * t; } }
+  function qBuildCurve() {
+    var sym = gQm() === "sym", b = gQb(), pts = [], best = null;
+    for (var i = 0; i <= 160; i++) {
+      var t = 0.04 + 0.96 * i / 160, lo, hi;
+      if (sym) { hi = t * qStat.amax; lo = -hi; } else { lo = qStat.min * t; hi = qStat.max * t; }
+      var r = qEval(lo, hi, b, sym); pts.push([t, r]);
+      if (!best || r.mse < best.r.mse) best = { t: t, r: r };
+    }
+    qCurve = { pts: pts, best: best };
+  }
+  function qView() {
+    if (gQm() === "sym") { var R = Math.max(qStat.amax, Math.abs(qLo), Math.abs(qHi)) * 1.08; return [-R, R]; }
+    var span = qStat.max - qStat.min, pad = span * 0.06;
+    return [Math.min(qStat.min, qLo) - pad, Math.max(qStat.max, qHi) + pad];
+  }
+  var QL = 16, QR = 16;
+  var cvLine = AB.canvas($("cv-qz-line"), function (ctx, w, h) {
+    if (!qStat) return;
+    var P = AB.palette(), sym = gQm() === "sym", b = gQb(), vr = qView(), L = QL, R = w - QR;
+    var X = function (v) { return L + (v - vr[0]) / (vr[1] - vr[0]) * (R - L); };
+    var base = Math.round(h * 0.62), topY = 34, botY = h - 22;
+    var counts = [], res = qEval(qLo, qHi, b, sym, counts), p = res.p;
+    // clipped area
+    ctx.fillStyle = AB.alpha(P.bad, 0.08);
+    ctx.fillRect(L, topY - 8, X(qLo) - L, botY - topY + 8); ctx.fillRect(X(qHi), topY - 8, R - X(qHi), botY - topY + 8);
+    // grid levels
+    var nL = p.qmax - p.qmin + 1;
+    ctx.strokeStyle = AB.alpha(P.text, nL > 64 ? 0.07 : 0.16);
+    ctx.beginPath();
+    for (var q = p.qmin; q <= p.qmax; q++) { var xv = X((q - p.z) * p.s); ctx.moveTo(xv, topY); ctx.lineTo(xv, base); }
+    ctx.stroke();
+    // histogram (sqrt scale)
+    var NB = Math.min(160, Math.round((R - L) / 3)), hist = new Array(NB).fill(0), bw = (vr[1] - vr[0]) / NB, hmax = 1;
+    for (var i = 0; i < QN; i++) { var bi = Math.floor((qData[i] - vr[0]) / bw); if (bi >= 0 && bi < NB) hist[bi]++; }
+    hist.forEach(function (c) { hmax = Math.max(hmax, c); });
+    var Hs = base - topY - 4;
+    ctx.fillStyle = AB.alpha(P.accent, 0.55);
+    for (var j = 0; j < NB; j++) if (hist[j]) { var hh = Math.max(1.5, Math.sqrt(hist[j] / hmax) * Hs); ctx.fillRect(X(vr[0] + j * bw) + 0.5, base - hh, Math.max(1, (R - L) / NB - 1), hh); }
+    // quantized spikes (down)
+    var cmax = 1; counts.forEach(function (c) { if (c) cmax = Math.max(cmax, c); });
+    var Hd = botY - base - 6;
+    ctx.fillStyle = P.accent2;
+    for (var k = 0; k < counts.length; k++) if (counts[k]) { var xq = X((k + p.qmin - p.z) * p.s), hd = Math.max(1.5, Math.sqrt(counts[k] / cmax) * Hd); ctx.fillRect(xq - 1.2, base + 3, 2.4, hd); }
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, base); ctx.lineTo(R, base); ctx.stroke();
+    // zero
+    if (vr[0] < 0 && vr[1] > 0) { ctx.strokeStyle = P.faint; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(0), topY - 6); ctx.lineTo(X(0), botY); ctx.stroke(); ctx.setLineDash([]); }
+    // handles
+    [[qLo, "β"], [qHi, "α"]].forEach(function (hd2) {
+      var xh = X(hd2[0]);
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xh, topY - 4); ctx.lineTo(xh, botY); ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = P.bg; ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(xh, 16, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = P.accent; ctx.font = font(11, true, true); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(hd2[1], xh, 16.5);
+    });
+    ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+    function tag(txt, x, y, al, bl) { ctx.textAlign = al; ctx.textBaseline = bl; var tw = ctx.measureText(txt).width, tx = al === "right" ? x - tw : x, ty = bl === "top" ? y : y - 14; ctx.fillStyle = AB.alpha(P.bg, 0.85); ctx.fillRect(tx - 3, ty - 1, tw + 6, 16); ctx.fillStyle = P.dim; ctx.fillText(txt, x, y); }
+    tag("원본 분포 (√개수)", L + 28, topY + 2, "left", "top");
+    tag("양자화 후 격자점별 개수", L + 28, botY + 2, "left", "bottom");
+    ctx.font = font(11, true); tag(nL + "개 격자", R - 28, base + 4, "right", "top");
+    // readouts
+    AB.stat("qz-q-rng", "[" + qLo.toFixed(2) + ", " + qHi.toFixed(2) + "]");
+    AB.stat("qz-q-s", p.s.toPrecision(3) + (sym ? "" : "<small> z=" + p.z + "</small>"));
+    AB.stat("qz-q-mse", sci(res.mse) + "<small> = " + sci(res.round, 2) + " + " + sci(res.clip, 2) + "</small>");
+    AB.stat("qz-q-sqnr", dB(10 * Math.log10(qStat.ms / res.mse)));
+    AB.stat("qz-q-clip", pct(res.frac));
+  }, { aspect: 0.5, minHeight: 230, maxHeight: 300 });
+  var qDragWhich = null;
+  ptr(cvLine, function (x) {
+    var vr = qView(), L = QL, R = cvLine.w - QR, v = vr[0] + (x - L) / (R - L) * (vr[1] - vr[0]);
+    var xl = L + (qLo - vr[0]) / (vr[1] - vr[0]) * (R - L), xh = L + (qHi - vr[0]) / (vr[1] - vr[0]) * (R - L);
+    qDragWhich = Math.abs(x - xl) < Math.abs(x - xh) ? "lo" : "hi";
+    qMoveH(v);
+  }, function (x) {
+    var vr = qView(), L = QL, R = cvLine.w - QR, v = vr[0] + (x - L) / (R - L) * (vr[1] - vr[0]);
+    qMoveH(v);
+  });
+  function qMoveH(v) {
+    var eps = (qStat.max - qStat.min) * 0.01;
+    if (gQm() === "sym") { qHi = Math.max(eps, Math.abs(v)); qLo = -qHi; }
+    else if (qDragWhich === "lo") qLo = Math.min(v, qHi - eps);
+    else qHi = Math.max(v, qLo + eps);
+    qDraw();
+  }
+  var cvMse = AB.canvas($("cv-qz-mse"), function (ctx, w, h) {
+    if (!qStat) return;
+    var P = AB.palette();
+    if (!qCurve) qBuildCurve();
+    var pts = qCurve.pts, ymin = Infinity, ymax = 0;
+    pts.forEach(function (p) { [p[1].mse, p[1].round, p[1].clip].forEach(function (v) { if (v > 0) { ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); } }); });
+    ymin = Math.max(ymin, qCurve.best.r.mse / 30);
+    var t = qT();
+    AB.chart(ctx, { x: 58, y: 12, w: w - 76, h: h - 52 }, {
+      x: [0.04, 1], y: [ymin * 0.8, ymax * 1.3], logY: true, xLabel: "클리핑 배율  α / max|x|", yLabel: "MSE",
+      series: [
+        { data: pts.map(function (p) { return [p[0], p[1].clip]; }), color: P.accent2, width: 1.6, dash: [5, 4] },
+        { data: pts.map(function (p) { return [p[0], p[1].round]; }), color: P.warn, width: 1.6, dash: [5, 4] },
+        { data: pts.map(function (p) { return [p[0], p[1].mse]; }), color: P.accent, width: 2.6 }
+      ],
+      vlines: [{ x: AB.clamp(t, 0.04, 1), color: P.text, dash: [2, 3] }],
+      points: [{ x: qCurve.best.t, y: qCurve.best.r.mse, color: P.ok, r: 5, label: "최적" }]
+    });
+    ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.accent; ctx.fillText("전체", w - 20, 14);
+    ctx.fillStyle = P.warn; ctx.fillText("반올림", w - 20, 28);
+    ctx.fillStyle = P.accent2; ctx.fillText("클리핑", w - 20, 42);
+  }, { aspect: 0.36, minHeight: 170, maxHeight: 220 });
+  ptr(cvMse, function (x) { var t = AB.clamp(0.04 + (x - 58) / (cvMse.w - 76) * 0.96, 0.04, 1); qFromT(t); qDraw(); });
+  function qDraw() { cvLine.redraw(); cvMse.redraw(); }
+  $("qz-qopt").addEventListener("click", function () { if (!qCurve) qBuildCurve(); qFromT(qCurve.best.t); qDraw(); });
+  $("qz-qmax").addEventListener("click", function () { qResetRange(); qDraw(); });
+  qGen(); qResetRange(); qDraw();
+
+  /* =====================================================================
+     ③ 가중치 행렬 양자화
+     ===================================================================== */
+  var WR = 64, WC = 256, Wm = null, Wq = null, WX = [];
+  function wGen() {
+    var r = AB.rng(7); Wm = new Float64Array(WR * WC);
+    var colS = new Float64Array(WC).fill(1), rowS = new Float64Array(WR).fill(1);
+    [13, 87, 190, 231].forEach(function (j) { colS[j] = 3; });
+    [9, 41].forEach(function (i) { rowS[i] = 2.5; });
+    for (var i = 0; i < WR; i++) for (var j = 0; j < WC; j++) Wm[i * WC + j] = r.n() * colS[j] * rowS[i] * (0.8 + 0.4 * r());
+    for (var k = 0; k < 20; k++) { var idx = Math.floor(r() * WR * WC); Wm[idx] = (r() < 0.5 ? -1 : 1) * (7 + 4 * r()); }
+    WX = [];
+    var rx = AB.rng(8);
+    for (var n = 0; n < 16; n++) { var x = new Float64Array(WC); for (var c = 0; c < WC; c++) x[c] = rx.n(); WX.push(x); }
+  }
+  var gWg = AB.seg("qz-wg", wUpd), gWgs = AB.seg("qz-wgs", wUpd), gWb = AB.seg("qz-wb", wUpd);
+  $("qz-wasym").addEventListener("change", wUpd);
+  $("qz-wreset").addEventListener("click", function () { wGen(); wUpd(); });
+  function quantSeg(src, dst, idx0, len, stride, bits, asym) {
+    var mn = Infinity, mx = -Infinity, am = 0, i, v;
+    for (i = 0; i < len; i++) { v = src[idx0 + i * stride]; if (v < mn) mn = v; if (v > mx) mx = v; am = Math.max(am, Math.abs(v)); }
+    if (!asym) {
+      var qm = Math.pow(2, bits - 1) - 1, s = am / qm || 1;
+      for (i = 0; i < len; i++) { v = src[idx0 + i * stride]; dst[idx0 + i * stride] = Math.max(-qm, Math.min(qm, Math.round(v / s))) * s; }
+    } else {
+      var n = Math.pow(2, bits) - 1, s2 = (mx - mn) / n || 1, z = Math.round(-mn / s2);
+      for (i = 0; i < len; i++) { v = src[idx0 + i * stride]; dst[idx0 + i * stride] = (Math.max(0, Math.min(n, Math.round(v / s2) + z)) - z) * s2; }
+    }
+  }
+  function wQuant() {
+    var gran = gWg(), g = Number(gWgs()), bits = Number(gWb()), asym = $("qz-wasym").checked;
+    Wq = new Float64Array(WR * WC);
+    if (gran === "tensor") quantSeg(Wm, Wq, 0, WR * WC, 1, bits, asym);
+    else if (gran === "channel") for (var i = 0; i < WR; i++) quantSeg(Wm, Wq, i * WC, WC, 1, bits, asym);
+    else for (var r = 0; r < WR; r++) for (var c0 = 0; c0 < WC; c0 += g) quantSeg(Wm, Wq, r * WC + c0, Math.min(g, WC - c0), 1, bits, asym);
+    var gs = gran === "tensor" ? WR * WC : gran === "channel" ? WC : g;
+    return { eff: bits + (16 + (asym ? 16 : 0)) / gs, gs: gs };
+  }
+  var wOff = document.createElement("canvas"); wOff.width = WC; wOff.height = WR;
+  var wLay = null;
+  var cvW = AB.canvas($("cv-qz-wmat"), function (ctx, w, h) {
+    if (!Wq) return;
+    var P = AB.palette(), D = divFn(), lab = 18, gap = 8;
+    var cw = Math.min((w - 20) / WC, (h - 3 * (lab + gap)) / (3 * WR)), mw = cw * WC, mh = cw * WR, x0 = (w - mw) / 2;
+    var am = 0, em = 0, i;
+    for (i = 0; i < WR * WC; i++) { am = Math.max(am, Math.abs(Wm[i])); em = Math.max(em, Math.abs(Wm[i] - Wq[i])); }
+    var octx = wOff.getContext("2d"), img = octx.createImageData(WC, WR);
+    function paint(fn) {
+      for (var k = 0; k < WR * WC; k++) { var t = fn(k), c = D(Math.sign(t) * Math.sqrt(Math.abs(t)), true); img.data[k * 4] = c[0]; img.data[k * 4 + 1] = c[1]; img.data[k * 4 + 2] = c[2]; img.data[k * 4 + 3] = 255; }
+      octx.putImageData(img, 0, 0);
+    }
+    var maps = [
+      ["원본 W  (누르면 이상치 심기)", function (k) { return Wm[k] / am; }],
+      ["양자화 Ŵ  (같은 색 척도)", function (k) { return Wq[k] / am; }],
+      ["오차 W − Ŵ  (최대 |오차| " + em.toPrecision(2) + " 기준, ×" + (am / (em || 1)).toFixed(0) + " 확대)", function (k) { return (Wm[k] - Wq[k]) / (em || 1); }]
+    ];
+    ctx.imageSmoothingEnabled = false;
+    wLay = { x0: x0, y0: lab, cw: cw, mw: mw, mh: mh };
+    maps.forEach(function (m, n) {
+      var y = n * (lab + mh + gap);
+      ctx.fillStyle = P.dim; ctx.font = font(12); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(m[0], x0, y + 2);
+      paint(m[1]);
+      ctx.drawImage(wOff, x0, y + lab, mw, mh);
+      ctx.strokeStyle = P.border; ctx.strokeRect(x0 - 0.5, y + lab - 0.5, mw + 1, mh + 1);
+      if (n === 1 && gWg() === "group") {
+        var g = Number(gWgs()); ctx.strokeStyle = AB.alpha(P.text, 0.5); ctx.setLineDash([3, 3]); ctx.beginPath();
+        for (var c = g; c < WC; c += g) { ctx.moveTo(x0 + c * cw, y + lab); ctx.lineTo(x0 + c * cw, y + lab + mh); }
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+    });
+  }, { aspect: 0.86, minHeight: 300, maxHeight: 640 });
+  ptr(cvW, function (x, y) {
+    if (!wLay) return;
+    var c = Math.floor((x - wLay.x0) / wLay.cw), r = Math.floor((y - wLay.y0) / wLay.cw);
+    if (c < 0 || c >= WC || r < 0 || r >= WR) return;
+    var k = r * WC + c; if (Math.abs(Wm[k]) >= 11) return;
+    Wm[k] = (Wm[k] < 0 ? -1 : 1) * 12; wUpd();
+  });
+  function wUpd() {
+    var q = wQuant(), ne = 0, nw = 0, i;
+    for (i = 0; i < WR * WC; i++) { ne += (Wm[i] - Wq[i]) * (Wm[i] - Wq[i]); nw += Wm[i] * Wm[i]; }
+    var rel = Math.sqrt(ne / nw), oe = 0;
+    WX.forEach(function (x) {
+      var ny = 0, nd = 0;
+      for (var r = 0; r < WR; r++) { var y = 0, yq = 0; for (var c = 0; c < WC; c++) { y += Wm[r * WC + c] * x[c]; yq += Wq[r * WC + c] * x[c]; } ny += y * y; nd += (y - yq) * (y - yq); }
+      oe += Math.sqrt(nd / ny);
+    });
+    oe /= WX.length;
+    AB.stat("qz-w-err", pct(rel));
+    AB.stat("qz-w-out", pct(oe));
+    AB.stat("qz-w-sqnr", dB(-20 * Math.log10(rel)));
+    AB.stat("qz-w-bits", q.eff.toFixed(q.eff % 1 === 0 ? 0 : 3).replace(/0+$/, "").replace(/\.$/, "") + "<small> 비트</small>");
+    AB.stat("qz-w-70", (70.6e9 * q.eff / 8 / 1e9).toFixed(1) + "<small> GB</small>");
+    cvW.redraw();
+  }
+  wGen(); wUpd();
+
+  /* =====================================================================
+     ④ SmoothQuant
+     ===================================================================== */
+  var ST = 64, SC = 32, SD = 32, SX0 = null, SXo = null, SW = null, SOUT = [5, 19, 27], sCurve = null;
+  (function () {
+    var r = AB.rng(21);
+    SX0 = []; SXo = [];
+    var sgn = SOUT.map(function () { return r() < 0.5 ? -1 : 1; });
+    for (var t = 0; t < ST; t++) {
+      var row = [], ro = [];
+      for (var j = 0; j < SC; j++) { row.push(r.n() * 0.8); ro.push(0); }
+      SOUT.forEach(function (j, k) { ro[j] = sgn[k] * (1 + 0.3 * r.n()) * (r() < 0.9 ? 1 : 0.2); });
+      SX0.push(row); SXo.push(ro);
+    }
+    SW = [];
+    for (var j2 = 0; j2 < SC; j2++) { var rs = 0.6 + 0.8 * r(), w = []; for (var k2 = 0; k2 < SD; k2++) w.push(r.n() * 0.15 * rs); SW.push(w); }
+  })();
+  function sX(mult) { return SX0.map(function (row, t) { return row.map(function (v, j) { return SXo[t][j] ? SXo[t][j] * mult * 0.8 : v; }); }); }
+  var gSa = AB.range("qz-sa", function (v) { return v.toFixed(2); }, sUpd);
+  var gSb = AB.seg("qz-sb", function () { sCurve = null; sUpd(); });
+  var gSm = AB.range("qz-sm", function (v) { return "×" + v; }, function () { sCurve = null; sUpd(); });
+  function qPT(A, bits) {
+    var am = 0; A.forEach(function (r) { r.forEach(function (v) { am = Math.max(am, Math.abs(v)); }); });
+    var qm = Math.pow(2, bits - 1) - 1, s = am / qm || 1;
+    return A.map(function (r) { return r.map(function (v) { return Math.max(-qm, Math.min(qm, Math.round(v / s))) * s; }); });
+  }
+  function relF(A, B) { var n = 0, d = 0; for (var i = 0; i < A.length; i++) for (var j = 0; j < A[0].length; j++) { d += (A[i][j] - B[i][j]) * (A[i][j] - B[i][j]); n += A[i][j] * A[i][j]; } return Math.sqrt(d / n); }
+  function sEval(alpha, bits, X, Y, none) {
+    var mx = new Array(SC).fill(0), mw = new Array(SC).fill(0), j;
+    X.forEach(function (r) { r.forEach(function (v, jj) { mx[jj] = Math.max(mx[jj], Math.abs(v)); }); });
+    SW.forEach(function (r, jj) { r.forEach(function (v) { mw[jj] = Math.max(mw[jj], Math.abs(v)); }); });
+    var s = mx.map(function (v, jj) { return none ? 1 : Math.pow(v, alpha) / Math.pow(mw[jj], 1 - alpha); });
+    var Xs = X.map(function (r) { return r.map(function (v, jj) { return v / s[jj]; }); });
+    var Ws = SW.map(function (r, jj) { return r.map(function (v) { return v * s[jj]; }); });
+    var Xq = qPT(Xs, bits), Wq2 = qPT(Ws, bits), Yq = AB.matmul(Xq, Wq2);
+    return { ex: relF(Xs, Xq), ew: relF(Ws, Wq2), ey: relF(Y, Yq), Xs: Xs, Ws: Ws };
+  }
+  function sBuild() {
+    var X = sX(gSm()), Y = AB.matmul(X, SW), bits = Number(gSb()), pts = [], best = null;
+    for (var i = 0; i <= 50; i++) { var a = i / 50, r = sEval(a, bits, X, Y); pts.push([a, r]); if (!best || r.ey < best.r.ey) best = { a: a, r: r }; }
+    sCurve = { pts: pts, best: best, base: sEval(0, bits, X, Y, true), X: X, Y: Y };
+  }
+  var sCur = null;
+  var cvSb = AB.canvas($("cv-qz-sbars"), function (ctx, w, h) {
+    if (!sCur) return;
+    var P = AB.palette(), L = 40, R = w - 12, half = (h - 20) / 2, bw = (R - L) / SC;
+    function maxc(A, byRow) { var m = new Array(SC).fill(0); A.forEach(function (r, i) { r.forEach(function (v, j) { var k = byRow ? i : j; m[k] = Math.max(m[k], Math.abs(v)); }); }); return m; }
+    var panels = [
+      ["X: 채널별 max|·|", maxc(sCurve.X, false), maxc(sCur.Xs, false), P.accent],
+      ["W: 입력 채널별 max|·|", maxc(SW, true), maxc(sCur.Ws, true), P.warn]
+    ];
+    panels.forEach(function (pn, n) {
+      var y0 = 10 + n * half, base = y0 + half - 16, H = half - 34;
+      var m0 = Math.max.apply(null, pn[1]), m1 = Math.max.apply(null, pn[2]);
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(pn[0] + " (텐서 최대값 = 1)", L, y0);
+      for (var j = 0; j < SC; j++) {
+        var x = L + j * bw;
+        ctx.fillStyle = AB.alpha(pn[3], 0.18); var h0 = pn[1][j] / m0 * H; ctx.fillRect(x + 1, base - h0, bw - 2, h0);
+        ctx.fillStyle = pn[3]; var h1 = pn[2][j] / m1 * H; ctx.fillRect(x + bw * 0.25, base - h1, bw * 0.5, h1);
+      }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, base); ctx.lineTo(R, base); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText("1", L - 4, base - H); ctx.fillText("0", L - 4, base);
+      if (n === 1) { ctx.textAlign = "center"; ctx.textBaseline = "top"; SOUT.forEach(function (j) { ctx.fillText("ch" + j, L + (j + 0.5) * bw, base + 3); }); }
+    });
+  }, { aspect: 0.42, minHeight: 210, maxHeight: 260 });
+  var cvSc = AB.canvas($("cv-qz-scurve"), function (ctx, w, h) {
+    if (!sCurve) return;
+    var P = AB.palette(), pts = sCurve.pts, ymin = Infinity, ymax = 0;
+    pts.forEach(function (p) { [p[1].ex, p[1].ew, p[1].ey].forEach(function (v) { ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); }); });
+    ymax = Math.max(ymax, sCurve.base.ey);
+    AB.chart(ctx, { x: 58, y: 12, w: w - 76, h: h - 52 }, {
+      x: [0, 1], y: [ymin * 0.7, ymax * 1.5], logY: true, xLabel: "이동 강도 α", yLabel: "상대 오차",
+      series: [
+        { data: pts.map(function (p) { return [p[0], p[1].ex]; }), color: P.accent, width: 1.6, dash: [5, 4] },
+        { data: pts.map(function (p) { return [p[0], p[1].ew]; }), color: P.warn, width: 1.6, dash: [5, 4] },
+        { data: pts.map(function (p) { return [p[0], p[1].ey]; }), color: P.accent2, width: 2.6 }
+      ],
+      hlines: [{ y: sCurve.base.ey, color: P.bad, label: "스무딩 없음: 출력 오차" }],
+      vlines: [{ x: gSa(), color: P.text, dash: [2, 3] }],
+      points: [{ x: sCurve.best.a, y: sCurve.best.r.ey, color: P.ok, r: 5 }]
+    });
+    ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.accent; ctx.fillText("X 오차", 66, 16);
+    ctx.fillStyle = P.warn; ctx.fillText("W 오차", 66, 30);
+    ctx.fillStyle = P.accent2; ctx.fillText("출력 오차", 66, 44);
+  }, { aspect: 0.4, minHeight: 190, maxHeight: 240 });
+  ptr(cvSc, function (x) { gSa.set(Math.round(AB.clamp((x - 58) / (cvSc.w - 76), 0, 1) * 100) / 100); });
+  $("qz-sbest").addEventListener("click", function () { if (!sCurve) sBuild(); gSa.set(sCurve.best.a); });
+  function sUpd() {
+    if (!sCurve) sBuild();
+    sCur = sEval(gSa(), Number(gSb()), sCurve.X, sCurve.Y);
+    AB.stat("qz-s-x", pct(sCur.ex)); AB.stat("qz-s-w", pct(sCur.ew)); AB.stat("qz-s-y", pct(sCur.ey));
+    AB.stat("qz-s-base", pct(sCurve.base.ey)); AB.stat("qz-s-best", sCurve.best.a.toFixed(2) + "<small> (" + pct(sCurve.best.r.ey).replace("<small>", "").replace("</small>", "") + ")</small>");
+    cvSb.redraw(); cvSc.redraw();
+  }
+  sUpd();
+
+  /* =====================================================================
+     ⑤ RTN vs GPTQ
+     ===================================================================== */
+  var GO = 16, GI = 32, GN = 256, GW = null, GX = {}, gRes = {}, gStep = 0, gPlaying = false;
+  (function () {
+    var r = AB.rng(31);
+    GW = []; for (var i = 0; i < GO; i++) { var row = []; for (var j = 0; j < GI; j++) row.push(r.n() * (0.6 + 0.8 * r())); GW.push(row); }
+    var A = []; for (var j2 = 0; j2 < GI; j2++) { var a = []; for (var k = 0; k < 8; k++) a.push(r.n()); A.push(a); }
+    var Xc = [], Xi = [];
+    for (var j3 = 0; j3 < GI; j3++) { Xc.push(new Array(GN)); Xi.push(new Array(GN)); }
+    var ri = AB.rng(32);
+    for (var n = 0; n < GN; n++) {
+      var z = []; for (var k2 = 0; k2 < 8; k2++) z.push(r.n());
+      for (var j4 = 0; j4 < GI; j4++) {
+        Xc[j4][n] = AB.dot(A[j4], z) + 0.25 * r.n();
+        Xi[j4][n] = ri.n() * Math.sqrt(AB.dot(A[j4], A[j4]) + 0.0625);
+      }
+    }
+    GX.corr = Xc; GX.indep = Xi;
+  })();
+  function inv(M) {
+    var n = M.length, A = M.map(function (r, i) { return r.concat(r.map(function (_, j) { return i === j ? 1 : 0; })); });
+    for (var c = 0; c < n; c++) {
+      var p = c; for (var r2 = c + 1; r2 < n; r2++) if (Math.abs(A[r2][c]) > Math.abs(A[p][c])) p = r2;
+      var tmp = A[c]; A[c] = A[p]; A[p] = tmp;
+      var d = A[c][c]; for (var j = 0; j < 2 * n; j++) A[c][j] /= d;
+      for (var r3 = 0; r3 < n; r3++) if (r3 !== c) { var f = A[r3][c]; if (f) for (var j2 = 0; j2 < 2 * n; j2++) A[r3][j2] -= f * A[c][j2]; }
+    }
+    return A.map(function (r) { return r.slice(n); });
+  }
+  function gOutMSE(Q, X) { var s = 0; for (var i = 0; i < GO; i++) for (var n = 0; n < GN; n++) { var d = 0; for (var j = 0; j < GI; j++) d += (GW[i][j] - Q[i][j]) * X[j][n]; s += d * d; } return s / (GO * GN); }
+  function gRun(bits, xkey) {
+    var X = GX[xkey], qm = Math.pow(2, bits - 1) - 1;
+    var sc = GW.map(function (r) { return Math.max.apply(null, r.map(Math.abs)) / qm; });
+    var Q = function (v, i) { return Math.max(-qm, Math.min(qm, Math.round(v / sc[i]))) * sc[i]; };
+    var rtn = GW.map(function (r, i) { return r.map(function (v) { return Q(v, i); }); });
+    var H = []; for (var a = 0; a < GI; a++) { H.push(new Array(GI)); for (var b = 0; b < GI; b++) { var s = 0; for (var n = 0; n < GN; n++) s += X[a][n] * X[b][n]; H[a][b] = 2 * s / GN; } }
+    var md = 0; for (var d = 0; d < GI; d++) md += H[d][d]; md /= GI;
+    for (var d2 = 0; d2 < GI; d2++) H[d2][d2] += 0.01 * md;
+    var Hi = inv(H), Wc = GW.map(function (r) { return r.slice(); }), snaps = [Wc.map(function (r) { return r.slice(); })];
+    for (var q = 0; q < GI; q++) {
+      for (var i = 0; i < GO; i++) {
+        var wq = Q(Wc[i][q], i), err = (Wc[i][q] - wq) / Hi[q][q];
+        Wc[i][q] = wq;
+        for (var j = q + 1; j < GI; j++) Wc[i][j] -= err * Hi[q][j];
+      }
+      var hq = Hi[q].slice(), hqq = Hi[q][q];
+      for (var a2 = q + 1; a2 < GI; a2++) for (var b2 = q + 1; b2 < GI; b2++) Hi[a2][b2] -= Hi[a2][q] * hq[b2] / hqq;
+      snaps.push(Wc.map(function (r) { return r.slice(); }));
+    }
+    return { rtn: gOutMSE(rtn, X), gptq: gOutMSE(Wc, X), snaps: snaps, X: X };
+  }
+  function gGet(bits, xk) { var k = bits + xk; if (!gRes[k]) gRes[k] = gRun(bits, xk); return gRes[k]; }
+  var gGb = AB.range("qz-gb", function (v) { return v + " 비트"; }, function () { gStep = GI; gUpd(); });
+  var gGx = AB.seg("qz-gx", function () { gStep = GI; gUpd(); });
+  var cvGm = AB.canvas($("cv-qz-gmat"), function (ctx, w, h) {
+    var P = AB.palette(), D = divFn(), res = gGet(gGb(), gGx()), cur = res.snaps[gStep];
+    var three = w >= 560, nmap = three ? 3 : 2, gap = 14, lab = 18;
+    var cw = Math.min((w - 20 - gap * (nmap - 1)) / (nmap * GI), (h - lab - 24) / GO), mw = cw * GI, mh = cw * GO;
+    var x0 = (w - (nmap * mw + gap * (nmap - 1))) / 2, y0 = lab + 4;
+    var am = 0; GW.forEach(function (r) { r.forEach(function (v) { am = Math.max(am, Math.abs(v)); }); });
+    var dm = 0; cur.forEach(function (r, i) { r.forEach(function (v, j) { dm = Math.max(dm, Math.abs(v - GW[i][j])); }); });
+    var maps = [];
+    if (three) maps.push(["원본 W", function (i, j) { return GW[i][j] / am; }]);
+    maps.push(["진행 중 W (" + gStep + "/" + GI + "열 양자화)", function (i, j) { return cur[i][j] / am; }]);
+    maps.push(["W − 원본 (×" + (am / (dm || 1)).toFixed(1) + ")", function (i, j) { return (cur[i][j] - GW[i][j]) / (dm || 1); }]);
+    maps.forEach(function (m, n) {
+      var x = x0 + n * (mw + gap);
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(m[0], x, 4);
+      for (var i = 0; i < GO; i++) for (var j = 0; j < GI; j++) { ctx.fillStyle = D(m[1](i, j)); ctx.fillRect(x + j * cw, y0 + i * cw, Math.ceil(cw), Math.ceil(cw)); }
+      ctx.strokeStyle = P.border; ctx.strokeRect(x - 0.5, y0 - 0.5, mw + 1, mh + 1);
+      if (gStep > 0 && gStep <= GI && n >= nmap - 2) {
+        ctx.fillStyle = AB.alpha(P.text, 0.08); ctx.fillRect(x, y0, gStep * cw, mh);
+        if (gStep < GI) { ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.strokeRect(x + (gStep - 1) * cw, y0 - 2, cw, mh + 4); ctx.lineWidth = 1; }
+      }
+    });
+    ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText("← 입력 채널(열) 0 … 31", x0, y0 + mh + 6);
+  }, { aspect: 0.3, minHeight: 150, maxHeight: 230 });
+  var gBarLay = null;
+  var cvGb = AB.canvas($("cv-qz-gbar"), function (ctx, w, h) {
+    var P = AB.palette(), xk = gGx(), L = 58, R = w - 14, T = 14, B = h - 40, vals = [], ymin = Infinity, ymax = 0;
+    for (var b = 2; b <= 8; b++) { var r = gGet(b, xk); vals.push([b, r.rtn, r.gptq]); ymin = Math.min(ymin, r.gptq, r.rtn); ymax = Math.max(ymax, r.rtn, r.gptq); }
+    var c = AB.chart(ctx, { x: L, y: T, w: R - L, h: B - T }, { x: [1.5, 8.5], y: [ymin * 0.5, ymax * 2], logY: true, xTicks: [2, 3, 4, 5, 6, 7, 8], xFmt: function (v) { return v + "b"; }, yLabel: "출력 MSE" });
+    var gw = (c.X(2) - c.X(1.5)) * 0.8;
+    gBarLay = { X: c.X };
+    vals.forEach(function (v) {
+      var xc = c.X(v[0]), sel = v[0] === gGb();
+      if (sel) { ctx.fillStyle = AB.alpha(P.accent, 0.08); ctx.fillRect(xc - gw * 0.6, T, gw * 1.2, B - T); }
+      ctx.fillStyle = AB.alpha(P.accent, sel ? 0.75 : 0.45); ctx.fillRect(xc - gw / 2, c.Y(v[1]), gw / 2 - 1, B - c.Y(v[1]));
+      ctx.fillStyle = AB.alpha(P.accent2, sel ? 0.95 : 0.6); ctx.fillRect(xc + 1, c.Y(v[2]), gw / 2 - 1, B - c.Y(v[2]));
+    });
+    ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.accent; ctx.fillText("■ RTN", R - 70, T + 2); ctx.fillStyle = P.accent2; ctx.fillText("■ GPTQ", R - 4, T + 2);
+  }, { aspect: 0.34, minHeight: 170, maxHeight: 220 });
+  ptr(cvGb, function (x) { if (!gBarLay) return; var b = Math.round(AB.clamp((x - 58) / (cvGb.w - 72) * 7 + 1.5, 2, 8)); if (b !== gGb()) gGb.set(b); });
+  function gUpd() {
+    var res = gGet(gGb(), gGx());
+    AB.stat("qz-g-rtn", sci(res.rtn));
+    AB.stat("qz-g-gptq", sci(res.gptq));
+    AB.stat("qz-g-gain", (res.rtn / res.gptq).toFixed(2) + "<small> 배</small>");
+    AB.stat("qz-g-step", gStep + " / " + GI + "<small> 열</small>");
+    cvGm.redraw(); cvGb.redraw();
+  }
+  var gAcc = 0;
+  var gLoop = AB.loop($("sim-gptq"), function (dt) {
+    if (!gPlaying) return;
+    gAcc += dt; if (gAcc < 0.14) return; gAcc = 0;
+    if (gStep >= GI) { gPlaying = false; $("qz-gplay").textContent = "재생"; return; }
+    gStep++; gUpd();
+  });
+  $("qz-gplay").addEventListener("click", function () {
+    if (gPlaying) { gPlaying = false; $("qz-gplay").textContent = "재생"; return; }
+    if (gStep >= GI) gStep = 0;
+    gPlaying = true; $("qz-gplay").textContent = "일시정지"; gLoop.start();
+  });
+  $("qz-gstep").addEventListener("click", function () { gPlaying = false; $("qz-gplay").textContent = "재생"; gStep = gStep >= GI ? 1 : gStep + 1; gUpd(); });
+  $("qz-greset").addEventListener("click", function () { gPlaying = false; $("qz-gplay").textContent = "재생"; gStep = 0; gUpd(); });
+  gStep = GI; gUpd();
+
+  /* =====================================================================
+     ⑥ 크기·속도 계산기
+     ===================================================================== */
+  var GPUS = {
+    "4090": { name: "RTX 4090", mem: 24, use: 24, bw: 1.0 },
+    a100: { name: "A100 80GB", mem: 80, use: 80, bw: 2.0 },
+    h100: { name: "H100 SXM", mem: 80, use: 80, bw: 3.35 },
+    h200: { name: "H200", mem: 141, use: 141, bw: 4.8 },
+    b200: { name: "B200", mem: 180, use: 180, bw: 8.0 },
+    b300: { name: "B300", mem: 288, use: 288, bw: 8.0 },
+    rubin: { name: "Rubin", mem: 288, use: 288, bw: 19.2 },
+    m2u: { name: "M2 Ultra", mem: 192, use: 144, bw: 0.8 }
+  };
+  var cMoe = null;
+  var gCp = AB.range("qz-cp", function (v) { return AB.big(Math.pow(10, v) * 1e9) + (cMoe ? " (활성 " + cMoe + "B)" : ""); }, function () { cMoe = null; cUpd(); });
+  var gCb = AB.seg("qz-cb", cUpd), gCg = AB.seg("qz-cg", cUpd);
+  var gCkv = AB.range("qz-ckv", function (v) { return v + " GB"; }, cUpd);
+  $("qz-cgpu").addEventListener("change", cUpd);
+  $("qz-cpre").querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () { var n = Number(b.dataset.n); gCp.set(Math.log10(n)); cMoe = n === 46.7 ? 12.9 : null; $("qz-cp-out").textContent = AB.big(n * 1e9) + (cMoe ? " (활성 " + cMoe + "B)" : ""); cUpd(); });
+  });
+  function effB(b, g) { return b === 16 ? 16 : b + (g ? 16 / g : 0); }
+  var cBits = [16, 8, 4, 3, 2], cLay = null;
+  var cvC = AB.canvas($("cv-qz-calc"), function (ctx, w, h) {
+    var P = AB.palette(), N = Math.pow(10, gCp()), g = Number(gCg()), gpu = GPUS[$("qz-cgpu").value], cap = gpu.use - gCkv(), act = cMoe || N, sel = Number(gCb());
+    var mems = cBits.map(function (b) { return N * effB(b, g) / 8; });
+    var ymax = Math.max(mems[0], gpu.mem) * 1.12;
+    var L = 58, R = w - 14, T = 26, B = h - 40;
+    var c = AB.chart(ctx, { x: L, y: T, w: R - L, h: B - T }, { x: [0, 5], y: [0, ymax], xTicks: [], yLabel: "가중치 메모리 (GB)",
+      hlines: [{ y: gpu.use, color: P.dim, dash: [6, 4], label: gpu.name + " " + gpu.use + " GB" + (gpu.use < gpu.mem ? " (GPU 가용)" : "") }, { y: Math.max(0, cap), color: P.ok, dash: [3, 3] }] });
+    var bw = (R - L) / 5;
+    cLay = { L: L, bw: bw };
+    cBits.forEach(function (b, i) {
+      var x = L + i * bw + bw * 0.18, ww = bw * 0.64, m = mems[i], y = c.Y(Math.min(m, ymax)), fit = m <= cap, on = b === sel;
+      ctx.fillStyle = fit ? AB.alpha(P.accent, on ? 0.85 : 0.45) : AB.alpha(P.bad, on ? 0.75 : 0.35);
+      ctx.fillRect(x, y, ww, B - y);
+      if (on) { ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.strokeRect(x, y, ww, B - y); ctx.lineWidth = 1; }
+      ctx.fillStyle = P.text; ctx.font = font(11, true, on); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      var tps = gpu.bw * 1e12 / (act * 1e9 * effB(b, g) / 8);
+      ctx.fillText(Math.round(tps) + " t/s", x + ww / 2, Math.max(T + 12, y - 3));
+      ctx.fillStyle = P.dim; ctx.textBaseline = "top"; ctx.font = font(11, true);
+      ctx.fillText(b + "b", x + ww / 2, B + 5);
+      ctx.fillText(m >= 100 ? Math.round(m) + "G" : m.toFixed(1) + "G", x + ww / 2, B + 19);
+    });
+  }, { aspect: 0.55, minHeight: 240, maxHeight: 340 });
+  ptr(cvC, function (x) { if (!cLay) return; var i = Math.floor((x - cLay.L) / cLay.bw); if (i >= 0 && i < 5) gCb.set(String(cBits[i])); });
+  function cUpd() {
+    var N = Math.pow(10, gCp()), b = Number(gCb()), g = Number(gCg()), gpu = GPUS[$("qz-cgpu").value], cap = gpu.use - gCkv();
+    var eff = effB(b, g), mem = N * eff / 8, act = cMoe || N, tps = gpu.bw * 1e12 / (act * 1e9 * eff / 8);
+    AB.stat("qz-c-bits", Number(eff.toFixed(3)) + "<small> 비트</small>");
+    AB.stat("qz-c-mem", (mem >= 100 ? mem.toFixed(0) : mem.toFixed(1)) + "<small> GB</small>");
+    var fit = mem <= cap;
+    AB.stat("qz-c-fit", "<span class='qz-verdict " + (fit ? "ok" : "bad") + "'>" + (fit ? "들어감" : "안 들어감") + "</span><small> (" + Math.round(mem / gpu.use * 100) + "%)</small>");
+    AB.stat("qz-c-tps", (tps >= 100 ? tps.toFixed(0) : tps.toFixed(1)) + "<small> tok/s" + (cMoe ? " (MoE 활성)" : "") + "</small>");
+    AB.stat("qz-c-ngpu", cap > 0 ? Math.ceil(mem / cap) + "<small> 장</small>" : "—");
+    cvC.redraw();
+  }
+  cUpd();
+
+  /* =====================================================================
+     ⑦ 블록 스케일 FP4 비교 (INT4 g128 · MXFP4 · NVFP4)
+     ===================================================================== */
+  /* --- 블록 스케일 코덱 (node에서 단위 테스트한 코드) --- */
+  var E2M1 = [0, 0.5, 1, 1.5, 2, 3, 4, 6];
+  // E2M1: 가장 가까운 값, 동점이면 가수 비트가 0인 쪽(짝수 인덱스), |x|>6 은 6으로 포화
+  function qE2M1(x) {
+    var a = Math.abs(x), s = x < 0 ? -1 : 1;
+    if (a >= 6) return s * 6;
+    var bi = 0, bd = Infinity;
+    for (var i = 0; i < 8; i++) {
+      var d = Math.abs(a - E2M1[i]);
+      if (d < bd || (d === bd && (i & 1) === 0)) { bd = d; bi = i; }
+    }
+    return s * E2M1[bi];
+  }
+  // 일반 소형 부동소수점(가수 m비트, bias, 최대 정규값 maxv) 반올림: 최근접 짝수, 비정규수 포함, 포화
+  function qFloat(x, m, bias, maxv) {
+    if (x === 0 || !isFinite(x)) return x === 0 ? 0 : (x > 0 ? maxv : -maxv);
+    var a = Math.abs(x), s = x < 0 ? -1 : 1;
+    var e = Math.floor(Math.log2(a)), emin = 1 - bias;
+    if (e < emin) e = emin;
+    var step = Math.pow(2, e - m), q = a / step, r = Math.round(q);
+    if (q - Math.floor(q) === 0.5) r = (Math.floor(q) % 2 === 0) ? Math.floor(q) : Math.floor(q) + 1;
+    var v = r * step;
+    return s * Math.min(v, maxv);
+  }
+  function qE4M3(x) { return qFloat(x, 3, 7, 448); }
+  function qFP16(x) { return qFloat(x, 10, 15, 65504); }
+  // E8M0: 2의 거듭제곱 스케일. OCP MX v1.0: X = 2^(floor(log2(amax)) - emax_elem), FP4 emax_elem = 2
+  function mxScale(amax) { return amax > 0 ? Math.pow(2, Math.floor(Math.log2(amax)) - 2) : 1; }
+  // (a) INT4 대칭 absmax, 그룹 g, FP16 스케일, q ∈ [-7, 7]
+  function quantINT4(x, g) {
+    var out = new Float64Array(x.length), scales = [];
+    for (var b = 0; b < x.length; b += g) {
+      var am = 0; for (var i = b; i < b + g; i++) am = Math.max(am, Math.abs(x[i]));
+      var sc = qFP16(am / 7) || 1; scales.push(sc);
+      for (i = b; i < b + g; i++) out[i] = Math.max(-7, Math.min(7, Math.round(x[i] / sc))) * sc;
+    }
+    return { y: out, scales: scales, block: g, bits: 4 + 16 / g };
+  }
+  // (b) MXFP4: 블록 32, E8M0 스케일
+  function quantMX(x) {
+    var g = 32, out = new Float64Array(x.length), scales = [];
+    for (var b = 0; b < x.length; b += g) {
+      var am = 0; for (var i = b; i < b + g; i++) am = Math.max(am, Math.abs(x[i]));
+      var sc = mxScale(am); scales.push(sc);
+      for (i = b; i < b + g; i++) out[i] = qE2M1(x[i] / sc) * sc;
+    }
+    return { y: out, scales: scales, block: g, bits: 4 + 8 / 32 };
+  }
+  // (c) NVFP4: 블록 16, E4M3 블록 스케일 + 텐서 단위 FP32 스케일
+  function quantNV(x) {
+    var g = 16, out = new Float64Array(x.length), scales = [], at = 0;
+    for (var i = 0; i < x.length; i++) at = Math.max(at, Math.abs(x[i]));
+    var st = at > 0 ? Math.fround(at / (6 * 448)) : 1; // 텐서 스케일(FP32): 블록 스케일이 E4M3 범위(≤448)에 들어오게
+    for (var b = 0; b < x.length; b += g) {
+      var am = 0; for (i = b; i < b + g; i++) am = Math.max(am, Math.abs(x[i]));
+      var sb = qE4M3(am / 6 / st), sc = sb * st; scales.push(sb);
+      for (i = b; i < b + g; i++) out[i] = sc > 0 ? qE2M1(x[i] / sc) * sc : 0;
+    }
+    return { y: out, scales: scales, block: g, tensorScale: st, bits: 4 + 8 / 16 + 32 / x.length };
+  }
+  var FN = 512, fSeed = 7, fBase = null, fX = null, fRes = null, fSel = 3, fLay = null;
+  var gFk = AB.seg("qz-f-kind", function () { fGen(); });
+  var gFo = AB.range("qz-f-out", function (v) { return v.toFixed(1) + "×"; }, function () { fGen(); });
+  function fGen() {
+    var r = AB.rng(fSeed * 31 + (gFk() === "a" ? 1000 : 0)), k = gFo(), x = new Float64Array(FN);
+    if (gFk() === "w") {
+      for (var i = 0; i < FN; i++) { x[i] = r.n(); if (r() < 0.012) x[i] = (r() < 0.5 ? -1 : 1) * k * (0.5 + 0.5 * r()); }
+    } else {
+      var ch = [37, 38, 201, 333, 470];
+      for (i = 0; i < FN; i++) x[i] = 0.5 * r.n();
+      ch.forEach(function (c, j) { x[c] = (j % 2 ? -1 : 1) * k * (0.7 + 0.3 * r()); });
+    }
+    fBase = x; fX = Float64Array.from(x); fRun();
+  }
+  function sqnr(x, y) { var e = 0, p = 0; for (var i = 0; i < x.length; i++) { e += (x[i] - y[i]) * (x[i] - y[i]); p += x[i] * x[i]; } return e > 0 ? 10 * Math.log10(p / e) : Infinity; }
+  function fRun() {
+    fRes = [quantINT4(fX, 128), quantMX(fX), quantNV(fX)];
+    // 크기 상위 2%(이상치)를 뺀 나머지 값들의 SQNR도 따로 잰다
+    var th = Array.prototype.slice.call(fX).map(Math.abs).sort(function (a, b) { return a - b; })[Math.floor(FN * 0.98)];
+    fRes.forEach(function (q) {
+      q.bmse = [];
+      for (var b = 0; b < FN; b += q.block) { var e = 0; for (var i = b; i < b + q.block; i++) e += (fX[i] - q.y[i]) * (fX[i] - q.y[i]); q.bmse.push(e / q.block); }
+      q.sq = sqnr(fX, q.y);
+      var e = 0, p = 0; for (var i = 0; i < FN; i++) if (Math.abs(fX[i]) < th) { e += (fX[i] - q.y[i]) * (fX[i] - q.y[i]); p += fX[i] * fX[i]; }
+      q.sqR = e > 0 ? 10 * Math.log10(p / e) : Infinity;
+    });
+    ["qz-f-int", "qz-f-mx", "qz-f-nv"].forEach(function (id, k) { AB.stat(id, dB(fRes[k].sq) + "<small> · 나머지 98%: " + (isFinite(fRes[k].sqR) ? fRes[k].sqR.toFixed(1) : "∞") + " dB</small>"); });
+    var mxs = fRes[1].scales[fSel], nvs = fRes[2].scales, k = Math.round(Math.log2(mxs));
+    AB.stat("qz-f-sc", "MX " + p2(k) + " · NV " + sci(nvs[fSel * 2], 3) + ", " + sci(nvs[fSel * 2 + 1], 3) + " <small>× s<sub>t</sub>=" + sci(fRes[2].tensorScale, 3) + "</small>");
+    cvF.redraw(); cvZ.redraw();
+  }
+  var F_NAMES = ["INT4 g128", "MXFP4", "NVFP4"];
+  function fCols(P) { return [P.warn, P.accent2, P.ok]; }
+  var cvF = AB.canvas($("cv-qz-fp4"), function (ctx, w, h) {
+    if (!fRes) return;
+    var P = AB.palette(), L = 74, R = w - 10, top = 8, vh = 54, sh = 22, gap = 6, cw = (R - L) / FN;
+    var am = 0; for (var i = 0; i < FN; i++) am = Math.max(am, Math.abs(fX[i]));
+    var mid = top + vh / 2;
+    ctx.fillStyle = AB.alpha(P.accent, 0.1); ctx.fillRect(L + fSel * 32 * cw, top, 32 * cw, h - top - 4);
+    ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(L, mid); ctx.lineTo(R, mid); ctx.stroke();
+    ctx.fillStyle = P.accent;
+    for (i = 0; i < FN; i++) { var v = fX[i] / am * (vh / 2 - 2); ctx.fillRect(L + i * cw, Math.min(mid, mid - v), Math.max(1, cw - 0.2), Math.abs(v) || 0.5); }
+    ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.fillText("값 x", L - 6, mid);
+    // 오차 띠 (로그 MSE, 세 방법 공통 눈금)
+    var lo = Infinity, hi = -Infinity;
+    fRes.forEach(function (q) { q.bmse.forEach(function (m) { var l = Math.log10(m + 1e-9); lo = Math.min(lo, l); hi = Math.max(hi, l); }); });
+    if (hi - lo < 1e-6) hi = lo + 1;
+    var cols = fCols(P);
+    fRes.forEach(function (q, k) {
+      var y = top + vh + gap + k * (sh + gap);
+      q.bmse.forEach(function (m, b) { ctx.fillStyle = AB.heat(0.08 + 0.92 * (Math.log10(m + 1e-9) - lo) / (hi - lo), "bad"); ctx.fillRect(L + b * q.block * cw + 0.5, y, q.block * cw - 1, sh); });
+      ctx.fillStyle = cols[k]; ctx.textAlign = "right"; ctx.font = font(11, true, true); ctx.fillText(F_NAMES[k], L - 6, y + sh / 2);
+    });
+    ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(L + fSel * 32 * cw, top, 32 * cw, h - top - 4); ctx.lineWidth = 1;
+    fLay = { L: L, cw: cw };
+  }, { height: 54 + 8 + 6 + 3 * 28 + 4 });
+  ptr(cvF, function (x) { if (!fLay) return; var b = Math.floor((x - fLay.L) / fLay.cw / 32); if (b >= 0 && b < FN / 32 && b !== fSel) { fSel = b; fRun(); } });
+  var zLay = null, zDrag = -1;
+  var cvZ = AB.canvas($("cv-qz-fp4z"), function (ctx, w, h) {
+    if (!fRes) return;
+    var P = AB.palette(), cols = fCols(P), s0 = fSel * 32, L = 44, R = w - 10, T = 30, B = h - 22, cw = (R - L) / 32;
+    var am = 0; for (var i = 0; i < 32; i++) { am = Math.max(am, Math.abs(fX[s0 + i])); fRes.forEach(function (q) { am = Math.max(am, Math.abs(q.y[s0 + i])); }); }
+    am = am * 1.12 || 1;
+    var Y = function (v) { return (T + B) / 2 - v / am * (B - T) / 2; };
+    zLay = { L: L, cw: cw, Y: Y, am: am, T: T, B: B };
+    ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+    [-1, -0.5, 0.5, 1].forEach(function (f) { ctx.beginPath(); ctx.moveTo(L, Y(f * am / 1.12)); ctx.lineTo(R, Y(f * am / 1.12)); ctx.stroke(); });
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, Y(0)); ctx.lineTo(R, Y(0)); ctx.stroke();
+    ctx.fillStyle = P.dim; ctx.font = font(10.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(sci(am / 1.12, 2), L - 4, Y(am / 1.12)); ctx.fillText("0", L - 4, Y(0)); ctx.fillText(sci(-am / 1.12, 2), L - 4, Y(-am / 1.12));
+    // NV 블록 경계(16)
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = cols[2]; ctx.beginPath(); ctx.moveTo(L + 16 * cw, T - 6); ctx.lineTo(L + 16 * cw, B); ctx.stroke(); ctx.setLineDash([]);
+    // MX 포화선 ±6X
+    var X6 = 6 * fRes[1].scales[fSel];
+    if (X6 < am) { ctx.strokeStyle = AB.alpha(cols[1], 0.7); ctx.setLineDash([2, 3]); [X6, -X6].forEach(function (v) { ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(R, Y(v)); ctx.stroke(); }); ctx.setLineDash([]); }
+    for (i = 0; i < 32; i++) {
+      var v = fX[s0 + i], x = L + i * cw;
+      ctx.fillStyle = AB.alpha(P.accent, i === zDrag ? 0.7 : 0.38); ctx.fillRect(x + cw * 0.12, Math.min(Y(0), Y(v)), cw * 0.76, Math.abs(Y(v) - Y(0)) || 1);
+      var cx = x + cw / 2;
+      fRes.forEach(function (q, k) {
+        var yy = Y(q.y[s0 + i]), dx = (k - 1) * Math.min(5, cw * 0.22), r = Math.max(2.2, Math.min(4, cw * 0.17));
+        ctx.fillStyle = cols[k]; ctx.beginPath();
+        if (k === 0) ctx.rect(cx + dx - r, yy - r, 2 * r, 2 * r);
+        else if (k === 1) { ctx.moveTo(cx + dx, yy - r - 1); ctx.lineTo(cx + dx + r + 1, yy + r); ctx.lineTo(cx + dx - r - 1, yy + r); ctx.closePath(); }
+        else ctx.arc(cx + dx, yy, r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+    ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = P.text;
+    ctx.fillText("구간 " + s0 + "–" + (s0 + 31) + " (MX 블록 1개 = NV 블록 2개)", L, 12);
+    ctx.textAlign = "right"; ctx.fillStyle = cols[1];
+    ctx.fillText(X6 < am ? "┄ MX 포화 ±6X" : "", R, 12);
+    ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.font = font(10.5, true);
+    ctx.fillText("블록 MSE  INT4 " + sci(fRes[0].bmse[Math.floor(s0 / 128)], 2) + " · MX " + sci(fRes[1].bmse[fSel], 2) + " · NV " + sci((fRes[2].bmse[fSel * 2] + fRes[2].bmse[fSel * 2 + 1]) / 2, 2), (L + R) / 2, h - 9);
+  }, { aspect: 0.5, minHeight: 230, maxHeight: 300 });
+  function zPick(x, y) {
+    if (!zLay) return;
+    if (zDrag < 0) { var i = Math.floor((x - zLay.L) / zLay.cw); if (i < 0 || i > 31) return; zDrag = i; }
+    var v = ((zLay.T + zLay.B) / 2 - y) / ((zLay.B - zLay.T) / 2) * zLay.am;
+    fX[fSel * 32 + zDrag] = Math.max(-zLay.am * 1.5, Math.min(zLay.am * 1.5, v));
+    fRun();
+  }
+  ptr(cvZ, function (x, y) { zDrag = -1; zPick(x, y); }, zPick);
+  $("cv-qz-fp4z").addEventListener("pointerup", function () { zDrag = -1; cvZ.redraw(); });
+  $("qz-f-seed").addEventListener("click", function () { fSeed++; fGen(); });
+  $("qz-f-reset").addEventListener("click", function () { fX = Float64Array.from(fBase); fRun(); });
+  fGen();
+
+})();
+</script>
+</body>
+</html>

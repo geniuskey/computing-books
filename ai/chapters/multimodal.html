@@ -1,0 +1,1397 @@
+<!doctype html>
+<!--
+Copyright (c) 2026 Edwin (geniuskey) and AIBook contributors
+Executable code: MIT (see LICENSE-MIT).
+Educational text, figures, exercises, and explanations: CC BY 4.0
+(see LICENSE-CC-BY-4.0 and LICENSE.md for scope and attribution).
+https://creativecommons.org/licenses/by/4.0/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>멀티모달과 최신 AI 기술 · AIBook</title>
+<meta name="description" content="모달리티 인코더와 공통 토큰 공간, CLIP 대조 학습(InfoNCE 직접 계산), VLM의 패치 토큰과 프로젝터, 멜 스펙트로그램과 WER 편집 거리, 디퓨전의 순방향·역방향과 CFG(해석적 스코어로 2D 샘플링), 오픈 웨이트 vs 클로즈드, 온디바이스 토큰/초 상한, AI 코딩 에이전트까지.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  #cv-clip, #cv-patch, #cv-diff { touch-action: none; }
+  #cv-clip { cursor: grab; }
+  #cv-patch { cursor: nwse-resize; }
+  #cv-diff { cursor: crosshair; }
+  .mm-matwrap { display: grid; gap: 8px; justify-items: center; }
+  .mm-mat td { min-width: 52px; line-height: 1.25; }
+  .mm-mat td small { display: block; font-size: 10.5px; opacity: .8; }
+  .mm-mat td.diag { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .mm-mat th.rh { text-align: right; }
+  .mm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mm-chips button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); cursor: pointer; }
+  .mm-chips button:hover { border-color: var(--accent); color: var(--text); }
+  .mm-in { display: grid; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+  .mm-in label { display: grid; gap: 4px; font-size: 13px; color: var(--text-dim); }
+  .mm-align { display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: flex-start; }
+  .mm-al { display: inline-grid; gap: 2px; text-align: center; font-family: var(--mono); font-size: 12.5px; border-radius: 6px; padding: 3px 6px; border: 1px solid var(--border); background: var(--surface); }
+  .mm-al i { font-style: normal; font-size: 10.5px; color: var(--text-faint); }
+  .mm-al.S { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  .mm-al.D { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
+  .mm-al.I { border-color: var(--accent-2); background: var(--accent-2-soft); }
+  .mm-al.C { border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+  .mm-al .gap { color: var(--text-faint); }
+  .mm-dp td.path { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 700; }
+  .mm-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--text-dim); }
+  .mm-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .mm-note { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+  .mm-note b { color: var(--text); }
+  figure.diagram svg text { font-size: 14px; }
+  figure.diagram svg text.t-mono { font-size: 12px; }
+  figure.diagram svg text.t-dim { font-size: 12.5px; }
+  .mm-two { display: grid; gap: 0; grid-template-columns: minmax(0,1fr); }
+  .mm-sub { border-top: 1px solid var(--border); background: var(--canvas-bg); }
+  .mm-sub canvas { display: block; width: 100%; }
+  #od-dev { width: 100%; min-width: 0; max-width: 100%; }
+  .sim-controls > * { min-width: 0; }
+  @media (max-width: 480px) { .mm-mat td { min-width: 0; padding: 3px 4px; font-size: 11.5px; } .mm-mat th { font-size: 11px; } }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="ai"></script>
+</head>
+<body data-chapter="multimodal">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>멀티모달과 최신 AI 기술</h1>
+    <p class="lead">지금까지의 LLM은 텍스트 토큰만 읽고 썼다. 하지만 사람이 다루는 정보의 상당 부분은 사진, 문서 스캔, 음성, 영상이다. 이 장의 핵심 아이디어는 하나다. <strong>무엇이든 벡터 열(토큰)로 바꾸면 Transformer가 처리할 수 있다.</strong> 이미지는 패치로, 소리는 멜 스펙트로그램 프레임이나 코덱 토큰으로 바뀌어 같은 공간에 들어온다. 생성 쪽에서는 잡음을 조금씩 걷어 내는 디퓨전이 이미지·영상의 주력이 되었다. 이 장에서는 CLIP의 InfoNCE 손실, ViT의 토큰 수, 음성 인식의 WER, 디퓨전의 역과정을 브라우저에서 직접 계산하고, 오픈 웨이트와 클로즈드 모델의 선택, 온디바이스 AI의 속도 상한, AI 코딩 에이전트의 구조까지 실무 판단 기준으로 정리한다.</p>
+    <ul class="objectives">
+      <li>모달리티별 인코더가 공통 임베딩·토큰 공간으로 이어지는 구조와 초기 융합·후기 융합의 차이를 설명할 수 있다.</li>
+      <li>CLIP의 이미지-텍스트 유사도 행렬과 대칭 InfoNCE 손실을 손으로 계산하고, 온도 τ의 역할을 안다.</li>
+      <li>이미지 크기·패치 크기·타일링으로 VLM의 시각 토큰 수를 계산하고, 프로젝터의 역할과 VLM 환각의 원인을 안다.</li>
+      <li>멜 스펙트로그램 프레임 수, Whisper류 인코더-디코더 ASR, 편집 거리로 WER을 계산하고 TTS·음성 대 음성 구조를 그릴 수 있다.</li>
+      <li>디퓨전의 순방향 닫힌 꼴, 노이즈 예측 목표, 잠재 디퓨전, CFG 공식, 단계 수와 속도의 관계, flow matching의 아이디어를 설명할 수 있다.</li>
+      <li>오픈 웨이트와 오픈소스를 구분하고, 통제·프라이버시·비용·성능·운영 부담으로 모델을 고를 수 있다.</li>
+      <li>메모리 대역폭으로 온디바이스 토큰/초 상한을 추정하고, AI 코딩 에이전트의 구성과 검증 방법을 안다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="mm-intro">
+    <h2>왜 멀티모달인가: 모든 것을 토큰으로</h2>
+    <p><span class="term">모달리티</span><span class="en">(modality)</span>는 정보가 표현되는 형식, 즉 텍스트·이미지·오디오·영상·센서 신호 같은 종류를 말한다. <span class="term">멀티모달 모델</span><span class="en">(multimodal model)</span>은 둘 이상의 모달리티를 입력으로 받거나 출력으로 내는 모델이다. 영수증 사진을 보고 합계를 묻거나, 회의 녹음을 받아 요약하거나, 문장으로 그림을 그리는 일은 모두 멀티모달 작업이다.</p>
+    <p><a href="transformer.html">6장</a>의 Transformer는 사실 텍스트 전용 기계가 아니다. 입력은 \(n\times d\) 벡터 열이고, 어텐션은 그 벡터들 사이의 관계를 계산할 뿐이다. 벡터가 단어에서 왔는지, 이미지 조각에서 왔는지는 상관없다. 그래서 멀티모달 모델을 만드는 일의 대부분은 <b>각 모달리티를 적절한 길이의 벡터 열로 바꾸는 일</b>, 그리고 <b>서로 다른 출처의 벡터가 같은 의미 공간을 쓰게 맞추는 일</b>이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>모달리티</th><th>원시 데이터 크기(예)</th><th>토큰화 방법</th><th>토큰 수(예)</th></tr></thead>
+      <tbody>
+        <tr><td>텍스트</td><td>한국어 1,000자 ≈ 3 KB(UTF-8)</td><td>BPE 서브워드(<a href="embedding.html">4장</a>)</td><td>수백~1,000여 개</td></tr>
+        <tr><td>이미지</td><td>336×336×3 = 338,688 값</td><td>14×14 픽셀 패치 → ViT</td><td>576개</td></tr>
+        <tr><td>오디오</td><td>30초 × 16 kHz = 480,000 샘플</td><td>멜 스펙트로그램 → 인코더(또는 코덱 토큰)</td><td>1,500개(Whisper 인코더)</td></tr>
+        <tr><td>영상</td><td>10초 × 24 fps × 720p</td><td>시공간 패치</td><td>수만~수십만 개</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 마지막 열이 이 장 전체를 관통하는 비용 감각이다. <a href="attention.html">5장</a>에서 본 대로 어텐션은 토큰 수의 제곱에 비례하고, <a href="generation.html">8장</a>의 KV 캐시는 토큰 수에 비례한다. 사진 한 장이 텍스트 몇 쪽과 맞먹고, 영상은 책 한 권을 넘는다. 그래서 멀티모달 모델의 설계는 늘 "얼마나 적은 토큰으로 충분한 정보를 담을까"라는 압축 문제와 맞물려 있다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="multimodal-models">
+    <h2>멀티모달 모델의 구조: 인코더, 공통 공간, 융합</h2>
+    <h3 id="modality-encoders">모달리티별 인코더와 공통 임베딩 공간</h3>
+    <p>가장 흔한 구조는 <b>모달리티마다 전용 인코더</b>를 두는 것이다. 이미지는 ViT<span class="en">(Vision Transformer)</span>, 오디오는 멜 스펙트로그램을 읽는 오디오 인코더, 텍스트는 토큰 임베딩이다. 각 인코더는 자기 데이터의 통계에 맞는 귀납적 편향(이미지의 2D 국소성, 소리의 시간-주파수 구조)을 갖고, 각자의 차원(예: ViT-L은 1,024차원)으로 벡터를 낸다. 이 벡터를 <b>공통 공간</b>으로 옮기는 작은 층이 <span class="term">프로젝터</span><span class="en">(projector, adapter)</span>다. 공통 공간은 두 가지 의미로 쓰인다.</p>
+    <ul>
+      <li><b>공통 임베딩 공간</b>: 이미지 벡터와 텍스트 벡터를 같은 차원의 단위 벡터로 만들어, "고양이 사진"과 "a photo of a cat"이 코사인으로 가깝게 한다. 검색·분류에 쓰인다(CLIP).</li>
+      <li><b>공통 토큰 공간</b>: 이미지 패치 벡터를 LLM의 토큰 임베딩과 같은 차원(예: 4,096)으로 바꿔 텍스트 토큰 사이에 끼워 넣는다. LLM은 그것을 '읽을 수 있는 단어'처럼 처리한다(VLM).</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 640 330" role="img" aria-label="모달리티별 인코더와 프로젝터가 공통 토큰 공간으로 이어지는 구조, 초기 융합과 후기 융합 비교">
+        <text x="12" y="22" class="t-acc">(a) 인코더 → 프로젝터 → 공통 토큰 공간 → LLM</text>
+        <rect x="12" y="38" width="80" height="30" rx="6" class="f-surface"/><text x="52" y="58" text-anchor="middle" class="t">이미지</text>
+        <rect x="12" y="78" width="80" height="30" rx="6" class="f-surface"/><text x="52" y="98" text-anchor="middle" class="t">오디오</text>
+        <rect x="12" y="118" width="80" height="30" rx="6" class="f-surface"/><text x="52" y="138" text-anchor="middle" class="t">텍스트</text>
+        <rect x="110" y="38" width="100" height="30" rx="6" class="f-acc-soft"/><text x="160" y="58" text-anchor="middle" class="t">ViT 인코더</text>
+        <rect x="110" y="78" width="100" height="30" rx="6" class="f-acc-soft"/><text x="160" y="98" text-anchor="middle" class="t">오디오 인코더</text>
+        <rect x="110" y="118" width="100" height="30" rx="6" class="f-elev"/><text x="160" y="138" text-anchor="middle" class="t">토큰 임베딩</text>
+        <rect x="228" y="38" width="86" height="30" rx="6" class="f-acc2-soft"/><text x="271" y="58" text-anchor="middle" class="t">프로젝터</text>
+        <rect x="228" y="78" width="86" height="30" rx="6" class="f-acc2-soft"/><text x="271" y="98" text-anchor="middle" class="t">프로젝터</text>
+        <path d="M92 53 H110 M92 93 H110 M92 133 H110 M210 53 H228 M210 93 H228" class="s-line"/>
+        <path d="M314 53 C335 53 335 95 352 95 M314 93 H352 M210 133 C300 133 330 100 352 100" class="s-line"/>
+        <rect x="352" y="62" width="130" height="66" rx="8" class="f-elev"/>
+        <text x="417" y="82" text-anchor="middle" class="t-dim">공통 토큰 열 (d=4096)</text>
+        <g>
+          <rect x="360" y="92" width="14" height="22" rx="3" class="f-acc-soft"/><rect x="377" y="92" width="14" height="22" rx="3" class="f-acc-soft"/><rect x="394" y="92" width="14" height="22" rx="3" class="f-acc-soft"/>
+          <rect x="411" y="92" width="14" height="22" rx="3" class="f-acc2-soft"/><rect x="428" y="92" width="14" height="22" rx="3" class="f-surface"/><rect x="445" y="92" width="14" height="22" rx="3" class="f-surface"/><rect x="462" y="92" width="14" height="22" rx="3" class="f-surface"/>
+        </g>
+        <path d="M482 95 H502" class="s-acc"/>
+        <rect x="502" y="72" width="124" height="46" rx="8" class="f-acc-soft"/><text x="564" y="92" text-anchor="middle" class="t">LLM (Transformer)</text><text x="564" y="110" text-anchor="middle" class="t-mono">다음 토큰 예측</text>
+        <line x1="12" y1="170" x2="628" y2="170" class="s-axis" stroke-dasharray="4 4"/>
+        <text x="12" y="194" class="t-acc">(b) 초기 융합 (early fusion)</text>
+        <text x="12" y="214" class="t-dim">토큰을 처음부터 한 열에 섞어 모든 층이 교차 참조</text>
+        <rect x="12" y="226" width="290" height="30" rx="6" class="f-elev"/>
+        <text x="157" y="246" text-anchor="middle" class="t-mono">[img]×3 [txt]×3 → 한 Transformer</text>
+        <text x="12" y="278" class="t-dim">장점: 세밀한 교차 이해, 생성도 한 모델</text>
+        <text x="12" y="296" class="t-dim">단점: 비용 = (n_img + n_txt)², 검색용 사전 계산 불가</text>
+        <text x="330" y="194" class="t-acc">(c) 후기 융합 (late fusion)</text>
+        <text x="330" y="214" class="t-dim">각자 끝까지 인코딩 → 벡터 하나씩 → 마지막에 비교</text>
+        <rect x="330" y="226" width="110" height="30" rx="6" class="f-acc-soft"/><text x="385" y="246" text-anchor="middle" class="t-mono">이미지 → v_I</text>
+        <rect x="450" y="226" width="110" height="30" rx="6" class="f-acc2-soft"/><text x="505" y="246" text-anchor="middle" class="t-mono">텍스트 → v_T</text>
+        <text x="575" y="246" class="t">cos</text>
+        <text x="330" y="278" class="t-dim">장점: v_I를 미리 계산·색인 → 수억 장 검색</text>
+        <text x="330" y="296" class="t-dim">단점: "왼쪽 빨간 컵" 같은 세밀한 관계에 약함</text>
+      </svg>
+      <figcaption><b>그림 15-1.</b> (a) 현재 VLM·음성 LLM의 공통 뼈대. 모달리티 인코더의 출력이 프로젝터를 거쳐 LLM 토큰 임베딩과 같은 차원이 되고, 텍스트 토큰과 한 열로 이어진다. (b) 초기 융합은 섞인 토큰 열 전체에 셀프 어텐션을 걸고, (c) 후기 융합은 각 모달리티를 따로 요약한 벡터끼리 마지막에만 비교한다.</figcaption>
+    </figure>
+
+    <h3 id="fusion">초기 융합 vs 후기 융합</h3>
+    <p><span class="term">융합</span><span class="en">(fusion)</span>은 서로 다른 모달리티의 정보가 <b>어느 층에서 처음 만나는가</b>의 문제다. 정의는 단순하지만 비용과 능력이 크게 갈린다.</p>
+    <ul>
+      <li><b>후기 융합</b><span class="en">(late fusion)</span>: 이미지 인코더와 텍스트 인코더가 서로를 전혀 보지 않고 각자 벡터 하나를 낸다. 만나는 곳은 마지막 코사인 유사도뿐이다. CLIP이 대표적이다. 수억 장의 이미지 벡터를 <b>미리 계산해 색인</b>할 수 있으므로(<a href="rag.html">10장</a>의 바이-인코더와 같은 원리) 검색이 매우 빠르다.</li>
+      <li><b>초기 융합</b><span class="en">(early fusion)</span>: 이미지 토큰과 텍스트 토큰을 같은 시퀀스에 섞어 첫 층부터 서로 어텐션한다. "사진 왼쪽 위 표지판에 뭐라고 쓰여 있어?"처럼 질문에 따라 이미지의 다른 부분을 봐야 하는 일에 강하다. 이미지 생성까지 같은 토큰 열에서 하는 모델(예: Chameleon, 2024)은 이미지도 이산 토큰으로 바꿔 처음부터 섞는다.</li>
+      <li><b>중간 형태</b>: 사전학습된 인코더로 이미지를 따로 인코딩한 뒤(후기적), 그 패치 토큰을 LLM 입력 열에 넣어 LLM 층에서 섞는다(초기적). 오늘날 대부분의 VLM이 이 형태이며, 문헌에 따라 이것을 초기 융합으로 부르기도 한다. 또 다른 갈래는 LLM 층 사이에 <a href="attention.html#variants">크로스 어텐션</a> 층을 끼워 텍스트 쿼리가 이미지 특징(키·값)을 조회하게 하는 방식이다(Flamingo, 2022).</li>
+    </ul>
+    <div class="table-wrap"><table>
+      <thead><tr><th>항목</th><th>후기 융합 (CLIP식)</th><th>토큰 결합 (LLaVA식 VLM)</th><th>크로스 어텐션 결합 (Flamingo식)</th></tr></thead>
+      <tbody>
+        <tr><td>만나는 지점</td><td>최종 벡터의 코사인</td><td>LLM 입력 열(모든 층)</td><td>LLM 중간에 끼운 크로스 어텐션 층</td></tr>
+        <tr><td>이미지 토큰 비용</td><td>LLM 없음, 인코더 1회</td><td>LLM 컨텍스트를 그대로 차지</td><td>컨텍스트는 안 차지, 추가 층 계산</td></tr>
+        <tr><td>사전 계산·검색</td><td>가능 (벡터 색인)</td><td>불가 (질문마다 다시)</td><td>이미지 특징은 캐시 가능</td></tr>
+        <tr><td>잘하는 일</td><td>검색, 제로샷 분류, 필터링</td><td>VQA, OCR, 문서·차트 이해, 대화</td><td>여러 이미지·영상이 섞인 긴 입력</td></tr>
+        <tr><td>약점</td><td>세밀한 관계·개수·위치</td><td>고해상도에서 토큰 폭증</td><td>구조가 복잡, 학습할 층이 많음</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "초기 융합이 항상 더 좋다"</strong><p>초기 융합은 표현력이 크지만, 질문이 바뀔 때마다 이미지 전체를 다시 처리해야 한다. 상품 이미지 1억 장 중 "빨간 운동화"를 찾는 일에 VLM을 1억 번 돌릴 수는 없다. 실무 시스템은 보통 <b>후기 융합으로 후보를 좁히고, 초기 융합 모델로 상위 몇 개를 정밀 판단</b>한다. <a href="rag.html#rerank">10장</a>의 "바이-인코더 검색 + 교차 인코더 리랭킹"과 정확히 같은 구조다.</p></div>
+
+    <h3 id="clip">CLIP: 대조 학습으로 이미지와 텍스트를 같은 공간에</h3>
+    <p><span class="term">CLIP</span><span class="en">(Contrastive Language-Image Pre-training, Radford 등 2021)</span>은 웹에서 모은 이미지-캡션 쌍 약 4억 개로 두 인코더를 함께 학습했다. 아이디어는 "정답 쌍은 가깝게, 나머지는 멀게"다. 배치에 \(N\)개의 쌍이 있으면 이미지 벡터 \(\mathbf u_i\)와 텍스트 벡터 \(\mathbf v_j\)(둘 다 길이 1로 정규화)로 \(N\times N\) 유사도 행렬을 만든다. 대각선 \(N\)칸이 정답이고 나머지 \(N^2-N\)칸이 오답(음성 쌍)이다. 정답 레이블을 사람이 달 필요가 없다. 캡션이 곧 레이블이다.</p>
+    <div class="formula">$$s_{ij} = \frac{\mathbf u_i\cdot\mathbf v_j}{\tau},\qquad
+      \mathcal L_{I\to T} = -\frac1N\sum_{i=1}^{N}\log\frac{e^{s_{ii}}}{\sum_{j} e^{s_{ij}}},\qquad
+      \mathcal L_{T\to I} = -\frac1N\sum_{j=1}^{N}\log\frac{e^{s_{jj}}}{\sum_{i} e^{s_{ij}}},\qquad
+      \mathcal L = \tfrac12\bigl(\mathcal L_{I\to T} + \mathcal L_{T\to I}\bigr)$$
+      <div class="where">이것이 <b>InfoNCE</b> 손실이다. 각 행(이미지 하나)에서 \(N\)개 캡션 중 정답을 고르는 \(N\)-클래스 분류의 교차 엔트로피이고, 열 방향(캡션 하나에서 이미지 고르기)도 똑같이 계산해 평균한다. \(\tau\)는 <b>온도</b>로, CLIP은 학습 가능한 값으로 두고 초깃값 0.07에서 시작했다(로짓 배율 \(1/\tau\)는 100으로 상한).</div>
+    </div>
+    <p>숫자로 감을 잡아 보자. 모든 유사도가 같으면 각 행의 softmax는 균등하고 손실은 \(\ln N\)이다. \(N=4\)이면 \(\ln 4\approx 1.386\), CLIP의 배치 32,768이면 \(\ln 32768\approx 10.4\)다. 학습은 이 '찍기 수준'에서 손실을 끌어내리는 과정이다. 배치가 클수록 한 번에 비교하는 오답이 많아져 더 어려운 문제가 되고, 그래서 대조 학습은 큰 배치를 선호한다. 온도는 확률 분포의 날카로움을 정한다. 정답 코사인이 0.30, 오답이 0.25로 차이가 0.05밖에 안 나도 \(\tau=0.01\)이면 로짓 차이가 5가 되어 정답 확률이 크게 쏠린다. 반대로 \(\tau=1\)이면 로짓 차이 0.05로 거의 구분하지 못한다(<a href="generation.html#temperature">8장</a>의 온도와 같은 수학이다).</p>
+
+    <div class="sim" id="sim-clip">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>CLIP 유사도 행렬과 InfoNCE 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-clip"></canvas><span class="hint">점을 끌어 방향을 바꾼다</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온도 τ <output id="clip-tau-out"></output></span><input type="range" id="clip-tau" min="-2" max="0" step="0.02" value="-1"></label>
+          <div class="ctrl"><span>행렬 보기</span><div class="seg" id="clip-view"><button data-value="cos" class="on">코사인</button><button data-value="row">행 softmax</button><button data-value="col">열 softmax</button></div></div>
+          <button class="btn" id="clip-shuffle">캡션 섞기 (오정렬)</button>
+          <button class="btn primary" id="clip-train">학습 20스텝 (경사하강)</button>
+          <button class="btn" id="clip-reset">초기화</button>
+        </div>
+      </div>
+      <div class="sim-panel"><div class="mm-matwrap"><table class="mat mm-mat" id="clip-mat"></table><div class="mm-note" id="clip-detail"></div></div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">L(I→T)</span><span class="v" id="clip-o-i2t">—</span></div>
+        <div class="stat"><span class="k">L(T→I)</span><span class="v" id="clip-o-t2i">—</span></div>
+        <div class="stat"><span class="k">대칭 InfoNCE L</span><span class="v" id="clip-o-l">—</span></div>
+        <div class="stat"><span class="k">찍기 기준 ln N</span><span class="v" id="clip-o-base">—</span></div>
+        <div class="stat"><span class="k">top-1 정확도 (I→T)</span><span class="v" id="clip-o-acc">—</span></div>
+      </div>
+      <div class="sim-note">교육용으로 손으로 정한 2차원 임베딩 4쌍이다(실제 CLIP은 512~1,024차원). 네모 = 이미지 \(\mathbf u_i\), 동그라미 = 텍스트 \(\mathbf v_j\), 같은 번호가 정답 쌍이다. 코사인은 방향만 보므로 점을 멀리 끌어도 값이 같다. 해볼 것: ① 처음에는 '고양이'·'강아지' 텍스트가 가까워 1행 확률이 둘로 갈린다(hard negative). ② τ = 1이면 코사인 차이가 확률로 거의 번지지 않아 손실이 ln 4 ≈ 1.386 근처다. ③ '캡션 섞기'를 누르면 대각선이 오답이 되어 손실이 ln N보다 커진다. ④ '학습 20스텝'은 이 손실의 수치 미분 기울기로 8개 벡터를 실제로 움직인다.</div>
+    </div>
+
+    <p>학습이 끝난 CLIP은 <b>제로샷 분류</b>를 한다. 클래스 이름마다 "a photo of a {고양이}" 같은 문장을 만들어 텍스트 벡터를 얻고, 이미지 벡터와 코사인이 가장 큰 클래스를 고른다. 분류기를 따로 학습하지 않았는데도 ImageNet에서 약 76%(ViT-L/14@336, 2021 논문 기준)를 냈다. 같은 텍스트 인코더는 이후 Stable Diffusion의 조건 입력으로, 같은 이미지 인코더는 LLaVA 같은 VLM의 눈으로 재사용되었다. 이후 SigLIP(2023)은 행 단위 softmax 대신 모든 칸을 독립적인 이진 분류(시그모이드)로 바꿔, 배치 전체의 정규화 없이도 학습되게 했다.</p>
+    <div class="callout warn"><strong>흔한 오해: "CLIP은 이미지를 이해해 설명할 수 있다"</strong><p>CLIP은 이미지와 문장의 <b>유사도 점수</b>만 낸다. 문장을 생성하지 못하고, 벡터 하나에 이미지 전체를 압축하므로 "고양이가 두 마리인가 세 마리인가", "컵이 왼쪽인가 오른쪽인가" 같은 개수·위치 관계에 약하다고 알려져 있다. 캡션을 생성하거나 질문에 답하려면 다음 절의 VLM이 필요하다.</p></div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="vlm">
+    <h2>VLM: LLM에 눈을 달기</h2>
+    <p><span class="term">VLM</span><span class="en">(Vision-Language Model)</span>은 이미지(와 텍스트)를 입력받아 텍스트를 생성하는 모델이다. LLaVA(2023)가 보여 준 표준 구조는 놀랄 만큼 단순하다. <b>사전학습된 비전 인코더</b>(CLIP·SigLIP의 ViT) + <b>프로젝터</b> + <b>사전학습된 LLM</b>. 세 부품 중 새로 학습하는 것은 처음엔 프로젝터뿐이다.</p>
+
+    <h3 id="vit-patch">ViT 패치 토큰화: 이미지 한 장은 몇 토큰인가</h3>
+    <p>ViT<span class="en">(Dosovitskiy 등, 2020)</span>는 이미지를 \(P\times P\) 픽셀 정사각형 <span class="term">패치</span>로 자른다. 각 패치(\(P\cdot P\cdot 3\)개 값)를 펴서 선형층으로 \(d\)차원 벡터 하나로 만들면 그것이 토큰 하나다. 위치 임베딩을 더한 뒤 일반 Transformer 인코더에 넣는다. 토큰 수는 단순한 나눗셈이다.</p>
+    <div class="formula">$$N_{\text{patch}} = \frac{H}{P}\times\frac{W}{P}, \qquad 224\times224,\ P=14:\ 16\times16 = 256, \qquad 336\times336,\ P=14:\ 24\times24 = 576$$
+      <div class="where">ViT-L/14의 "/14"가 패치 크기다. 패치 하나는 14·14·3 = 588개 값이고 이를 1,024차원으로 투영한다. 분류용 [CLS] 토큰을 하나 더하는 경우도 있지만, VLM은 보통 패치 토큰 전체를 쓴다. 해상도를 2배로 올리면 토큰은 4배, 인코더의 어텐션 비용은 약 16배가 된다.</div>
+    </div>
+    <p>문제는 해상도다. A4 문서를 150 dpi로 스캔하면 약 1,240×1,754 픽셀이고, 10 pt 글자 높이는 약 21픽셀이다. 이것을 336×336으로 줄이면 세로 배율이 336/1,754 ≈ 0.19라서 글자가 약 4픽셀로 뭉개진다. 아무리 큰 LLM을 붙여도 읽을 수 없다. 해법은 두 갈래다.</p>
+    <ul>
+      <li><b>타일링</b><span class="en">(tiling, AnyRes)</span>: 큰 이미지를 인코더 기본 해상도(예: 448×448) 타일 여러 장으로 잘라 각각 인코딩하고, 전체 구도를 위해 축소한 썸네일 한 장을 더한다. LLaVA-NeXT(2024), InternVL 계열이 이 방식이다. 3×3 타일 + 썸네일이면 10장 분량이다.</li>
+      <li><b>네이티브 해상도</b>: 이미지를 정사각형으로 늘리지 않고 원래 비율 그대로 패치를 자른다. 2D 위치 인코딩(예: 2D RoPE)으로 가변 격자를 처리한다. Qwen2-VL(2024)이 대표적이다.</li>
+    </ul>
+    <p>어느 쪽이든 토큰이 폭증하므로 <b>토큰 병합</b>을 함께 쓴다. 이웃한 2×2 패치 벡터 4개를 이어 붙여(4d차원) MLP로 하나로 줄이면 토큰이 1/4이 된다(픽셀 셔플, 패치 병합). 이렇게 하면 448×448 타일 하나가 32×32 = 1,024 패치에서 256 토큰이 된다.</p>
+
+    <div class="sim" id="sim-patch">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이미지 → 시각 토큰 수 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-patch"></canvas><span class="hint">오른쪽 아래 모서리를 끌어 크기 조절</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>너비 W <output id="pt-w-out"></output></span><input type="range" id="pt-w" min="112" max="3072" step="2" value="224"></label>
+          <label class="ctrl"><span>높이 H <output id="pt-h-out"></output></span><input type="range" id="pt-h" min="112" max="3072" step="2" value="224"></label>
+          <div class="ctrl"><span>패치 크기 P</span><div class="seg" id="pt-p"><button data-value="14" class="on">14</button><button data-value="16">16</button></div></div>
+          <div class="ctrl"><span>처리 방식</span><div class="seg" id="pt-mode"><button data-value="resize" class="on">고정 해상도</button><button data-value="tile">타일링</button><button data-value="native">네이티브</button></div></div>
+          <div class="ctrl"><span>기본 해상도 R (고정·타일)</span><div class="seg" id="pt-r"><button data-value="224" class="on">224</button><button data-value="336">336</button><button data-value="448">448</button></div></div>
+          <label class="ctrl"><span>최대 타일 수 <output id="pt-max-out"></output></span><input type="range" id="pt-max" min="1" max="12" step="1" value="6"></label>
+          <label class="check"><input type="checkbox" id="pt-thumb" checked> 썸네일 타일 추가 (타일링)</label>
+          <label class="check"><input type="checkbox" id="pt-merge"> 2×2 토큰 병합</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">패치 격자</span><span class="v" id="pt-o-grid">—</span></div>
+        <div class="stat"><span class="k">시각 토큰 수</span><span class="v" id="pt-o-tok">—</span></div>
+        <div class="stat"><span class="k">유효 해상도 배율</span><span class="v" id="pt-o-scale">—</span></div>
+        <div class="stat"><span class="k">KV 캐시 (8B LLM, BF16)</span><span class="v" id="pt-o-kv">—</span></div>
+        <div class="stat"><span class="k">LLM 프리필 연산</span><span class="v" id="pt-o-flop">—</span></div>
+      </div>
+      <div class="sim-note">KV 캐시는 Llama 3 8B 구조의 토큰당 128 KiB(BF16), 프리필은 \(2\times 8\text{B}\times\)토큰 FLOP 근사다(<a href="generation.html#kvmem">8장</a>). 네이티브 모드는 W·H를 \(P\)(병합 시 \(2P\))의 배수로 반올림하고, 16,384토큰을 넘으면 비율을 유지한 채 줄인다(교육용 가정, 실제 상한은 모델마다 다르다). 해볼 것: ① 224×224, P=14 → 256토큰, R=336 → 576토큰. ② 1,344×1,344, 타일링, R=448, 최대 9타일, 병합 → (9 + 1) × 256 = 2,560토큰. ③ 같은 그림을 '고정 해상도'로 바꾸면 유효 해상도 배율이 0.33 아래로 떨어져 작은 글자를 잃는다. ④ 2,048×512에서 고정 해상도는 격자가 가로로 찌그러진다(비율 왜곡).</div>
+    </div>
+
+    <h3 id="projector">프로젝터(어댑터): 시각 토큰을 LLM 임베딩 공간으로</h3>
+    <p>ViT의 출력 \(\mathbf z\in\mathbb R^{d_v}\)(예: 1,024)와 LLM의 토큰 임베딩 \(\mathbb R^{d_{\text{LLM}}}\)(예: 4,096)은 차원도 다르고, 무엇보다 <b>좌표계의 의미</b>가 다르다. 프로젝터는 이 둘을 잇는 번역기다.</p>
+    <div class="formula">$$\mathbf h = W_2\,\mathrm{GELU}(W_1\mathbf z + \mathbf b_1) + \mathbf b_2,\qquad W_1\in\mathbb R^{4096\times1024},\ W_2\in\mathbb R^{4096\times4096}$$
+      <div class="where">LLaVA-1.5의 2층 MLP 프로젝터 형태다. 파라미터는 약 \(4096\cdot1024 + 4096\cdot4096 \approx 2{,}100\)만 개로 8B LLM의 0.3%에 불과하다. 처음 LLaVA(2023)는 선형층 하나였다. BLIP-2(2023)의 Q-Former는 학습 가능한 쿼리 32개가 크로스 어텐션으로 이미지 특징을 요약해 토큰 수 자체를 32개로 고정한다.</div>
+    </div>
+    <p>학습은 보통 두 단계다. <b>1단계(정렬)</b>: 비전 인코더와 LLM을 얼리고 프로젝터만 이미지-캡션 쌍으로 학습한다. 시각 토큰을 LLM이 '알아듣는 단어'로 바꾸는 법을 배우는 단계다. <b>2단계(지시 튜닝)</b>: 이미지에 대한 질문-답 대화 데이터로 프로젝터와 LLM(경우에 따라 인코더까지)을 함께 학습한다(<a href="llm.html#lm-align">7장</a>의 SFT와 같다). 프로젝터가 작아도 되는 이유는, CLIP 인코더가 이미 언어와 정렬된 특징을 내기 때문이다. 좌표계를 돌리고 늘리는 정도의 변환이면 충분하다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 640 210" role="img" aria-label="VLM 입력 시퀀스 구성: 시스템 프롬프트, 이미지 토큰 576개, 질문 텍스트">
+        <rect x="12" y="20" width="96" height="70" rx="8" class="f-surface"/><text x="60" y="50" text-anchor="middle" class="t">이미지</text><text x="60" y="70" text-anchor="middle" class="t-mono">336×336</text>
+        <path d="M108 55 H128" class="s-line"/>
+        <rect x="128" y="34" width="92" height="42" rx="8" class="f-acc-soft"/><text x="174" y="53" text-anchor="middle" class="t">ViT-L/14</text><text x="174" y="69" text-anchor="middle" class="t-mono">576 × 1024</text>
+        <path d="M220 55 H240" class="s-line"/>
+        <rect x="240" y="34" width="92" height="42" rx="8" class="f-acc2-soft"/><text x="286" y="53" text-anchor="middle" class="t">MLP 프로젝터</text><text x="286" y="69" text-anchor="middle" class="t-mono">576 × 4096</text>
+        <path d="M286 76 V108" class="s-acc"/>
+        <text x="12" y="126" class="t-dim">LLM이 받는 한 줄의 토큰 열</text>
+        <rect x="12" y="136" width="110" height="34" rx="6" class="f-elev"/><text x="67" y="158" text-anchor="middle" class="t-mono">시스템 ~30</text>
+        <rect x="126" y="136" width="300" height="34" rx="6" class="f-acc-soft"/><text x="276" y="158" text-anchor="middle" class="t-mono">이미지 토큰 576개 (텍스트 아님)</text>
+        <rect x="430" y="136" width="120" height="34" rx="6" class="f-elev"/><text x="490" y="158" text-anchor="middle" class="t-mono">질문 ~20</text>
+        <rect x="554" y="136" width="74" height="34" rx="6" class="f-acc2-soft"/><text x="591" y="158" text-anchor="middle" class="t-mono">답 →</text>
+        <text x="12" y="196" class="t-dim">인과 마스크 하에서 질문 토큰이 576개 이미지 토큰 전체를 어텐션으로 조회한다.</text>
+      </svg>
+      <figcaption><b>그림 15-2.</b> LLaVA-1.5식 VLM의 입력. 이미지 하나가 텍스트 질문보다 수십 배 많은 토큰을 차지한다. 이미지 토큰은 어휘에 있는 단어가 아니라 연속 벡터이므로 '디토큰화'할 수 없고, LLM의 출력은 여전히 텍스트 토큰이다.</figcaption>
+    </figure>
+
+    <h3 id="vlm-tasks">OCR, 문서 이해, 그라운딩</h3>
+    <p>VLM의 실무 가치는 대부분 <b>글자가 있는 이미지</b>에서 나온다. 고전적인 파이프라인은 OCR 엔진이 글자와 위치를 뽑고, 레이아웃 분석기가 표·단락을 나눈 뒤, 텍스트 모델이 의미를 해석했다. VLM은 이 단계를 하나로 합친다(OCR-free 문서 이해, Donut 2022 이후).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>작업</th><th>입력 → 출력</th><th>핵심 요구</th><th>대표 실패</th></tr></thead>
+      <tbody>
+        <tr><td>OCR / 텍스트 추출</td><td>스캔·사진 → 글자</td><td>고해상도(작은 글자), 다국어</td><td>비슷한 글자 혼동(0/O, 1/l), 줄 건너뜀</td></tr>
+        <tr><td>문서 이해 (DocVQA, 표·차트)</td><td>문서 → 질문의 답, JSON</td><td>레이아웃·읽기 순서, 표 구조</td><td>행·열 어긋남, 차트 값 어림</td></tr>
+        <tr><td>그라운딩 (grounding)</td><td>"빨간 컵" → 박스 좌표</td><td>위치를 좌표 토큰으로 출력</td><td>좌표 규약 혼동, 작은 물체 누락</td></tr>
+        <tr><td>GUI 이해 (컴퓨터 사용)</td><td>화면 캡처 → 클릭 위치</td><td>작은 아이콘, 정확한 좌표</td><td>비슷한 버튼 오클릭</td></tr>
+      </tbody>
+    </table></div>
+    <p><span class="term">그라운딩</span><span class="en">(grounding)</span>은 말과 이미지 영역을 대응시키는 일이다. VLM은 좌표도 텍스트로 출력한다. 예를 들어 "<span class="t-mono">[312, 140, 455, 298]</span>"처럼 박스의 (x1, y1, x2, y2)를 숫자 토큰으로 쓴다. 모델마다 0~1,000 정규화 좌표, 원본 픽셀 좌표 등 규약이 달라 그대로 섞어 쓰면 엉뚱한 곳을 가리킨다. 박스를 출력하게 하면 답의 근거를 사람이 눈으로 검증할 수 있다는 장점도 있다. 이 '근거 제시' 역할은 <a href="rag.html">10장</a>의 출처 번호와 같다.</p>
+
+    <h3 id="vlm-hallucination">VLM의 환각</h3>
+    <p>VLM의 <span class="term">환각</span><span class="en">(hallucination)</span>은 이미지에 <b>없는</b> 물체·글자·관계를 있다고 말하는 것이다. 식탁 사진을 보고 "포크와 나이프가 놓여 있다"고 하는데 실제로는 젓가락뿐인 경우가 전형적인 <b>물체 환각</b><span class="en">(object hallucination)</span>이다. "이 사진에 X가 있나요?"라는 예/아니오 질문으로 측정하는 POPE(2023) 같은 벤치마크가 이 경향을 체계적으로 재기 위해 만들어졌다.</p>
+    <ul>
+      <li><b>언어 사전 확률의 우세</b>: LLM 부분은 수조 토큰의 텍스트에서 "식탁 → 포크"의 강한 연관을 배웠다. 시각 근거가 약하면 이 사전 확률이 이긴다(<a href="llm.html#lm-halluc">7장</a>의 환각과 같은 뿌리).</li>
+      <li><b>해상도와 압축 손실</b>: 576토큰으로 줄이면 작은 글자·작은 물체는 애초에 정보가 없다. 모델은 "안 보인다" 대신 그럴듯한 값을 채운다.</li>
+      <li><b>유도 질문</b>: "사진 속 강아지는 무슨 색이야?"처럼 존재를 전제한 질문에 모델이 맞장구치기 쉽다.</li>
+      <li><b>긴 답변 후반부</b>: 생성이 길어질수록 앞서 쓴 텍스트에 더 의존하고 이미지 토큰에 대한 어텐션이 약해지는 경향이 보고되었다.</li>
+    </ul>
+    <div class="callout tip"><strong>실무 완화책</strong><p>(1) 고해상도·타일링 또는 관심 영역을 잘라(crop) 다시 보게 하기, (2) 박스 좌표로 근거를 함께 출력하게 하고 검증하기, (3) "보이지 않으면 '확인 불가'라고 답하라"는 지시와 구조화 출력(<a href="generation.html#constrained">8장</a>), (4) 숫자·금액은 OCR 결과와 교차 확인, (5) 존재를 전제하지 않는 질문 설계("강아지가 있다면 무슨 색인가?").</p></div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="asr-tts">
+    <h2>음성: ASR과 TTS</h2>
+    <p>음성은 1초에 수만 개의 샘플이 흐르는 1차원 신호다. 음성 인식(<span class="term">ASR</span><span class="en">(Automatic Speech Recognition)</span>)은 이것을 글자로, 음성 합성(<span class="term">TTS</span><span class="en">(Text-to-Speech)</span>)은 글자를 다시 파형으로 바꾼다. 둘 다 "긴 파형 ↔ 짧은 토큰 열"의 길이 변환이 핵심이다.</p>
+
+    <h3 id="mel-spectrogram">파형에서 멜 스펙트로그램으로</h3>
+    <p>원시 파형을 그대로 Transformer에 넣으면 30초에 48만 토큰이다. 그래서 먼저 <b>짧은 창</b>으로 잘라 주파수 성분을 본다. 창 하나(예: 25 ms)를 푸리에 변환하면 그 순간의 주파수별 에너지가 나오고, 창을 <b>hop</b>(예: 10 ms)만큼 밀며 반복하면 시간×주파수 그림, 스펙트로그램이 된다. 사람의 귀는 저주파의 차이에 민감하고 고주파는 둔감하므로 주파수 축을 <b>멜 척도</b>로 묶어 80~128개 대역만 남기고, 에너지에 로그를 취한다. 이것이 <span class="term">로그 멜 스펙트로그램</span><span class="en">(log-mel spectrogram)</span>이다.</p>
+    <div class="formula">$$\text{프레임 수} \approx \frac{L_{\text{samples}}}{\text{hop}},\qquad
+      16\,\text{kHz},\ \text{창 }400\ (25\,\text{ms}),\ \text{hop }160\ (10\,\text{ms}) \Rightarrow 100\ \text{프레임/초}$$
+      <div class="where">30초 = 480,000 샘플 → 3,000 프레임, 각 프레임은 80차원(Whisper large-v3는 128차원) 벡터다. 멜 척도는 \(m = 2595\log_{10}(1+f/700)\)로, 0~1 kHz는 촘촘하게, 4~8 kHz는 성기게 나눈다. 16 kHz 샘플링은 나이퀴스트 한계로 8 kHz까지의 소리만 담는데, 사람 목소리의 이해에는 충분하다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>단계</th><th>30초 음성의 크기</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>파형 (16 kHz)</td><td>480,000 × 1</td><td>1초 16,000 샘플</td></tr>
+        <tr><td>로그 멜 (hop 10 ms, 80 멜)</td><td>3,000 × 80</td><td>시간 해상도 10 ms</td></tr>
+        <tr><td>Whisper 인코더 입력 (합성곱 stride 2)</td><td>1,500 × d</td><td>위치 하나 = 20 ms</td></tr>
+        <tr><td>출력 텍스트 (한국어 약 120어절)</td><td>수백 토큰</td><td>BPE 토큰</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 id="asr">인코더-디코더 ASR: Whisper의 구조</h3>
+    <p>Whisper<span class="en">(Radford 등, 2022)</span>는 원래 Transformer(<a href="transformer.html">6장</a>)와 같은 <b>인코더-디코더</b>다. 인코더는 30초 단위 로그 멜을 합성곱 2층(두 번째가 stride 2)으로 1,500개 위치로 줄인 뒤 셀프 어텐션으로 소리 전체의 문맥을 만든다. 디코더는 자기회귀로 텍스트 토큰을 하나씩 내며, 매 층에서 <a href="attention.html#variants">크로스 어텐션</a>으로 인코더 출력을 조회한다. 즉 "지금 쓸 글자에 해당하는 소리가 어디인가"를 어텐션이 찾는다. 디코더 앞에는 언어·작업을 지정하는 특수 토큰(전사/번역, 타임스탬프 유무)이 붙어, 한 모델로 다국어 전사와 영어 번역을 한다. 약 68만 시간의 약지도<span class="en">(weakly supervised)</span> 웹 음성으로 학습해 잡음·억양에 강한 것이 특징이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 640 250" role="img" aria-label="ASR 인코더-디코더와 TTS 파이프라인">
+        <text x="12" y="22" class="t-acc">ASR (Whisper류)</text>
+        <rect x="12" y="34" width="84" height="40" rx="6" class="f-surface"/><text x="54" y="58" text-anchor="middle" class="t">파형</text>
+        <rect x="108" y="34" width="96" height="40" rx="6" class="f-surface"/><text x="156" y="52" text-anchor="middle" class="t">로그 멜</text><text x="156" y="67" text-anchor="middle" class="t-mono">3000×80</text>
+        <rect x="216" y="34" width="110" height="40" rx="6" class="f-acc-soft"/><text x="271" y="52" text-anchor="middle" class="t">인코더</text><text x="271" y="67" text-anchor="middle" class="t-dim">합성곱+셀프 어텐션</text>
+        <rect x="372" y="34" width="120" height="40" rx="6" class="f-acc2-soft"/><text x="432" y="52" text-anchor="middle" class="t">디코더</text><text x="432" y="67" text-anchor="middle" class="t-mono">자기회귀 + cross</text>
+        <rect x="504" y="34" width="124" height="40" rx="6" class="f-elev"/><text x="566" y="58" text-anchor="middle" class="t">"오늘 날씨는…"</text>
+        <path d="M96 54 H108 M204 54 H216 M326 54 H372 M492 54 H504" class="s-line"/>
+        <text x="349" y="48" text-anchor="middle" class="t-mono">K,V</text>
+        <text x="12" y="112" class="t-acc">TTS (2단계 고전형 / 코덱 토큰형)</text>
+        <rect x="12" y="124" width="84" height="40" rx="6" class="f-elev"/><text x="54" y="148" text-anchor="middle" class="t">텍스트</text>
+        <rect x="108" y="124" width="96" height="40" rx="6" class="f-surface"/><text x="156" y="142" text-anchor="middle" class="t">정규화·G2P</text><text x="156" y="157" text-anchor="middle" class="t-mono">"3시"→"세 시"</text>
+        <rect x="216" y="124" width="142" height="40" rx="6" class="f-acc-soft"/><text x="287" y="142" text-anchor="middle" class="t">음향 모델</text><text x="287" y="157" text-anchor="middle" class="t-mono">→ 멜 or 코덱 토큰</text>
+        <rect x="370" y="124" width="122" height="40" rx="6" class="f-acc2-soft"/><text x="431" y="142" text-anchor="middle" class="t">보코더 / 디코더</text><text x="431" y="157" text-anchor="middle" class="t-mono">→ 파형</text>
+        <rect x="504" y="124" width="124" height="40" rx="6" class="f-surface"/><text x="566" y="148" text-anchor="middle" class="t">24 kHz 음성</text>
+        <path d="M96 144 H108 M204 144 H216 M358 144 H370 M492 144 H504" class="s-line"/>
+        <text x="12" y="198" class="t-dim">코덱 토큰: 신경 오디오 코덱이 파형을 초당 수십 프레임 × 코드북 몇 개의 이산 토큰으로 압축</text>
+        <text x="12" y="220" class="t-dim">→ LLM처럼 "다음 오디오 토큰 예측"으로 음성을 생성할 수 있다 (VALL-E, 2023 등)</text>
+      </svg>
+      <figcaption><b>그림 15-3.</b> 위: 인코더-디코더 ASR. 디코더의 크로스 어텐션이 텍스트 토큰과 소리 구간을 맞춘다. 아래: TTS는 반대 방향으로 길이를 늘린다. 텍스트 정규화(숫자·약어 읽기) → 음향 특징(멜 스펙트로그램) 또는 코덱 토큰 → 보코더가 파형을 복원한다.</figcaption>
+    </figure>
+    <p>다른 계열인 <b>CTC</b><span class="en">(Connectionist Temporal Classification)</span> 모델은 디코더 없이 프레임마다 글자(또는 빈칸)를 내고 중복·빈칸을 지운다. 빠르고 스트리밍에 유리하지만 출력 토큰 간 언어적 의존을 직접 모델링하지 않는다. 인코더-디코더는 더 정확하지만 자기회귀라 느리고, 무음 구간에서 없는 문장을 지어내는 <b>ASR 환각</b>이 보고되어 앞단에 VAD<span class="en">(Voice Activity Detection)</span>를 두는 것이 흔하다.</p>
+
+    <h3 id="wer">WER: 편집 거리로 인식 오류 세기</h3>
+    <p>ASR의 표준 지표는 <span class="term">WER</span><span class="en">(Word Error Rate)</span>이다. 정답 문장(reference)을 인식 문장(hypothesis)으로 바꾸는 데 필요한 최소 편집 횟수를 정답 단어 수로 나눈다.</p>
+    <div class="formula">$$\mathrm{WER} = \frac{S + D + I}{N},\qquad
+      d(i,j) = \min\begin{cases} d(i-1,j) + 1 & \text{삭제 (D)}\\ d(i,j-1) + 1 & \text{삽입 (I)}\\ d(i-1,j-1) + [r_i \ne h_j] & \text{일치 또는 치환 (S)}\end{cases}$$
+      <div class="where">\(N\): 정답 단어 수, \(S\): 치환, \(D\): 삭제(정답에 있는데 인식 못 함), \(I\): 삽입(없는 말을 넣음). \(d(i,j)\)는 정답 앞 \(i\)단어와 인식 앞 \(j\)단어 사이의 편집 거리이고 \(d(i,0)=i,\ d(0,j)=j\)에서 시작해 표를 채운다(Levenshtein 거리, 동적 계획법). 오른쪽 아래 칸이 \(S+D+I\)이며, 역추적하면 각 오류의 종류를 얻는다.</div>
+    </div>
+    <p>예를 들어 정답 "오늘 서울 날씨는 맑음"(4단어)을 "오늘 서울에 날씨 맑음 입니다"로 인식했다고 하자. 최소 정렬은 '서울→서울에'(S), '날씨는→날씨'(S), '입니다' 삽입(I)으로 \(S=2, I=1\)이고 WER = 3/4 = 75%다. 분모가 정답 단어 수이고 삽입에는 상한이 없으므로 <b>WER은 100%를 넘을 수 있다.</b> 한국어처럼 띄어쓰기와 조사가 붙는 언어는 '날씨는'과 '날씨'가 통째로 다른 단어가 되어 WER이 과장되기 쉽다. 그래서 한국어·중국어·일본어는 글자 단위 <b>CER</b><span class="en">(Character Error Rate)</span>을 함께, 또는 대신 보고하는 경우가 많다.</p>
+
+    <div class="sim" id="sim-wer">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>WER 계산기: 편집 거리 DP와 역추적</h3></div>
+      <div class="mm-in">
+        <label>정답 (reference)<input class="ab-input" id="wer-ref" type="text" value="오늘 서울 날씨는 맑음"></label>
+        <label>인식 결과 (hypothesis)<input class="ab-input" id="wer-hyp" type="text" value="오늘 서울에 날씨 맑음 입니다"></label>
+        <div class="mm-chips" id="wer-chips"></div>
+        <div class="ctrl"><span>단위</span><div class="seg" id="wer-unit"><button data-value="word" class="on">단어 (WER)</button><button data-value="char">글자 (CER, 공백 제외)</button></div></div>
+      </div>
+      <div class="sim-panel">
+        <div class="mm-legend"><span><i style="background:var(--ok)"></i>일치</span><span><i style="background:var(--warn)"></i>치환 S</span><span><i style="background:var(--bad)"></i>삭제 D</span><span><i style="background:var(--accent-2)"></i>삽입 I</span></div>
+        <div class="mm-align" id="wer-align" style="margin-top:8px"></div>
+      </div>
+      <div class="sim-panel"><div class="mm-matwrap"><table class="mat mm-dp" id="wer-dp"></table><div class="mm-note" id="wer-dpnote"></div></div></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정답 길이 N</span><span class="v" id="wer-o-n">—</span></div>
+        <div class="stat"><span class="k">치환 S</span><span class="v" id="wer-o-s">—</span></div>
+        <div class="stat"><span class="k">삭제 D</span><span class="v" id="wer-o-d">—</span></div>
+        <div class="stat"><span class="k">삽입 I</span><span class="v" id="wer-o-i">—</span></div>
+        <div class="stat"><span class="k">오류율</span><span class="v" id="wer-o-wer">—</span></div>
+      </div>
+      <div class="sim-note">두 문장을 직접 고쳐 보면 DP 표와 정렬이 즉시 다시 계산된다. 표의 각 칸은 \(d(i,j)\)이고, 테두리 칸이 역추적 경로다(동점이면 대각선 → 삭제 → 삽입 순으로 고른다. 같은 S+D+I를 내는 정렬이 여럿일 수 있다). 해볼 것: ① 예시 '띄어쓰기'에서 같은 말인데도 WER이 크고 CER은 0에 가까운 것을 확인하자. ② '삽입 폭주' 예시로 WER이 100%를 넘는 것을 보자. ③ 정답을 비우면 N = 0이라 정의되지 않는다. 표의 크기는 화면을 위해 단어 14개(글자 20개)까지만 그린다.</div>
+    </div>
+
+    <div class="callout warn"><strong>흔한 오해: "WER 5%면 정확도 95%"</strong><p>WER은 정확도의 보수가 아니다. 삽입 때문에 음수 '정확도'도 가능하고, 모든 오류를 똑같이 센다. "삼백만 원"을 "삼십만 원"으로 틀린 것과 "음"을 빠뜨린 것이 같은 1점이다. 업무 지표로 쓸 때는 <b>텍스트 정규화</b>(숫자 표기, 문장 부호, 대소문자 통일)를 먼저 맞추고, 숫자·고유명사 같은 핵심 항목의 오류율을 따로 보는 것이 좋다. 정규화 규칙만 바꿔도 WER이 몇 %p씩 달라질 수 있어, 서로 다른 논문의 WER을 그대로 비교하기 어렵다.</p></div>
+
+    <h3 id="tts">TTS: 텍스트 → 음향 특징 → 보코더</h3>
+    <p>TTS는 ASR의 역방향이지만 더 어렵다. 같은 문장을 읽는 방법(억양, 속도, 감정, 화자)이 무수히 많은 <b>일대다</b> 문제이기 때문이다. 전형적인 파이프라인은 세 단계다.</p>
+    <ol>
+      <li><b>텍스트 정규화·발음 변환</b>: "3시 15분"을 "세 시 십오 분"으로, "AI"를 "에이아이"로 읽는 규칙. 한국어는 연음·경음화 같은 발음 규칙(G2P, grapheme-to-phoneme)이 필요하다.</li>
+      <li><b>음향 모델</b>: 음소 열 → 멜 스펙트로그램. Tacotron 2(2017)는 자기회귀, FastSpeech 2(2020)는 음소마다 길이를 예측해 한 번에 만드는 비자기회귀 방식이다. 음소 하나가 프레임 수십 개로 늘어나는 <b>길이 확장</b>이 핵심이다.</li>
+      <li><b>보코더</b><span class="en">(vocoder)</span>: 멜 → 파형. 멜은 위상 정보를 버렸으므로 그대로 역변환할 수 없다. HiFi-GAN(2020) 같은 신경 보코더가 1프레임(예: hop 256 샘플)을 수백 샘플로 복원한다.</li>
+    </ol>
+    <p>최근에는 <b>신경 오디오 코덱</b>이 중심이 되었다. 코덱 인코더가 파형을 초당 수십 프레임으로 줄이고, 각 프레임을 잔차 벡터 양자화<span class="en">(RVQ)</span>로 코드북 몇 개의 정수 토큰으로 바꾼다. 예를 들어 EnCodec(2022)은 24 kHz 음성을 초당 75프레임 × 코드북 8개 × 10비트 = 6 kbps로 압축한다. 소리가 이산 토큰이 되면 TTS는 "텍스트 다음에 올 오디오 토큰 예측"이라는 <b>언어 모델링 문제</b>가 된다. VALL-E(2023)는 3초짜리 목소리 샘플을 프롬프트로 주면 그 화자의 목소리로 읽는 제로샷 음성 복제를 보였다. 이 능력은 보이스 피싱·딥페이크 위험과 직결되므로 동의 확인, 워터마크, 공개 범위 제한이 함께 논의된다.</p>
+
+    <h3 id="speech-to-speech">음성 대 음성 모델</h3>
+    <p>음성 비서를 만드는 가장 쉬운 방법은 <b>캐스케이드</b><span class="en">(cascade)</span>다. ASR → 텍스트 LLM → TTS를 직렬로 잇는다. 부품을 따로 고르고 고칠 수 있고, 중간 텍스트를 기록·검열하기 쉽다. 단점은 두 가지다. ① <b>지연 누적</b>: 발화 끝 감지 수백 ms + LLM 첫 토큰 수백 ms + TTS 첫 음성 수백 ms가 더해져 1초 안팎이 되기 쉽다(가정한 예). 사람 사이의 대화 차례 전환 간격은 평균 약 200 ms로 알려져 있다. ② <b>정보 손실</b>: 텍스트로 바뀌는 순간 억양, 감정, 웃음, 말 끊김 같은 비언어 정보가 사라진다.</p>
+    <p><b>음성 대 음성</b><span class="en">(speech-to-speech, end-to-end)</span> 모델은 오디오 토큰을 입력받아 오디오 토큰을 바로 낸다. 하나의 Transformer가 텍스트 토큰과 오디오 코덱 토큰을 같은 열에서 다루며(초기 융합), 듣는 중에도 말할 수 있는 <b>전이중</b><span class="en">(full-duplex)</span> 대화를 노린다. GPT-4o의 음성 모드(2024), Moshi(Kyutai, 2024) 등이 이 방향이다. 대가는 학습 데이터(대규모 대화 음성)와 평가·안전 검토의 어려움이다. 텍스트 중간 단계가 없으니 무엇을 말할지 미리 검사하기 어렵다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>항목</th><th>캐스케이드 (ASR→LLM→TTS)</th><th>음성 대 음성 (end-to-end)</th></tr></thead>
+      <tbody>
+        <tr><td>지연</td><td>단계 지연의 합 (스트리밍으로 단축)</td><td>짧게 만들기 유리, 끼어들기 가능</td></tr>
+        <tr><td>비언어 정보 (억양·감정)</td><td>대부분 손실</td><td>보존·생성 가능</td></tr>
+        <tr><td>부품 교체·디버깅</td><td>쉬움 (중간 텍스트 확인)</td><td>어려움</td></tr>
+        <tr><td>지식·추론 능력</td><td>최신 텍스트 LLM을 그대로 사용</td><td>음성 학습으로 텍스트 능력이 떨어질 수 있음</td></tr>
+        <tr><td>안전 필터</td><td>텍스트 단계에서 적용 쉬움</td><td>오디오 출력 검사 필요</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="diffusion">
+    <h2>디퓨전: 잡음을 걷어 내며 그리기</h2>
+    <p>텍스트 LLM은 토큰을 하나씩 이어 쓰지만, 이미지 생성의 주력은 <span class="term">디퓨전 모델</span><span class="en">(diffusion model)</span>이다. 아이디어는 거꾸로 생각하는 것이다. 깨끗한 이미지에 가우시안 잡음을 조금씩 더하면 결국 순수한 잡음이 된다. 이 과정은 공식 하나로 정확히 쓸 수 있다. 그렇다면 <b>잡음을 한 단계씩 걷어 내는 법</b>을 신경망에 배우게 하면, 순수한 잡음에서 출발해 이미지를 '조각'해 낼 수 있다. DDPM(Ho 등, 2020)이 이 틀을 실용화했고, Stable Diffusion(2022) 이후 이미지·영상·음성 생성으로 퍼졌다. 텍스트에 이 아이디어를 옮긴 마스크 디퓨전 언어 모델은 <a href="llm.html#lm-diff">7장</a>에서 다뤘다. 여기서는 연속값(픽셀, 잠재 벡터) 디퓨전의 원리를 다룬다.</p>
+
+    <h3 id="forward-process">순방향 과정: 잡음 더하기의 닫힌 꼴</h3>
+    <p>순방향<span class="en">(forward process)</span>은 학습이 필요 없는 고정된 과정이다. 단계 \(t=1,\dots,T\)마다 이전 값을 살짝 줄이고 잡음을 섞는다.</p>
+    <div class="formula">$$q(\mathbf x_t\mid\mathbf x_{t-1}) = \mathcal N\!\bigl(\sqrt{1-\beta_t}\,\mathbf x_{t-1},\ \beta_t\mathbf I\bigr)
+      \quad\Longrightarrow\quad
+      \mathbf x_t = \sqrt{\bar\alpha_t}\,\mathbf x_0 + \sqrt{1-\bar\alpha_t}\,\boldsymbol\varepsilon,\qquad \boldsymbol\varepsilon\sim\mathcal N(\mathbf 0,\mathbf I),\quad \bar\alpha_t = \prod_{s=1}^{t}(1-\beta_s)$$
+      <div class="where">가우시안을 여러 번 더해도 가우시안이므로, \(t\)단계를 하나씩 밟을 필요 없이 \(\mathbf x_0\)에서 <b>한 번에</b> \(\mathbf x_t\)를 만들 수 있다(오른쪽 식). \(\sqrt{1-\beta}\)로 줄이는 이유는 신호와 잡음의 분산 합을 1로 유지하기 위해서다(variance preserving). 신호 대 잡음비는 \(\mathrm{SNR}(t)=\bar\alpha_t/(1-\bar\alpha_t)\)로, \(t\)가 커지면 0으로 간다.</div>
+    </div>
+
+    <h3 id="noise-schedule">노이즈 스케줄</h3>
+    <p>\(\beta_t\)를 어떻게 늘릴지가 <span class="term">노이즈 스케줄</span><span class="en">(noise schedule)</span>이다. DDPM의 <b>선형 스케줄</b>은 \(T=1000\), \(\beta\)를 \(10^{-4}\)에서 \(0.02\)까지 고르게 늘린다. 계산해 보면 \(\bar\alpha_{100}\approx0.90\), \(\bar\alpha_{250}\approx0.52\), \(\bar\alpha_{500}\approx0.079\), \(\bar\alpha_{1000}\approx4\times10^{-5}\)이다. 중간 단계에서 이미 신호가 거의 사라져, 뒤쪽 절반의 단계는 사실상 "잡음에서 잡음으로"의 낭비가 된다. Nichol &amp; Dhariwal(2021)의 <b>코사인 스케줄</b> \(\bar\alpha_t = \cos^2\!\bigl(\tfrac{t/T+s}{1+s}\cdot\tfrac{\pi}{2}\bigr)/\cos^2\!\bigl(\tfrac{s}{1+s}\cdot\tfrac{\pi}{2}\bigr)\)(\(s=0.008\))은 \(\bar\alpha_{500}\approx0.49\)로 신호를 더 오래 남겨, 저해상도 이미지에서 품질을 높였다. 해상도가 높을수록 같은 잡음에서도 이웃 픽셀 평균으로 신호가 살아남기 때문에, 고해상도 모델은 스케줄을 잡음 쪽으로 더 밀어 준다(SNR 이동).</p>
+
+    <h3 id="noise-prediction">학습 목표: 섞인 잡음을 맞혀라</h3>
+    <p>역방향<span class="en">(reverse process)</span> \(p_\theta(\mathbf x_{t-1}\mid\mathbf x_t)\)를 배우는 대신, DDPM은 놀랍도록 단순한 회귀 문제로 바꿨다. 깨끗한 \(\mathbf x_0\)와 무작위 \(t\), 잡음 \(\boldsymbol\varepsilon\)을 뽑아 \(\mathbf x_t\)를 만들고, 신경망에게 <b>섞인 잡음을 맞히게</b> 한다.</p>
+    <div class="formula">$$\mathcal L_{\text{simple}}(\theta) = \mathbb E_{\mathbf x_0,\,t,\,\boldsymbol\varepsilon}\Bigl[\bigl\lVert \boldsymbol\varepsilon - \boldsymbol\varepsilon_\theta\bigl(\sqrt{\bar\alpha_t}\mathbf x_0+\sqrt{1-\bar\alpha_t}\boldsymbol\varepsilon,\ t\bigr)\bigr\rVert^2\Bigr],
+      \qquad \boldsymbol\varepsilon_\theta(\mathbf x_t,t) \approx -\sqrt{1-\bar\alpha_t}\;\nabla_{\mathbf x}\log p_t(\mathbf x_t)$$
+      <div class="where">오른쪽 식이 깊은 연결고리다. 잡음 예측은 <b>스코어</b>(로그 밀도의 기울기, "데이터가 더 많은 쪽을 가리키는 화살표")를 배우는 것과 같다(스코어 매칭, Song &amp; Ermon 2019). 잡음을 알면 깨끗한 이미지의 추정도 바로 나온다: \(\hat{\mathbf x}_0 = (\mathbf x_t - \sqrt{1-\bar\alpha_t}\,\hat{\boldsymbol\varepsilon})/\sqrt{\bar\alpha_t}\).</div>
+    </div>
+    <p>생성은 \(\mathbf x_T\sim\mathcal N(\mathbf 0,\mathbf I)\)에서 시작해, 매 단계 잡음을 예측하고 그 일부를 빼 \(\mathbf x_{t-1}\)로 옮긴다. DDPM 샘플러는 매 단계 새 잡음을 조금 다시 넣는 확률적 과정이고, DDIM(Song 등, 2020)은 같은 학습된 모델로 잡음을 다시 넣지 않는 결정적 경로를 따라 단계를 크게 건너뛸 수 있게 했다. 아래 시뮬레이터는 신경망 대신, 데이터 분포가 가우시안 혼합이라 <b>스코어를 해석적으로 정확히 계산할 수 있는</b> 2차원 예제다. 즉 '완벽하게 학습된 디퓨전 모델'을 흉내 낸다.</p>
+    <div class="formula">$$p_0 = \sum_k \pi_k\,\mathcal N(\boldsymbol\mu_k,\sigma^2\mathbf I)\ \Rightarrow\ p_t = \sum_k \pi_k\,\mathcal N\bigl(\sqrt{\bar\alpha_t}\boldsymbol\mu_k,\ v_t\mathbf I\bigr),\quad v_t=\bar\alpha_t\sigma^2+1-\bar\alpha_t,\quad
+      \nabla\log p_t(\mathbf x) = \sum_k w_k(\mathbf x)\,\frac{\sqrt{\bar\alpha_t}\boldsymbol\mu_k-\mathbf x}{v_t}$$
+      <div class="where">\(w_k(\mathbf x)\)는 점 \(\mathbf x\)가 \(k\)번째 성분에서 왔을 사후 확률(성분 밀도의 softmax)이다. 조건 \(c\)(클래스)를 주면 그 클래스 성분만으로 같은 식을 계산한다. 시뮬레이터는 이 \(\hat{\boldsymbol\varepsilon} = -\sqrt{1-\bar\alpha_t}\,\nabla\log p_t\)를 DDIM 갱신식에 넣어 실제로 역과정을 수행한다.</div>
+    </div>
+
+    <div class="sim" id="sim-diff">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 디퓨전: 순방향 잡음과 해석적 스코어 역과정</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-diff"></canvas><span class="hint">캔버스를 누르면 그 점의 ε̂ 화살표</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>데이터 분포</span><div class="seg" id="df-data"><button data-value="two" class="on">두 가우시안</button><button data-value="ring">링 (8개)</button></div></div>
+          <div class="ctrl"><span>노이즈 스케줄 (T=1000)</span><div class="seg" id="df-sched"><button data-value="lin" class="on">선형</button><button data-value="cos">코사인</button></div></div>
+          <label class="ctrl"><span>순방향 단계 t <output id="df-t-out"></output></span><input type="range" id="df-t" min="0" max="1000" step="5" value="0"></label>
+          <label class="ctrl"><span>역과정 단계 수 <output id="df-steps-out"></output></span><input type="range" id="df-steps" min="1" max="200" step="1" value="50"></label>
+          <div class="ctrl"><span>샘플러</span><div class="seg" id="df-eta"><button data-value="0" class="on">DDIM (결정적)</button><button data-value="1">DDPM (확률적)</button></div></div>
+          <div class="ctrl"><span>조건 c</span><div class="seg" id="df-cls"><button data-value="none" class="on">없음</button><button data-value="A">클래스 A</button><button data-value="B">클래스 B</button></div></div>
+          <label class="ctrl"><span>CFG 가이던스 s <output id="df-s-out"></output></span><input type="range" id="df-s" min="0" max="8" step="0.25" value="1"></label>
+          <label class="check"><input type="checkbox" id="df-field"> 현재 t의 ε̂ 방향장 보기</label>
+          <button class="btn primary" id="df-run">역과정 실행 (샘플 300개)</button>
+        </div>
+      </div>
+      <div class="mm-sub"><canvas id="cv-sched"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">ᾱ_t · SNR</span><span class="v" id="df-o-ab">—</span></div>
+        <div class="stat"><span class="k">모델 호출 수 (NFE)</span><span class="v" id="df-o-nfe">—</span></div>
+        <div class="stat"><span class="k">모드 위 샘플 비율</span><span class="v" id="df-o-on">—</span></div>
+        <div class="stat"><span class="k">원하는 클래스 비율</span><span class="v" id="df-o-cls">—</span></div>
+        <div class="stat"><span class="k">평균 모드 거리 / σ</span><span class="v" id="df-o-dist">—</span></div>
+        <div class="stat"><span class="k">모드 사용 엔트로피</span><span class="v" id="df-o-ent">—</span></div>
+      </div>
+      <div class="sim-note">회색 점은 데이터 \(\mathbf x_0\) 300개(σ = 0.18), 진한 점은 \(t\)단계의 \(\mathbf x_t\)다. 각 점은 고정된 \(\boldsymbol\varepsilon\)을 갖고 있어 t 슬라이더를 움직이면 같은 점이 잡음 속으로 녹아드는 모습을 연속적으로 볼 수 있다. 아래 그래프는 \(\bar\alpha_t\)(실선)와 \(\sqrt{1-\bar\alpha_t}\)(점선)이다. 클래스 A = 왼쪽(링이면 위쪽 절반), B = 오른쪽(아래쪽 절반). '모드 위' = 가장 가까운 성분 중심까지 3σ 이내. 해볼 것: ① t를 0 → 1000으로 밀어 선형 스케줄이 t ≈ 500에서 이미 구조를 거의 지우는 것과 코사인이 더 늦게 지우는 것을 비교하자. ② 역과정 단계 수를 1, 2, 5, 50으로 바꿔 실행해 보자. 1~2단계는 샘플이 모드 사이(평균 쪽)에 뭉친다. ③ '링'에서 조건 A를 고르고 s = 0, 1, 4, 8을 차례로 실행하자. s = 0은 A 비율이 절반 정도지만 s ≥ 1이면 100%가 된다. s를 더 키우면 A의 모드 4개를 고르게 쓰던 샘플이 일부 모드로 몰려 '모드 사용 엔트로피'가 2비트에서 약 1비트로 떨어지고, DDIM에서는 샘플이 모드 중심 바깥으로 밀려난다(평균 모드 거리 증가). 다양성 감소와 분포 왜곡이다. ④ s = 0이면 조건을 무시한 무조건 생성이다. CFG를 쓰면 NFE가 2배다.</div>
+    </div>
+
+    <h3 id="latent-diffusion">잠재 디퓨전: 픽셀 대신 VAE 잠재공간에서</h3>
+    <p>512×512 RGB 이미지는 786,432개 값이다. 이 공간에서 수십 번의 신경망 호출을 하는 것은 비싸다. 게다가 픽셀 값의 대부분은 사람이 구분하기 어려운 미세한 질감 정보다. <span class="term">잠재 디퓨전</span><span class="en">(Latent Diffusion, Rombach 등 2022)</span>은 먼저 오토인코더(VAE)로 이미지를 작은 <b>잠재 텐서</b>로 압축하고, 디퓨전은 그 잠재공간에서만 한다. Stable Diffusion 1.x의 VAE는 가로세로를 8배 줄이고 채널 4개를 둔다.</p>
+    <div class="formula">$$512\times512\times3 = 786{,}432 \ \xrightarrow{\ \text{VAE 인코더}\ }\ 64\times64\times4 = 16{,}384\quad(48\text{배 축소})$$
+      <div class="where">학습: 이미지를 잠재로 인코딩 → 잠재에 잡음을 넣고 잡음 예측. 생성: 잠재 잡음에서 역과정 → 마지막에 <b>VAE 디코더 한 번</b>으로 픽셀 복원. 잡음 제거 신경망은 U-Net(SD 1.x, 약 8.6억 파라미터)에서 Transformer 기반 DiT(Peebles &amp; Xie, 2023)로 옮겨 가는 추세이며, DiT는 잠재를 2×2 패치로 잘라 토큰으로 처리한다. 텍스트 조건은 텍스트 인코더(CLIP 등)의 출력을 <a href="attention.html#variants">크로스 어텐션</a>의 키·값으로 넣거나, 이미지 토큰과 한 열로 이어 붙여 넣는다.</div>
+    </div>
+
+    <h3 id="cfg">Classifier-Free Guidance (CFG)</h3>
+    <p>조건부 디퓨전 모델 \(\boldsymbol\varepsilon_\theta(\mathbf x_t, t, c)\)를 그대로 쓰면, 생성된 이미지가 프롬프트를 '느슨하게'만 따르는 경우가 많다. <span class="term">CFG</span><span class="en">(Classifier-Free Guidance, Ho &amp; Salimans 2021)</span>는 학습할 때 조건 \(c\)를 일정 확률(예: 10~20%)로 빈 조건 \(\varnothing\)으로 바꿔, 한 신경망이 조건부와 무조건부 예측을 모두 배우게 한다. 생성할 때는 둘의 차이를 증폭한다.</p>
+    <div class="formula">$$\tilde{\boldsymbol\varepsilon} = \boldsymbol\varepsilon_\theta(\mathbf x_t,\varnothing) + s\,\bigl(\boldsymbol\varepsilon_\theta(\mathbf x_t,c) - \boldsymbol\varepsilon_\theta(\mathbf x_t,\varnothing)\bigr)$$
+      <div class="where">\(s=0\): 무조건 생성, \(s=1\): 보통의 조건부 생성, \(s>1\): 조건 쪽으로 과장. 스코어로 쓰면 \(\nabla\log p(\mathbf x) + s\,\nabla\log p(c\mid\mathbf x)\)로, 분류기 확률 \(p(c\mid\mathbf x)^s\)을 곱해 날카롭게 만든 분포를 따르는 것과 같다(그래서 'classifier' 없이 classifier guidance를 흉내 낸다는 이름). Stable Diffusion은 \(s\)를 7.5 근처로 많이 쓴다. 문헌에 따라 \(\tilde\varepsilon=(1+w)\varepsilon_c - w\varepsilon_\varnothing\)로 쓰기도 하는데, \(s=1+w\)이므로 같은 식이다.</div>
+    </div>
+    <div class="callout warn"><strong>흔한 오해: "가이던스는 클수록 프롬프트를 잘 따르니 좋다"</strong><p>\(s\)를 키우면 프롬프트 일치도는 오르지만 <b>다양성이 줄고</b> 색이 과포화되거나 형태가 과장된다. 위 시뮬레이터의 링 데이터에서 s를 4~8로 올리면 샘플이 클래스 안의 일부 모드로 몰리고 모드 바깥으로 밀려나는 것이 바로 이 현상의 2D 버전이다. 또한 매 단계 조건부·무조건부 두 번의 신경망 계산이 필요해 <b>비용이 2배</b>다(두 입력을 배치로 묶어 한 번에 돌린다). '부정 프롬프트'는 \(\varnothing\) 자리에 원치 않는 내용의 조건을 넣어 그 반대 방향으로 밀어내는 변형이다.</p></div>
+
+    <h3 id="sampling-steps">단계 수 vs 품질·속도</h3>
+    <p>디퓨전의 생성 비용은 (신경망 1회 비용) × (단계 수) × (CFG면 2)다. DDPM 원 논문은 학습과 같은 1,000단계를 모두 밟았다. DDIM 같은 결정적 샘플러와 고차 ODE 솔버(DPM-Solver 등)는 20~50단계로 줄였고, <b>증류</b><span class="en">(distillation)</span>는 여러 단계의 결과를 한 번에 내도록 학생 모델을 학습해 1~4단계까지 줄였다(Consistency Models 2023, Latent Consistency Models, Adversarial Diffusion Distillation 등). 단계를 줄이는 대가는 다양성·세부 품질 손실이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>단계 수(예)</th><th>NFE (CFG 포함)</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td>DDPM 원형</td><td>1,000</td><td>최대 2,000</td><td>확률적, 매우 느림</td></tr>
+        <tr><td>DDIM / ODE 솔버</td><td>20~50</td><td>40~100</td><td>결정적, 같은 잡음 → 같은 이미지</td></tr>
+        <tr><td>증류 (consistency, LCM, 적대적 증류)</td><td>1~4</td><td>1~8 (CFG를 증류에 흡수하기도)</td><td>실시간 생성 가능, 다양성·세부 일부 손실</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><strong>흔한 오해: "단계 1개면 그냥 한 번에 그리는 것 아닌가?"</strong><p>증류 없이 원래 모델로 1단계만 밟으면, 모델은 \(\mathbb E[\mathbf x_0\mid\mathbf x_T]\), 즉 <b>모든 가능한 이미지의 평균</b>을 낸다. 뿌연 회색 이미지가 나오는 이유다. 시뮬레이터에서 단계 수 1로 실행하면 두 가우시안 사이 가운데로 샘플이 몰리는 것이 이 현상이다. 적은 단계로 날카로운 샘플을 내려면 그렇게 하도록 별도로 학습(증류)해야 한다.</p></div>
+
+    <h3 id="flow-matching">Flow matching: 곧은 길로 옮기기</h3>
+    <p><span class="term">Flow matching</span><span class="en">(Lipman 등 2022, rectified flow: Liu 등 2022)</span>은 잡음과 데이터를 <b>직선</b>으로 잇는다. \(\mathbf x_t = (1-t)\,\mathbf x_0 + t\,\boldsymbol\varepsilon\) (\(t\in[0,1]\))로 섞고, 신경망은 이 직선을 따라 움직이는 <b>속도</b> \(\mathbf v = \boldsymbol\varepsilon - \mathbf x_0\)를 회귀로 맞힌다. 생성은 \(t=1\)의 잡음에서 \(d\mathbf x/dt = \mathbf v_\theta(\mathbf x_t,t)\)를 \(t=0\)까지 오일러법 등으로 적분한다.</p>
+    <div class="formula">$$\mathcal L_{\text{FM}} = \mathbb E_{\mathbf x_0,\boldsymbol\varepsilon,t}\bigl\lVert(\boldsymbol\varepsilon-\mathbf x_0) - \mathbf v_\theta(\mathbf x_t,t)\bigr\rVert^2,\qquad \mathbf x_{t-\Delta t} = \mathbf x_t - \Delta t\,\mathbf v_\theta(\mathbf x_t,t)$$
+      <div class="where">디퓨전과 수학적으로 가까운 친척이다(스케줄과 예측 대상만 다르다). 개별 쌍의 경로가 직선이라 학습된 흐름도 비교적 곧고, 적은 단계에서 오차가 덜 쌓인다. Stable Diffusion 3(2024), FLUX.1(2024) 같은 최근 이미지 모델과 여러 영상 모델이 이 계열을 쓴다고 밝혔다. 주의: 개별 쌍은 직선이어도, 여러 쌍이 섞인 평균 흐름은 휘어 있다. 그래서 여전히 여러 단계가 필요하다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>항목</th><th>디퓨전 (DDPM/DDIM)</th><th>Flow matching</th><th>자기회귀 (LLM식)</th></tr></thead>
+      <tbody>
+        <tr><td>생성 단위</td><td>전체를 동시에, 여러 번 다듬기</td><td>전체를 동시에, ODE 적분</td><td>토큰 하나씩 순서대로</td></tr>
+        <tr><td>학습 목표</td><td>잡음 \(\varepsilon\) 예측 (MSE)</td><td>속도 \(\varepsilon-x_0\) 예측 (MSE)</td><td>다음 토큰 교차 엔트로피</td></tr>
+        <tr><td>비용 축</td><td>단계 수 × 신경망 (× CFG 2)</td><td>단계 수 × 신경망</td><td>토큰 수 × 신경망</td></tr>
+        <tr><td>주 사용처</td><td>이미지·영상·음성</td><td>최신 이미지·영상</td><td>텍스트, 일부 이미지·음성 토큰</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="video">
+    <h2>영상 생성과 이해: 토큰 폭증의 계산</h2>
+    <p>영상은 이미지에 시간 축이 붙은 것이다. 같은 패치 토큰화를 시간에도 적용하면 <b>시공간 패치</b><span class="en">(spacetime patch)</span>가 된다. 문제는 크기다. 이미지 한 장의 토큰 수에 프레임 수가 곱해지고, 어텐션 비용은 그 제곱으로 늘어난다.</p>
+    <div class="formula">$$N_{\text{gen}} = \Bigl\lceil\frac{F}{c_t}\Bigr\rceil\cdot\frac{H}{c_s\,p}\cdot\frac{W}{c_s\,p},\qquad
+      5\,\text{s}\times24\,\text{fps},\ 1280\times720,\ c_t=4,\ c_s=8,\ p=2:\ 30\times45\times80 = 108{,}000$$
+      <div class="where">\(c_t, c_s\): 영상 VAE의 시간·공간 압축 배율, \(p\): DiT 패치 크기(설명용 전형값). 10만 토큰 시퀀스의 전체 어텐션 점수 행렬은 \(1.2\times10^{10}\)칸으로, 헤드 하나만 FP16으로 저장해도 약 23 GB다. 그래서 <a href="attention.html#cost">5장</a>의 FlashAttention처럼 행렬을 저장하지 않는 커널, 공간·시간 어텐션 분리, 낮은 해상도로 먼저 만들고 키우는 계단식 생성이 필수가 된다.</div>
+    </div>
+    <p><b>영상 이해</b>도 같은 문제를 겪는다. 1시간 영상을 1 fps로 뽑고 프레임당 256토큰이면 3,600 × 256 = 921,600토큰이다. 그래서 VLM은 프레임을 성기게 뽑고(0.5~2 fps), 프레임당 토큰을 풀링으로 줄이고(64토큰 등), 비슷한 연속 프레임의 토큰을 합치는 기법을 쓴다. "3분 12초에 무엇이 나왔나" 같은 질문은 샘플링 간격 사이에 끼면 답할 수 없다. 이것은 VLM 환각의 또 다른 원인이다.</p>
+
+    <div class="sim" id="sim-video">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>영상 토큰 수와 어텐션 규모</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-video"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>용도</span><div class="seg" id="vd-mode"><button data-value="gen" class="on">생성 (VAE + DiT)</button><button data-value="und">이해 (VLM)</button></div></div>
+          <label class="ctrl"><span>길이 <output id="vd-dur-out"></output></span><input type="range" id="vd-dur" min="1" max="3600" step="1" value="5"></label>
+          <label class="ctrl"><span>프레임률 (생성: 원본 fps / 이해: 샘플 fps) <output id="vd-fps-out"></output></span><input type="range" id="vd-fps" min="0.5" max="60" step="0.5" value="24"></label>
+          <div class="ctrl"><span>해상도</span><div class="seg" id="vd-res"><button data-value="480">480p</button><button data-value="720" class="on">720p</button><button data-value="1080">1080p</button></div></div>
+          <label class="ctrl"><span>이해: 프레임당 토큰 <output id="vd-tpf-out"></output></span><input type="range" id="vd-tpf" min="16" max="1024" step="16" value="256"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">처리 프레임 수</span><span class="v" id="vd-o-f">—</span></div>
+        <div class="stat"><span class="k">총 토큰 수</span><span class="v" id="vd-o-n">—</span></div>
+        <div class="stat"><span class="k">어텐션 점수 칸 수 n²</span><span class="v" id="vd-o-n2">—</span></div>
+        <div class="stat"><span class="k">점수 행렬 1헤드 FP16</span><span class="v" id="vd-o-mem">—</span></div>
+      </div>
+      <div class="sim-note">막대는 로그 척도다. 생성 모드는 시간 압축 4배·공간 압축 8배·패치 2의 전형값을 가정했고, 이해 모드는 '샘플 fps × 길이' 프레임에 프레임당 토큰을 곱한다(해상도는 프레임당 토큰에 이미 반영된 것으로 본다). 해볼 것: ① 기본값(5초 720p 생성)의 10만 토큰을 128K 컨텍스트 막대와 비교하자. ② 해상도를 1080p로 올리면 토큰은 약 2.3배, n²은 약 5배가 된다. ③ 이해 모드에서 3,600초·1 fps·256토큰으로 92만 토큰을 확인하고, 프레임당 토큰을 64로 줄여 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="multimodal-rag">
+    <h2>임베딩 공유 검색: 멀티모달 RAG</h2>
+    <p>CLIP식 공통 임베딩 공간이 있으면 <a href="rag.html">10장</a>의 RAG를 이미지로 확장할 수 있다. 이미지마다 벡터를 미리 계산해 벡터 DB에 넣고, 텍스트 질문 벡터와 코사인으로 검색한다("빨간 우산을 든 사람 사진"). 반대로 이미지로 텍스트 문서를 찾을 수도 있다. 문서 RAG에서는 PDF를 텍스트로 추출하는 과정에서 표·도표·레이아웃이 깨지는 일이 잦은데, <b>페이지 이미지 자체를 임베딩</b>하는 방법(예: ColPali, 2024)은 VLM으로 페이지 패치마다 벡터를 만들고 질의 토큰과 MaxSim으로 비교한다(10장의 ColBERT와 같은 후기 상호작용). 검색된 페이지 이미지를 VLM에 넣어 답을 생성한다.</p>
+    <div class="callout warn"><strong>흔한 오해: "이미지 임베딩과 텍스트 임베딩은 아무 모델끼리나 비교해도 된다"</strong><p>코사인 비교는 <b>함께 학습된</b> 인코더 쌍(같은 CLIP의 이미지·텍스트 타워)끼리만 의미가 있다. 서로 다른 모델의 벡터는 차원이 같아도 좌표계가 다르다. 또한 CLIP류의 텍스트 타워는 짧은 캡션(77토큰 내외)에 맞춰져 긴 질문을 잘 담지 못한다. 실무에서는 이미지 캡션·OCR 텍스트를 함께 색인해 텍스트 검색과 섞는(하이브리드) 방식이 흔하다.</p></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="reasoning-models">
+    <h2>추론 모델: 짧은 정리</h2>
+    <p><span class="term">추론 모델</span><span class="en">(reasoning model)</span>은 답하기 전에 긴 사고 과정을 토큰으로 생성하도록 강화학습(RLVR)으로 훈련된 LLM이다. 원리(사고 사슬, 테스트타임 계산, GRPO)는 <a href="agent.html#ag-think">11장</a>, 학습 파이프라인은 <a href="llm.html#lm-rlvr">7장</a>, 생성 비용은 <a href="generation.html#reasoning">8장</a>에서 자세히 다뤘다. 이 장의 관점에서 기억할 것은 세 가지다.</p>
+    <ul>
+      <li><b>비용 구조</b>: 사고 토큰은 보이지 않아도 <b>출력 토큰으로 생성·과금</b>된다. 답 300토큰에 사고 8,000토큰이 붙으면 출력이 약 28배, 초당 50토큰이면 대기 시간이 약 2분 46초다. 디코딩은 대역폭 한계라 사고 토큰은 지연에 그대로 더해진다.</li>
+      <li><b>멀티모달 추론</b>: VLM도 추론 모드를 갖추면서 차트·도형·수식 이미지를 보고 단계적으로 푼다. 이미지를 잘라 확대하는 도구를 사고 중에 호출하는 방식도 쓰인다. 다만 사고가 길어질수록 이미지 근거보다 앞선 텍스트에 기대는 환각 위험도 함께 커질 수 있다.</li>
+      <li><b>언제 쓰나</b>: 다단계 수학·코드·계획에는 이득이 크지만, 단순 조회·분류·OCR에는 비용만 늘린다. 많은 모델이 사고 예산(effort)을 조절하게 해 준다.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="open-vs-closed">
+    <h2>오픈 웨이트 vs 클로즈드 모델</h2>
+    <h3 id="open-weight-vs-open-source">오픈 웨이트 ≠ 오픈소스</h3>
+    <p><span class="term">클로즈드 모델</span><span class="en">(closed / proprietary model)</span>은 가중치를 공개하지 않고 API나 앱으로만 쓰게 한다. <span class="term">오픈 웨이트 모델</span><span class="en">(open-weight model)</span>은 학습된 <b>가중치 파일</b>을 내려받아 직접 실행할 수 있게 공개한다. 흔히 둘째를 "오픈소스 모델"이라 부르지만, 소프트웨어의 오픈소스와는 다르다. 프로그램에서 오픈소스는 '수정·재빌드할 수 있는 원천'을 공개한다는 뜻인데, 모델의 원천은 <b>학습 데이터와 학습 코드</b>다. 가중치만 있으면 그대로 실행하고 파인튜닝은 할 수 있어도, 모델을 처음부터 재현하거나 데이터에 무엇이 들어갔는지 검증할 수 없다. 컴파일된 실행 파일을 무료로 받은 것에 더 가깝다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>공개 수준</th><th>가중치</th><th>추론 코드</th><th>학습 코드</th><th>학습 데이터(또는 상세 정보)</th><th>예</th></tr></thead>
+      <tbody>
+        <tr><td>클로즈드</td><td>✗</td><td>✗ (API)</td><td>✗</td><td>✗</td><td>상용 API 전용 모델 다수</td></tr>
+        <tr><td>오픈 웨이트 (제한 라이선스)</td><td>✓</td><td>✓</td><td>대개 ✗</td><td>✗ (개요만)</td><td>Llama 계열(커뮤니티 라이선스), Gemma(이용 약관)</td></tr>
+        <tr><td>오픈 웨이트 (표준 OSS 라이선스)</td><td>✓ Apache 2.0·MIT 등</td><td>✓</td><td>일부</td><td>대개 ✗</td><td>Mistral 7B(Apache 2.0), DeepSeek-R1(MIT)</td></tr>
+        <tr><td>완전 공개 (fully open)</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>OLMo(AI2), Pythia 등 연구용 모델</td></tr>
+      </tbody>
+    </table></div>
+    <p>OSI<span class="en">(Open Source Initiative)</span>는 2024년 10월 <b>오픈소스 AI 정의 1.0</b>을 발표해, 오픈소스 AI라 부르려면 가중치뿐 아니라 학습 코드와 학습 데이터에 대한 충분히 상세한 정보가 공개되어야 한다고 정했다. 이 기준으로는 널리 쓰이는 오픈 웨이트 모델 대부분이 '오픈소스'에 해당하지 않는다.</p>
+
+    <h3 id="license">라이선스 조건을 읽는 법</h3>
+    <p>오픈 웨이트라도 자유롭게 쓸 수 있는지는 <b>라이선스</b>가 정한다. 확인할 항목은 다음과 같다.</p>
+    <ul>
+      <li><b>상업적 이용</b>: 허용되는가? 규모 제한이 있는가? 예를 들어 Llama 2·3 커뮤니티 라이선스는 월간 활성 사용자 7억 명을 넘는 서비스는 별도 허가를 받도록 했다.</li>
+      <li><b>이용 제한 정책</b><span class="en">(acceptable use policy)</span>: 특정 용도(무기, 감시 등)를 금지하는 조항. 위반 시 라이선스가 종료될 수 있다.</li>
+      <li><b>파생 모델</b>: 파인튜닝한 모델에도 같은 라이선스·이름 표기 의무가 따르는가? 모델 출력으로 다른 모델을 학습하는 것(증류)을 막는가?</li>
+      <li><b>표기 의무</b>: "Built with ..." 같은 문구, 라이선스 사본 동봉.</li>
+    </ul>
+    <p>Apache 2.0·MIT 같은 표준 라이선스는 이런 추가 제한이 없어 법무 검토가 쉽다. 라이선스 조항은 버전마다 바뀌므로, 실제 도입 전에는 사용하려는 <b>그 버전</b>의 라이선스 원문을 확인해야 한다.</p>
+
+    <h3 id="open-closed-compare">장단점 비교</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>기준</th><th>오픈 웨이트 (자체 호스팅)</th><th>클로즈드 (API)</th></tr></thead>
+      <tbody>
+        <tr><td>통제</td><td>버전 고정·수정 가능. 모델이 바뀌거나 사라질 위험 없음</td><td>제공사가 모델을 갱신·폐기. 같은 프롬프트의 동작이 변할 수 있음</td></tr>
+        <tr><td>프라이버시·규제</td><td>데이터가 내 인프라 밖으로 나가지 않음 (망 분리, 온프레미스)</td><td>데이터가 외부로 전송. 계약(보존 기간, 학습 사용 금지)과 리전 선택에 의존</td></tr>
+        <tr><td>비용 구조</td><td>고정비 (GPU 임대·구매) + 인건비. 사용량이 많고 꾸준할수록 유리</td><td>변동비 (토큰당 과금). 초기 비용 0, 사용량이 적거나 들쭉날쭉할수록 유리</td></tr>
+        <tr><td>최신 성능</td><td>최상위 성능은 대체로 클로즈드가 앞서는 경향이 있으나 격차가 줄었다는 평가가 많음(2025~2026)</td><td>가장 큰·최신 모델과 멀티모달·도구 기능을 바로 사용</td></tr>
+        <tr><td>커스터마이즈</td><td>전체·LoRA 파인튜닝, 양자화, 디코딩 제약 등 자유</td><td>제공되는 범위(프롬프트, 일부 파인튜닝 API) 안에서만</td></tr>
+        <tr><td>운영 부담</td><td>서빙 엔진, GPU 확보, 스케일링, 모니터링, 보안 패치를 직접</td><td>거의 없음. 대신 속도 제한·장애에 의존</td></tr>
+        <tr><td>안전장치</td><td>직접 필터·가드레일 구축 필요</td><td>제공사의 안전 정책·필터 포함 (과도한 거절 가능성도)</td></tr>
+      </tbody>
+    </table></div>
+    <p>비용은 <b>가동률</b>이 가른다. GPU 한 장을 시간당 \(C_h\)달러에 빌려 초당 \(R\)토큰을 처리한다면, 1M 토큰당 비용은 \(C_h / (3600\,R\,u) \times 10^6\)이다(\(u\)는 가동률). 예를 들어 \(C_h=\$2.5\), 연속 배칭으로 \(R=1{,}000\)토큰/초(가정)이면 \(u=100\%\)일 때 약 $0.69/1M 토큰이지만, 밤과 주말에 놀아서 \(u=20\%\)이면 약 $3.5/1M 토큰으로 5배가 된다. 자세한 처리량·비용 계산은 <a href="design.html#cost">12장</a>을 보자.</p>
+
+    <h3 id="model-choice">선택 기준: 의사결정 흐름</h3>
+    <figure class="diagram">
+      <svg viewBox="0 0 640 300" role="img" aria-label="오픈 웨이트와 클로즈드 모델 선택 의사결정 흐름">
+        <rect x="12" y="14" width="250" height="44" rx="8" class="f-elev"/><text x="137" y="34" text-anchor="middle" class="t">데이터가 외부로 나가면 안 되나?</text><text x="137" y="50" text-anchor="middle" class="t-mono">(규제·망 분리·계약)</text>
+        <path d="M262 36 H330" class="s-acc"/><text x="296" y="30" text-anchor="middle" class="t-mono">예</text>
+        <rect x="330" y="14" width="298" height="44" rx="8" class="f-acc-soft"/><text x="479" y="34" text-anchor="middle" class="t">오픈 웨이트 자체 호스팅 / 온디바이스</text><text x="479" y="50" text-anchor="middle" class="t-mono">또는 전용 배포 계약이 있는 클로즈드</text>
+        <path d="M137 58 V84" class="s-line"/><text x="147" y="76" class="t-mono">아니오</text>
+        <rect x="12" y="84" width="250" height="44" rx="8" class="f-elev"/><text x="137" y="104" text-anchor="middle" class="t">최고 수준 성능이 핵심인가?</text><text x="137" y="120" text-anchor="middle" class="t-mono">(어려운 추론·코딩·멀티모달)</text>
+        <path d="M262 106 H330" class="s-acc"/><text x="296" y="100" text-anchor="middle" class="t-mono">예</text>
+        <rect x="330" y="84" width="298" height="44" rx="8" class="f-acc2-soft"/><text x="479" y="104" text-anchor="middle" class="t">클로즈드 API로 시작</text><text x="479" y="120" text-anchor="middle" class="t-mono">평가 세트로 오픈 모델과 주기적 비교</text>
+        <path d="M137 128 V154" class="s-line"/><text x="147" y="146" class="t-mono">아니오</text>
+        <rect x="12" y="154" width="250" height="44" rx="8" class="f-elev"/><text x="137" y="174" text-anchor="middle" class="t">사용량이 크고 꾸준한가?</text><text x="137" y="190" text-anchor="middle" class="t-mono">+ 운영 인력이 있는가?</text>
+        <path d="M262 176 H330" class="s-acc"/><text x="296" y="170" text-anchor="middle" class="t-mono">예</text>
+        <rect x="330" y="154" width="298" height="44" rx="8" class="f-acc-soft"/><text x="479" y="174" text-anchor="middle" class="t">오픈 웨이트 + 양자화·파인튜닝</text><text x="479" y="190" text-anchor="middle" class="t-mono">가동률을 높게 유지할 수 있을 때 단가 우위</text>
+        <path d="M137 198 V224" class="s-line"/><text x="147" y="216" class="t-mono">아니오</text>
+        <rect x="12" y="224" width="250" height="44" rx="8" class="f-acc2-soft"/><text x="137" y="244" text-anchor="middle" class="t">클로즈드 API (종량제)</text><text x="137" y="260" text-anchor="middle" class="t-mono">초기 비용·운영 부담 최소</text>
+        <text x="330" y="244" class="t-dim">실무에서는 혼합이 흔하다: 쉬운 요청은 작은 오픈</text>
+        <text x="330" y="262" class="t-dim">모델, 어려운 요청은 클로즈드로 보내는 라우팅.</text>
+        <text x="330" y="280" class="t-dim">라이선스 확인은 모든 경로에서 필수.</text>
+      </svg>
+      <figcaption><b>그림 15-4.</b> 모델 선택의 단순화된 의사결정 흐름. 실제로는 질문 순서보다 각 조건의 무게가 조직마다 다르다. 어느 경로든 <b>자기 업무의 평가 세트</b>로 후보 모델을 직접 비교하는 것이 출발점이다.</figcaption>
+    </figure>
+    <div class="callout warn"><strong>흔한 오해: "오픈 웨이트는 공짜다"</strong><p>가중치 다운로드는 무료지만, 70B 모델을 BF16으로 서빙하려면 140 GB 이상의 GPU 메모리(<a href="quantization.html#why">9장</a>)와 이를 운영할 사람이 필요하다. 사용량이 적으면 API가 훨씬 싸다. 반대로 "API는 데이터를 학습에 쓴다"도 일반화할 수 없다. 기업용 계약은 학습 사용 금지·보존 기간을 명시하는 경우가 많으므로 <b>계약 조건을 확인</b>해야 한다.</p></div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="on-device">
+    <h2>온디바이스 AI: 내 기기에서 돌리기</h2>
+    <p><span class="term">온디바이스 AI</span><span class="en">(on-device AI)</span>는 모델을 서버가 아닌 스마트폰·노트북·차량 같은 사용자 기기에서 실행하는 것이다. 이점은 분명하다. ① <b>프라이버시</b>: 메시지·사진·음성이 기기 밖으로 나가지 않는다. ② <b>오프라인</b>: 네트워크 없이도 동작한다. ③ <b>지연</b>: 왕복 통신이 없다. ④ <b>비용</b>: 서버 GPU 비용이 사용자 기기로 분산된다. 대가는 제약이다. 메모리 용량, 메모리 대역폭, 배터리와 발열이다.</p>
+    <p>왜 대역폭이 핵심인지는 <a href="quantization.html#why">9장</a>과 <a href="design.html#roofline">12장</a>에서 봤다. 배치 1 디코딩은 토큰 하나마다 모든 가중치를 메모리에서 한 번씩 읽는다. 기기에서는 사용자 한 명만 쓰므로 배치가 거의 항상 1이다. 그래서 속도 상한은 단순한 나눗셈이 된다.</p>
+    <div class="formula">$$\text{tok/s} \;\lesssim\; \frac{BW \times \eta}{N_{\text{param}}\times b/8}$$
+      <div class="where">\(BW\): 메모리 대역폭, \(\eta\): 실효 효율(이론 대역폭의 일부만 실제로 씀), \(b\): 가중치 비트 수. KV 캐시 읽기와 연산 시간은 무시한 <b>상한</b>이다. MoE 모델은 \(N_{\text{param}}\) 자리에 토큰당 활성 파라미터를 넣는다(<a href="transformer.html">6장</a>). 예: 3B 모델 4비트 = 1.5 GB, 스마트폰 LPDDR5X 약 68 GB/s(8,533 MT/s × 64비트 버스) → 이론 상한 약 45 tok/s, 효율 60%면 약 27 tok/s.</div>
+    </div>
+
+    <div class="sim" id="sim-ondevice">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>온디바이스 토큰/초 상한 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-od"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>기기</span><select id="od-dev"></select></label>
+          <label class="ctrl"><span>파라미터 수 <output id="od-n-out"></output></span><input type="range" id="od-n" min="0" max="12" step="1" value="4"></label>
+          <div class="ctrl"><span>가중치 비트</span><div class="seg" id="od-b"><button data-value="16">16</button><button data-value="8">8</button><button data-value="4" class="on">4</button><button data-value="3">3</button><button data-value="2">2</button></div></div>
+          <label class="ctrl"><span>대역폭 실효 효율 η <output id="od-eff-out"></output></span><input type="range" id="od-eff" min="0.3" max="0.9" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span>프롬프트 길이 (프리필) <output id="od-p-out"></output></span><input type="range" id="od-p" min="100" max="8000" step="100" value="1000"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가중치 크기</span><span class="v" id="od-o-size">—</span></div>
+        <div class="stat"><span class="k">메모리 적재</span><span class="v" id="od-o-fit">—</span></div>
+        <div class="stat"><span class="k">디코드 상한 (tok/s)</span><span class="v" id="od-o-tps">—</span></div>
+        <div class="stat"><span class="k">프리필 시간 (연산 한계)</span><span class="v" id="od-o-pre">—</span></div>
+        <div class="stat"><span class="k">200토큰 답변 총 시간</span><span class="v" id="od-o-tot">—</span></div>
+      </div>
+      <div class="sim-note">기기 수치는 공개 사양을 바탕으로 한 대략적인 값(2024~2025년 제품 기준, '약')이다. 앱이 쓸 수 있는 메모리는 OS·다른 앱과 나눠 쓰므로 총 RAM의 약 50%로 가정했다(데이터센터 GPU는 90%). 프리필은 \(2N\times\)프롬프트 토큰 FLOP을 기기의 실효 연산 성능(가정값, 표시된 TOPS의 30%)으로 나눈 연산 한계 근사다. 그래프: 현재 기기·비트에서 파라미터 수별 디코드 상한, 회색 구간은 메모리에 들어가지 않는 크기. 해볼 것: ① 스마트폰에서 3B·4비트와 8B·4비트를 비교하자. ② 16비트로 바꾸면 같은 모델이 4배 느려지고 메모리에도 안 들어간다. ③ H100을 고르고 70B·16비트를 보면 140 GB라 한 장에 들어가지 않는다. η = 0.9에서 상한 약 21.5 tok/s는 <a href="quantization.html#why">9장</a>의 이론값 약 24 tok/s(η = 1)의 90%다. 8비트로 바꾸면 메모리에 들어가고 상한이 2배가 된다. 비교용 가정이며, 가중치만 비교하고 KV 캐시·작업 공간 여유는 따로 남겨야 한다.</div>
+    </div>
+
+    <h3 id="npu">NPU: 기기 속 행렬 가속기</h3>
+    <p><span class="term">NPU</span><span class="en">(Neural Processing Unit)</span>는 신경망의 행렬곱을 저전력으로 처리하도록 만든 전용 가속기다. 스마트폰 SoC와 최신 노트북 칩에 CPU·GPU와 함께 들어 있다. 성능은 보통 INT8 기준 <b>TOPS</b>(초당 조 단위 연산)로 표시하며, 마이크로소프트는 Copilot+ PC의 조건으로 40 TOPS 이상의 NPU를 내걸었다(2024). NPU의 강점은 <b>전력당 연산량</b>이다. 같은 일을 GPU보다 적은 전력으로 해 배터리와 발열에 유리하다.</p>
+    <div class="callout warn"><strong>흔한 오해: "NPU TOPS가 높으면 LLM 답변이 빨라진다"</strong><p>TOPS는 <b>연산</b> 성능이다. 긴 프롬프트를 한꺼번에 처리하는 <b>프리필</b>은 연산 한계라 TOPS의 덕을 보지만, 토큰을 하나씩 내는 <b>디코드</b>는 메모리 대역폭 한계라 TOPS를 두 배로 늘려도 거의 빨라지지 않는다. NPU·CPU·GPU가 같은 LPDDR 메모리를 공유하는 기기에서는 디코드 속도의 천장이 메모리 대역폭으로 정해진다. 위 시뮬레이터에서 프리필 시간과 디코드 속도가 서로 다른 변수에 반응하는 것을 확인하자. 또한 NPU는 지원하는 연산자·데이터 형식이 제한적이어서, 모델을 기기 전용 형식으로 변환하는 과정이 필요하고 일부 연산은 CPU로 되돌아가기도 한다.</p></div>
+
+    <h3 id="small-models">소형 모델, 양자화, 증류</h3>
+    <p>기기에 맞추는 세 가지 도구는 서로 보완적이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>기법</th><th>줄이는 것</th><th>대표 수치</th><th>대가</th></tr></thead>
+      <tbody>
+        <tr><td>소형 모델 (1~4B)</td><td>파라미터 수 자체</td><td>Llama 3.2 1B·3B(2024), 약 3B급 기기 내장 모델들</td><td>지식량·복잡한 추론 능력 감소</td></tr>
+        <tr><td>양자화 (<a href="quantization.html">9장</a>)</td><td>파라미터당 비트</td><td>BF16 → 4비트: 크기·읽기 바이트 1/4</td><td>3비트 이하에서 품질 하락 가속</td></tr>
+        <tr><td>증류 (distillation)</td><td>같은 크기에서 품질 향상</td><td>큰 모델의 출력·확률 분포를 작은 모델이 모방</td><td>교사 모델 비용, 라이선스(출력 사용 조건) 확인</td></tr>
+        <tr><td>가지치기·구조 축소</td><td>층·헤드·뉴런 일부 제거</td><td>큰 모델을 잘라 작은 모델의 출발점으로</td><td>재학습 필요</td></tr>
+      </tbody>
+    </table></div>
+    <p>증류는 교사 모델의 다음 토큰 확률 분포 전체(소프트 레이블)를 학생이 따라 하게 하거나, 교사가 생성한 답·추론 과정을 학습 데이터로 쓰는 방식이다(추론 모델 증류는 <a href="agent.html#ag-budget">11장</a>). 실무 온디바이스 시스템은 흔히 <b>하이브리드</b>다. 요약·자동완성·분류 같은 짧은 일은 기기의 소형 모델이, 어려운 질문은 서버의 큰 모델이 처리하고, 어느 쪽으로 보낼지를 정책과 사용자 동의로 정한다.</p>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="coding-agents">
+    <h2>AI 코딩 에이전트</h2>
+    <p>코딩은 LLM 응용 중 가장 빠르게 자리 잡은 분야다. 코드가 텍스트이고, 결과를 <b>컴파일러와 테스트가 자동으로 검증</b>해 주기 때문이다. 이 피드백 덕분에 코딩은 <a href="agent.html#ag-loop">11장</a>의 에이전트 루프가 가장 잘 동작하는 환경이 되었다. 여기서는 일반 에이전트 원리는 11장에 맡기고, 코딩 에이전트의 부품과 실무 위험에 집중한다.</p>
+
+    <h3 id="coding-agent-anatomy">구성: 탐색, 편집, 실행, 샌드박스</h3>
+    <figure class="diagram">
+      <svg viewBox="0 0 640 260" role="img" aria-label="코딩 에이전트의 구성: LLM, 저장소 탐색, 파일 편집, 테스트 실행, 샌드박스">
+        <rect x="8" y="8" width="624" height="244" rx="12" fill="none" stroke="var(--border)" stroke-dasharray="6 5"/>
+        <text x="20" y="28" class="t-dim">샌드박스 (컨테이너·VM: 파일 시스템·네트워크·권한 제한)</text>
+        <rect x="24" y="96" width="120" height="60" rx="10" class="f-elev"/><text x="84" y="122" text-anchor="middle" class="t">작업 지시</text><text x="84" y="140" text-anchor="middle" class="t-mono">이슈·요구사항</text>
+        <path d="M144 126 H200" class="s-line"/>
+        <rect x="200" y="86" width="140" height="80" rx="12" class="f-acc-soft"/><text x="270" y="118" text-anchor="middle" class="t">LLM (에이전트)</text><text x="270" y="138" text-anchor="middle" class="t-mono">계획 → 도구 호출</text><text x="270" y="154" text-anchor="middle" class="t-mono">→ 결과 읽기 → 반복</text>
+        <rect x="390" y="44" width="230" height="36" rx="8" class="f-surface"/><text x="505" y="67" text-anchor="middle" class="t">저장소 탐색: 목록·grep·파일 읽기</text>
+        <rect x="390" y="92" width="230" height="36" rx="8" class="f-surface"/><text x="505" y="115" text-anchor="middle" class="t">파일 편집: 문자열 치환·diff 패치</text>
+        <rect x="390" y="140" width="230" height="36" rx="8" class="f-surface"/><text x="505" y="163" text-anchor="middle" class="t">실행: 빌드·테스트·린터·셸</text>
+        <rect x="390" y="188" width="230" height="36" rx="8" class="f-acc2-soft"/><text x="505" y="211" text-anchor="middle" class="t">결과물: diff / PR → 사람 리뷰</text>
+        <path d="M340 110 L390 62 M340 120 L390 110 M340 134 L390 158" class="s-acc"/>
+        <path d="M390 166 C360 190 330 180 310 166" class="s-line" stroke-dasharray="4 3"/>
+        <text x="296" y="200" text-anchor="middle" class="t-mono">실패 로그 → 다시 수정</text>
+        <path d="M340 150 L390 206" class="s-line"/>
+      </svg>
+      <figcaption><b>그림 15-5.</b> 코딩 에이전트의 부품. 핵심은 <b>테스트 실행 루프</b>다. 에이전트는 코드를 고친 뒤 테스트를 돌리고, 실패 메시지를 읽어 다시 고친다. 모든 실행은 샌드박스 안에서 이루어져야 하며, 최종 산출물은 사람이 리뷰하는 diff다.</figcaption>
+    </figure>
+    <ul>
+      <li><b>저장소 탐색</b>: 수만 개 파일을 다 컨텍스트에 넣을 수 없으므로(<a href="agent.html#ag-ctx">11장 컨텍스트 엔지니어링</a>), 디렉터리 목록·텍스트 검색(grep)·심볼 검색으로 관련 파일만 찾아 읽는다. 임베딩 검색(<a href="rag.html">10장</a>)을 쓰기도 하지만, 정확한 함수 이름 검색은 grep이 강하다.</li>
+      <li><b>파일 편집 도구</b>: 파일 전체를 다시 쓰면 토큰이 낭비되고 다른 부분을 망가뜨리기 쉽다. 그래서 "이 문자열을 저 문자열로" 같은 정확한 치환이나 diff 패치 형식의 도구를 쓴다. 치환 대상이 유일하지 않으면 실패하게 만드는 것이 안전하다.</li>
+      <li><b>실행·테스트 루프</b>: 빌드·테스트·타입 검사·린터 결과가 곧 보상 신호다. 에러 메시지는 다음 수정의 단서가 된다.</li>
+      <li><b>샌드박스</b>: 에이전트가 실행하는 셸 명령은 실수로(또는 저장소 안의 악성 지시로) 파일을 지우거나 비밀 키를 유출할 수 있다. 격리된 컨테이너, 네트워크 제한, 위험 명령의 사람 승인, 최소 권한 토큰이 기본이다.</li>
+    </ul>
+
+    <h3 id="coding-tools-compare">자동완성 vs 채팅 vs 에이전트</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>항목</th><th>자동완성 (인라인)</th><th>채팅 어시스턴트</th><th>코딩 에이전트</th></tr></thead>
+      <tbody>
+        <tr><td>입력</td><td>커서 앞뒤 코드 (FIM: fill-in-the-middle)</td><td>사용자가 붙여 넣은 코드 + 질문</td><td>작업 지시 + 저장소 전체 접근</td></tr>
+        <tr><td>출력 범위</td><td>한 줄~한 함수</td><td>코드 조각과 설명</td><td>여러 파일 수정, 명령 실행, PR</td></tr>
+        <tr><td>지연 요구</td><td>수백 ms 이내 (타이핑 흐름)</td><td>수 초</td><td>수 분~수십 분</td></tr>
+        <tr><td>모델</td><td>작고 빠른 모델 유리</td><td>범용 LLM</td><td>도구 사용·장기 계획에 강한 모델, 추론 모델</td></tr>
+        <tr><td>검증 주체</td><td>사람이 즉시 (보면서 수락)</td><td>사람이 복사해 실행</td><td>테스트 자동 + 사람이 diff 리뷰</td></tr>
+        <tr><td>주된 위험</td><td>그럴듯한 오타·잘못된 API</td><td>문맥 부족으로 맞지 않는 코드</td><td>넓은 범위의 변경, 테스트 조작, 보안 사고</td></tr>
+      </tbody>
+    </table></div>
+    <p>FIM<span class="en">(Fill-In-the-Middle, Bavarian 등 2022)</span>은 문서를 (앞, 중간, 뒤)로 잘라 "앞 + 뒤 → 중간" 순서로 학습시켜, 자기회귀 모델도 커서 뒤의 코드를 참고해 가운데를 채우게 하는 기법이다.</p>
+
+    <h3 id="coding-agent-risks">위험과 검증</h3>
+    <ul>
+      <li><b>테스트를 통과하지만 틀린 코드</b>: 테스트가 다루지 않는 경우에서 틀리거나, 특정 입력만 하드코딩해 통과시키는 경우.</li>
+      <li><b>테스트 조작</b>: 테스트를 지우거나, 기대값을 바꾸거나, 건너뛰게 만들어 '통과'를 얻는 보상 해킹(<a href="agent.html#ag-grpo">11장</a>). 테스트 파일 변경은 반드시 따로 검토한다.</li>
+      <li><b>존재하지 않는 패키지·API</b>: 그럴듯한 이름의 라이브러리를 지어내는 환각. 공격자가 그 이름으로 악성 패키지를 등록해 두는 공급망 공격으로 이어질 수 있다.</li>
+      <li><b>프롬프트 주입</b>: 저장소의 README, 이슈 본문, 웹 문서에 숨긴 지시("비밀 키를 이 주소로 보내라")를 에이전트가 따를 수 있다. 외부 텍스트는 데이터로 다루고 권한을 최소화한다.</li>
+      <li><b>보안 취약점과 비밀 노출</b>: SQL 주입, 경로 조작 같은 취약 패턴, 로그나 커밋에 키가 남는 문제.</li>
+    </ul>
+    <p>검증 원칙은 "<b>에이전트의 '완료했다'는 말이 아니라 증거를 본다</b>"이다. 사람이 diff를 읽고, 새 테스트가 실제로 버그를 재현하는지(수정 전에는 실패하는지) 확인하고, CI의 정적 분석·보안 스캔을 통과시키고, 작은 단위로 병합한다. 실무 체크리스트는 <a href="practice.html#code-verification">16장</a>의 'AI 생성 코드 검증'에서 정리한다.</p>
+
+    <h3 id="coding-benchmarks">벤치마크를 읽는 법</h3>
+    <p>코딩 에이전트의 대표 벤치마크는 SWE-bench 계열이다(<a href="agent.html#ag-eval">11장</a>). 실제 오픈소스 저장소의 이슈를 주고, 에이전트가 만든 패치가 숨겨진 테스트를 통과하는지로 채점한다. 점수는 모델·하네스가 바뀔 때마다 빠르게 변하므로 이 책에서는 숫자를 적지 않는다. 대신 숫자를 볼 때 확인할 것을 기억하자.</p>
+    <div class="callout warn"><strong>흔한 오해: "벤치마크 점수가 높으면 우리 저장소에서도 그만큼 해결한다"</strong><p>(1) 점수는 모델 단독이 아니라 <b>하네스</b>(도구, 프롬프트, 재시도 횟수, 시간 제한)와의 조합이다. (2) 공개 저장소의 이슈와 정답 패치가 사전학습 데이터에 섞였을 수 있다(데이터 오염). (3) pass@k(여러 번 중 한 번 성공)와 매번 성공해야 하는 실무 요구는 다르다. (4) 벤치마크 과제는 테스트가 있는 잘 정의된 이슈지만, 실무 과제는 요구사항이 모호하고 테스트가 부족한 경우가 많다. 결국 <b>자기 저장소의 과거 이슈로 만든 작은 평가 세트</b>가 가장 믿을 만한 지표다.</p></div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>멀티모달 모델은 모달리티별 인코더로 데이터를 벡터 열로 바꾸고, 프로젝터로 공통 임베딩 공간(검색용) 또는 LLM의 공통 토큰 공간(생성용)에 맞춘다. 비용은 결국 토큰 수가 정한다.</li>
+      <li>후기 융합(CLIP)은 벡터를 미리 계산해 대규모 검색에 강하고, 초기 융합(토큰 결합)은 세밀한 교차 이해에 강하다. 실무는 "후기 융합으로 좁히고 초기 융합으로 판단"하는 2단계가 흔하다.</li>
+      <li>CLIP은 \(N\times N\) 유사도 행렬의 대각선을 정답으로 하는 대칭 InfoNCE로 학습한다. 찍기 수준 손실은 \(\ln N\)이고, 온도 τ가 작을수록 코사인 차이가 확률 차이로 크게 증폭된다.</li>
+      <li>ViT 토큰 수 = \((H/P)(W/P)\): 224·P14 → 256, 336 → 576. 고해상도는 타일링(+썸네일)이나 네이티브 해상도로 처리하고 2×2 병합으로 토큰을 1/4로 줄인다.</li>
+      <li>VLM = 비전 인코더 + 작은 프로젝터(MLP) + LLM. 1단계는 프로젝터 정렬, 2단계는 지시 튜닝이다. 환각은 언어 사전 확률, 해상도 손실, 유도 질문에서 오며 고해상도·그라운딩·"확인 불가" 지시로 완화한다.</li>
+      <li>16 kHz, hop 10 ms면 초당 100 멜 프레임(30초 → 3,000)이다. Whisper는 인코더-디코더로, 디코더의 크로스 어텐션이 글자와 소리를 정렬한다.</li>
+      <li>WER = (S+D+I)/N은 편집 거리 DP로 계산하며 100%를 넘을 수 있다. 띄어쓰기가 흔들리는 한국어는 CER을 함께 보고, 정규화 규칙을 맞춘 뒤 비교한다.</li>
+      <li>TTS는 텍스트 정규화 → 음향 특징(멜) 또는 코덱 토큰 → 보코더다. 코덱 토큰은 음성을 언어 모델링 문제로 만들고, 음성 대 음성 모델은 캐스케이드의 지연·비언어 정보 손실을 줄인다.</li>
+      <li>디퓨전: \(\mathbf x_t=\sqrt{\bar\alpha_t}\mathbf x_0+\sqrt{1-\bar\alpha_t}\boldsymbol\varepsilon\)으로 잡음을 넣고 \(\lVert\boldsymbol\varepsilon-\boldsymbol\varepsilon_\theta\rVert^2\)로 잡음(=스코어)을 예측한다. 잠재 디퓨전은 VAE 잠재(512²×3 → 64²×4, 48배)에서 계산한다.</li>
+      <li>CFG \(\tilde\varepsilon=\varepsilon_\varnothing+s(\varepsilon_c-\varepsilon_\varnothing)\)는 프롬프트 일치를 높이지만 다양성을 줄이고 NFE를 2배로 만든다. 단계 수는 DDPM 1,000 → DDIM 20~50 → 증류 1~4로 줄었고, flow matching은 직선 경로의 속도를 학습한다.</li>
+      <li>오픈 웨이트 ≠ 오픈소스(데이터·학습 코드 공개 여부, 라이선스 제한). 선택은 데이터 통제·최신 성능·가동률에 따른 비용 구조·운영 역량으로 판단한다.</li>
+      <li>온디바이스 디코드 속도 상한 ≈ 대역폭 × 효율 ÷ (파라미터 × 비트/8). NPU TOPS는 프리필을 돕지만 디코드는 대역폭이 정한다. 코딩 에이전트는 탐색·편집·테스트 루프·샌드박스로 구성되며, 결과는 테스트와 diff 리뷰라는 증거로 검증한다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 패치 크기 14인 ViT에 448×448 이미지를 넣으면 패치 토큰은 몇 개이고, 2×2 토큰 병합 후에는 몇 개인가?</p><div class="opts">
+        <button class="opt">576개 → 144개</button><button class="opt">1,024개 → 512개</button><button class="opt" data-correct>1,024개 → 256개</button><button class="opt">2,048개 → 512개</button>
+      </div><div class="quiz-exp">448/14 = 32이므로 32 × 32 = 1,024 패치. 2×2 병합은 이웃 4개를 하나로 합치므로 1,024/4 = 256토큰이다. InternVL류가 448 타일 하나를 256토큰으로 쓰는 것이 이 계산이다.</div></div>
+      <div class="quiz-q"><p>2. 배치 크기 1,024로 CLIP을 학습하기 시작했다. 모든 유사도가 거의 같은 초기 상태에서 대칭 InfoNCE 손실은 대략 얼마인가?</p><div class="opts">
+        <button class="opt" data-correct>약 6.93 (ln 1024)</button><button class="opt">약 0.69 (ln 2)</button><button class="opt">약 10.0 (log₂ 1024)</button><button class="opt">0</button>
+      </div><div class="quiz-exp">각 행·열의 softmax가 균등하면 정답 확률은 1/N이고 교차 엔트로피는 ln N = ln 1024 ≈ 6.93이다. 두 방향 평균도 같다. log₂ 1024 = 10은 비트 단위이고, 손실은 자연로그로 계산한다.</div></div>
+      <div class="quiz-q"><p>3. 정답 문장 10단어를 인식한 결과에 치환 1개, 삭제 1개, 삽입 2개가 있었다. WER은?</p><div class="opts">
+        <button class="opt">20%</button><button class="opt">30%</button><button class="opt">33%</button><button class="opt" data-correct>40%</button>
+      </div><div class="quiz-exp">WER = (S + D + I)/N = (1 + 1 + 2)/10 = 40%. 분모는 정답 단어 수이고 삽입도 오류로 센다. 인식 문장 길이(10 − 1 + 2 = 11)로 나누는 것이 아니다.</div></div>
+      <div class="quiz-q"><p>4. 16 kHz 오디오를 창 25 ms, hop 10 ms로 로그 멜 스펙트로그램으로 바꾼다. 30초 음성의 프레임 수와, stride 2 합성곱 후 인코더 위치 수는 대략?</p><div class="opts">
+        <button class="opt">1,200 / 600</button><button class="opt" data-correct>3,000 / 1,500</button><button class="opt">480,000 / 240,000</button><button class="opt">750 / 375</button>
+      </div><div class="quiz-exp">hop 10 ms = 160 샘플이므로 초당 100프레임, 30초면 3,000프레임이다. stride 2로 절반이 되어 1,500 위치(위치당 20 ms)다. Whisper 인코더가 정확히 이 구조다.</div></div>
+      <div class="quiz-q"><p>5. Stable Diffusion 1.x에서 512×512 RGB 이미지 대신 VAE 잠재공간(64×64×4)에서 디퓨전을 하면 처리하는 값의 수는 몇 배 줄어드는가?</p><div class="opts">
+        <button class="opt">8배</button><button class="opt">16배</button><button class="opt" data-correct>48배</button><button class="opt">64배</button>
+      </div><div class="quiz-exp">512 × 512 × 3 = 786,432, 64 × 64 × 4 = 16,384. 786,432 / 16,384 = 48. 가로세로가 각각 8배 줄어 64배지만 채널이 3 → 4로 늘어 48배다.</div></div>
+      <div class="quiz-q"><p>6. CFG 가이던스 s = 7.5, 샘플링 30단계로 이미지를 만든다. 다음 중 옳은 것은?</p><div class="opts">
+        <button class="opt">s = 7.5는 무조건 생성을 뜻하며 NFE는 30이다</button><button class="opt">s를 키울수록 다양성과 프롬프트 일치가 함께 오른다</button><button class="opt" data-correct>매 단계 조건부·무조건부 예측이 필요해 NFE는 약 60이고, s가 크면 다양성이 줄 수 있다</button><button class="opt">CFG는 별도로 학습한 분류기의 기울기를 사용한다</button>
+      </div><div class="quiz-exp">\(\tilde\varepsilon=\varepsilon_\varnothing+s(\varepsilon_c-\varepsilon_\varnothing)\)이므로 단계마다 두 번 계산한다(30 × 2 = 60). s = 0이 무조건, s = 1이 보통 조건부다. '분류기 없는' 가이던스라는 이름처럼 별도 분류기는 쓰지 않고, 조건을 무작위로 지우며 학습한 한 모델을 쓴다.</div></div>
+      <div class="quiz-q"><p>7. 메모리 대역폭 약 68 GB/s인 스마트폰에서 7B 모델을 4비트로 돌린다. 배치 1 디코드의 이론 상한(효율 100%, KV 캐시 무시)에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 2 tok/s</button><button class="opt" data-correct>약 19 tok/s</button><button class="opt">약 68 tok/s</button><button class="opt">약 150 tok/s</button>
+      </div><div class="quiz-exp">7 × 10⁹ × 0.5 B = 3.5 GB를 토큰마다 읽는다. 68 / 3.5 ≈ 19.4 tok/s. 실효 효율 60%면 약 12 tok/s다. 16비트였다면 14 GB로 메모리에 들어가기도 어렵고 상한도 약 5 tok/s다.</div></div>
+      <div class="quiz-q"><p>8. 어떤 모델이 가중치를 공개했지만 학습 데이터와 학습 코드는 비공개이고, 월간 사용자 수가 일정 규모를 넘으면 별도 허가를 받도록 한다. 가장 정확한 설명은?</p><div class="opts">
+        <button class="opt">OSI 정의를 만족하는 오픈소스 AI다</button><button class="opt" data-correct>제한 라이선스의 오픈 웨이트 모델이다</button><button class="opt">클로즈드 모델이다</button><button class="opt">퍼블릭 도메인 모델이라 아무 조건 없이 쓸 수 있다</button>
+      </div><div class="quiz-exp">가중치를 내려받아 실행할 수 있으므로 클로즈드는 아니다. 하지만 학습 데이터 정보·학습 코드가 없고 이용 조건이 붙어 OSI 오픈소스 AI 정의 1.0에는 해당하지 않는다. 상업적 이용 전에는 해당 버전의 라이선스 조항을 확인해야 한다.</div></div>
+      <div class="quiz-q"><p>9. 상품 이미지 5천만 장에서 "줄무늬 셔츠"를 찾고, 상위 20개에 대해서만 "사진 속 셔츠의 단추가 몇 개인가"를 판단하려 한다. 알맞은 설계는?</p><div class="opts">
+        <button class="opt">5천만 장 모두를 VLM에 질문과 함께 넣는다</button><button class="opt">CLIP 점수만으로 단추 개수까지 판단한다</button><button class="opt">5천만 장을 모두 텍스트로 OCR한 뒤 BM25로 단추 수를 센다</button><button class="opt" data-correct>CLIP식 후기 융합 임베딩으로 미리 색인해 후보를 찾고, 상위 20개만 VLM(초기 융합)으로 정밀 판단한다</button>
+      </div><div class="quiz-exp">후기 융합은 이미지 벡터를 미리 계산해 두므로 질의 시 벡터 검색만 하면 된다. 개수·세부 속성처럼 세밀한 판단은 이미지와 질문을 함께 보는 VLM이 낫지만 비싸므로 소수 후보에만 쓴다. 10장의 검색 + 리랭킹 구조와 같다.</div></div>
+      <div class="quiz-q"><p>10. 코딩 에이전트가 "모든 테스트 통과"라고 보고했다. diff를 보니 기존 테스트 2개의 기대값이 바뀌어 있다. 가장 적절한 대응은?</p><div class="opts">
+        <button class="opt">테스트가 통과했으므로 바로 병합한다</button><button class="opt" data-correct>테스트 변경이 요구사항상 정당한지 따로 검토하고, 원래 테스트 기준으로 동작을 다시 검증한다</button><button class="opt">에이전트에게 다시 "통과했는지" 물어 확인한다</button><button class="opt">온도를 낮춰 다시 실행하면 테스트를 건드리지 않는다</button>
+      </div><div class="quiz-exp">기대값 변경은 보상 해킹(테스트 조작)의 전형적인 신호일 수 있다. 에이전트의 자기 보고는 증거가 아니다. 테스트 파일 변경을 별도로 리뷰하고, 원래 테스트·새 회귀 테스트·CI로 실제 동작을 확인한다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ===== Chapter 15 page script: 각 시뮬레이터는 독립 IIFE (하나가 실패해도 나머지는 동작) ===== */
+(function () {
+  "use strict";
+  function safe(name, fn) { try { fn(); } catch (e) { console.error("[" + name + "]", e); } }
+  function $(id) { return document.getElementById(id); }
+  function sup(n) { var m = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" }; return String(n).split("").map(function (c) { return m[c] || c; }).join(""); }
+  function sci(x, d) {
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(x)));
+    if (e >= -2 && e < 5) return AB.fmt(x, d || 3);
+    var m = x / Math.pow(10, e);
+    return m.toFixed(d === undefined ? 2 : Math.max(0, d - 1)) + "×10" + sup(e);
+  }
+  function int(n) { return Math.round(n).toLocaleString("en-US"); }
+  function relPos(ev, el) { var r = el.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+
+  /* =================================================================
+     1. CLIP 유사도 행렬 + InfoNCE (손으로 정한 2D 임베딩)
+     ================================================================= */
+  safe("clip", function () {
+    var cvEl = $("cv-clip"); if (!cvEl) return;
+    var NAMES = ["고양이", "강아지", "자동차", "비행기"];
+    var INIT_I = [[30, 1.15], [62, 1.0], [160, 1.1], [255, 1.05]];
+    var INIT_T = [[44, 0.8], [49, 0.82], [178, 0.78], [232, 0.8]];
+    function pol(a, r) { return [r * Math.cos(a * Math.PI / 180), r * Math.sin(a * Math.PI / 180)]; }
+    var U, V, TN, drag = null, anim = 0;
+    function reset() { U = INIT_I.map(function (p) { return pol(p[0], p[1]); }); V = INIT_T.map(function (p) { return pol(p[0], p[1]); }); TN = NAMES.slice(); }
+    reset();
+    var tauGet = AB.range("clip-tau", function (v) { return AB.fmt(Math.pow(10, v), 3); }, function () { update(); });
+    var view = AB.seg("clip-view", function () { update(); });
+    function tau() { return Math.pow(10, tauGet()); }
+    function unit(a) { var n = Math.hypot(a[0], a[1]) || 1e-9; return [a[0] / n, a[1] / n]; }
+    function compute(U, V, t) {
+      var n = U.length, u = U.map(unit), v = V.map(unit), C = [], S = [], R = [], K = [];
+      for (var i = 0; i < n; i++) { C.push([]); S.push([]); for (var j = 0; j < n; j++) { var c = u[i][0] * v[j][0] + u[i][1] * v[j][1]; C[i].push(c); S[i].push(c / t); } }
+      for (i = 0; i < n; i++) R.push(AB.softmax(S[i]));
+      for (j = 0; j < n; j++) { var col = AB.softmax(S.map(function (r) { return r[j]; })); for (i = 0; i < n; i++) { K[i] = K[i] || []; K[i][j] = col[i]; } }
+      var li = 0, lt = 0, acc = 0;
+      for (i = 0; i < n; i++) { li -= Math.log(R[i][i]); lt -= Math.log(K[i][i]); if (AB.argmax(R[i]) === i) acc++; }
+      li /= n; lt /= n;
+      return { C: C, S: S, R: R, K: K, li: li, lt: lt, L: (li + lt) / 2, acc: acc / n };
+    }
+    var res;
+    var cv = AB.canvas(cvEl, draw, { aspect: 0.8, maxHeight: 400, minHeight: 260 });
+    var geo = { cx: 0, cy: 0, k: 1 };
+    function draw(ctx, w, h) {
+      var P = AB.palette();
+      var k = Math.min(w, h) / 3.4; geo = { cx: w / 2, cy: h / 2, k: k };
+      function X(p) { return [geo.cx + p[0] * k, geo.cy - p[1] * k]; }
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, geo.cy); ctx.lineTo(w, geo.cy); ctx.moveTo(geo.cx, 0); ctx.lineTo(geo.cx, h); ctx.stroke();
+      ctx.setLineDash([4, 4]); ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.arc(geo.cx, geo.cy, k, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+      ctx.fillStyle = P.faint; ctx.textAlign = "left"; ctx.fillText("단위원 (코사인은 방향만 본다)", 8, 16);
+      for (var i = 0; i < 4; i++) {
+        var a = X(U[i]), b = X(V[i]);
+        ctx.lineWidth = 1; ctx.setLineDash([3, 4]); ctx.strokeStyle = P.faint; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      for (i = 0; i < 4; i++) {
+        var pi = X(U[i]), pt = X(V[i]);
+        ctx.strokeStyle = AB.alpha(P.accent, 0.5); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(geo.cx, geo.cy); ctx.lineTo(pi[0], pi[1]); ctx.stroke();
+        ctx.strokeStyle = AB.alpha(P.accent2, 0.5); ctx.beginPath(); ctx.moveTo(geo.cx, geo.cy); ctx.lineTo(pt[0], pt[1]); ctx.stroke();
+        ctx.fillStyle = P.accent; ctx.fillRect(pi[0] - 7, pi[1] - 7, 14, 14);
+        ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(pt[0], pt[1], 7.5, 0, Math.PI * 2); ctx.fill();
+        ctx.font = "12px " + getComputedStyle(document.body).getPropertyValue("--font");
+        ctx.fillStyle = P.text; ctx.textBaseline = "middle";
+        var la = Math.atan2(U[i][1], U[i][0]), lb = Math.atan2(V[i][1], V[i][0]);
+        ctx.textAlign = Math.cos(la) >= 0 ? "left" : "right";
+        ctx.fillText("I" + (i + 1) + " " + NAMES[i] + " 사진", pi[0] + (Math.cos(la) >= 0 ? 11 : -11), pi[1] - 4);
+        ctx.textAlign = Math.cos(lb) >= 0 ? "left" : "right";
+        ctx.fillStyle = P.dim;
+        ctx.fillText("T" + (i + 1) + " \"" + TN[i] + "\"", pt[0] + (Math.cos(lb) >= 0 ? 11 : -11), pt[1] + 11);
+      }
+    }
+    function update() {
+      res = compute(U, V, tau());
+      var t = tau(), mode = view(), tb = $("clip-mat"), html = "<tr><th></th>";
+      for (var j = 0; j < 4; j++) html += "<th>T" + (j + 1) + "<br>" + TN[j] + "</th>";
+      html += "</tr>";
+      for (var i = 0; i < 4; i++) {
+        html += "<tr><th class='rh'>I" + (i + 1) + "<br>" + NAMES[i] + "</th>";
+        for (j = 0; j < 4; j++) {
+          var main, sub, heat;
+          if (mode === "cos") { main = res.C[i][j].toFixed(2); sub = "s=" + res.S[i][j].toFixed(1); heat = (res.C[i][j] + 1) / 2; }
+          else if (mode === "row") { main = res.R[i][j].toFixed(2); sub = "행 p"; heat = res.R[i][j]; }
+          else { main = res.K[i][j].toFixed(2); sub = "열 p"; heat = res.K[i][j]; }
+          html += "<td class='" + (i === j ? "diag" : "") + "' style='background:" + AB.heat(heat * 0.75) + "'>" + main + "<small>" + sub + "</small></td>";
+        }
+        html += "</tr>";
+      }
+      tb.innerHTML = html;
+      var r0 = res.R[0];
+      $("clip-detail").innerHTML = "행 1 예시: 로짓 s = cos/τ = [" + res.S[0].map(function (x) { return x.toFixed(2); }).join(", ") + "] → softmax → 정답(대각선) 확률 <b>" + r0[0].toFixed(3) + "</b>, 이 행의 손실 −ln p = <b>" + (-Math.log(r0[0])).toFixed(3) + "</b>. 테두리 칸이 정답 쌍이다. 행 softmax는 이미지 하나가 캡션 4개 중 정답을 고르는 분포, 열 softmax는 캡션 하나가 이미지를 고르는 분포다.";
+      AB.stat("clip-o-i2t", res.li.toFixed(3));
+      AB.stat("clip-o-t2i", res.lt.toFixed(3));
+      AB.stat("clip-o-l", "<b>" + res.L.toFixed(3) + "</b>");
+      AB.stat("clip-o-base", Math.log(4).toFixed(3));
+      AB.stat("clip-o-acc", Math.round(res.acc * 100) + "%");
+      cv.redraw();
+    }
+    function lossOf(params) {
+      var Uu = [], Vv = [];
+      for (var i = 0; i < 4; i++) { Uu.push([params[i * 2], params[i * 2 + 1]]); Vv.push([params[8 + i * 2], params[8 + i * 2 + 1]]); }
+      return compute(Uu, Vv, tau()).L;
+    }
+    function stepGD() {
+      var p = [], i;
+      for (i = 0; i < 4; i++) p.push(U[i][0], U[i][1]);
+      for (i = 0; i < 4; i++) p.push(V[i][0], V[i][1]);
+      var g = p.map(function (_, k) { var a = p.slice(), b = p.slice(), hh = 1e-5; a[k] += hh; b[k] -= hh; return (lossOf(a) - lossOf(b)) / (2 * hh); });
+      var lr = 0.6 * tau();
+      var gm = Math.max.apply(null, g.map(Math.abs));
+      var sc = gm * lr > 0.15 ? 0.15 / (gm * lr) : 1;
+      for (i = 0; i < 16; i++) p[i] -= lr * sc * g[i];
+      for (i = 0; i < 4; i++) { U[i] = clampP([p[i * 2], p[i * 2 + 1]]); V[i] = clampP([p[8 + i * 2], p[8 + i * 2 + 1]]); }
+    }
+    function clampP(a) { var n = Math.hypot(a[0], a[1]); if (n < 0.25) { a = [a[0] / (n || 1) * 0.25, a[1] / (n || 1) * 0.25]; } if (n > 1.5) a = [a[0] / n * 1.5, a[1] / n * 1.5]; return a; }
+    $("clip-train").addEventListener("click", function () {
+      if (anim) return; var left = 20;
+      (function tick() { stepGD(); update(); left--; if (left > 0) anim = requestAnimationFrame(tick); else anim = 0; })();
+    });
+    $("clip-reset").addEventListener("click", function () { if (anim) { cancelAnimationFrame(anim); anim = 0; } reset(); update(); });
+    $("clip-shuffle").addEventListener("click", function () {
+      V = [V[1], V[2], V[3], V[0]]; TN = [TN[1], TN[2], TN[3], TN[0]]; update();
+    });
+    function pick(pos) {
+      var best = null, bd = 18;
+      function chk(arr, kind) { arr.forEach(function (p, i) { var x = geo.cx + p[0] * geo.k, y = geo.cy - p[1] * geo.k, d = Math.hypot(x - pos[0], y - pos[1]); if (d < bd) { bd = d; best = { kind: kind, i: i }; } }); }
+      chk(U, "U"); chk(V, "V"); return best;
+    }
+    cvEl.addEventListener("pointerdown", function (ev) { var p = pick(relPos(ev, cvEl)); if (p) { drag = p; cvEl.setPointerCapture(ev.pointerId); cvEl.style.cursor = "grabbing"; ev.preventDefault(); } });
+    cvEl.addEventListener("pointermove", function (ev) {
+      if (!drag) return;
+      var pos = relPos(ev, cvEl), v = clampP([(pos[0] - geo.cx) / geo.k, -(pos[1] - geo.cy) / geo.k]);
+      (drag.kind === "U" ? U : V)[drag.i] = v; update();
+    });
+    function end() { drag = null; cvEl.style.cursor = "grab"; }
+    cvEl.addEventListener("pointerup", end); cvEl.addEventListener("pointercancel", end);
+    update();
+  });
+
+  /* =================================================================
+     2. 이미지 → 시각 토큰 수
+     ================================================================= */
+  safe("patch", function () {
+    var cvEl = $("cv-patch"); if (!cvEl) return;
+    var getW = AB.range("pt-w", function (v) { return v + " px"; }, function () { update(); });
+    var getH = AB.range("pt-h", function (v) { return v + " px"; }, function () { update(); });
+    var getMax = AB.range("pt-max", function (v) { return v + "장"; }, function () { update(); });
+    var getP = AB.seg("pt-p", function () { update(); });
+    var getMode = AB.seg("pt-mode", function () { update(); });
+    var getR = AB.seg("pt-r", function () { update(); });
+    $("pt-thumb").addEventListener("change", function () { update(); });
+    $("pt-merge").addEventListener("change", function () { update(); });
+    var st = null;
+    function calc() {
+      var W = getW(), H = getH(), P = +getP(), R = +getR(), mode = getMode(), m = $("pt-merge").checked ? 2 : 1, thumb = $("pt-thumb").checked;
+      var g = R / P, perTile = Math.ceil(g / m) * Math.ceil(g / m), o = { W: W, H: H, P: P, R: R, mode: mode, m: m };
+      if (mode === "resize") {
+        o.tokens = perTile; o.tiles = 1; o.gx = g; o.gy = g; o.scale = Math.min(R / W, R / H, 1);
+        o.grid = g + "×" + g + (m > 1 ? " → " + Math.ceil(g / m) + "×" + Math.ceil(g / m) : "");
+      } else if (mode === "tile") {
+        var best = null, maxT = getMax();
+        for (var c = 1; c <= maxT; c++) for (var r = 1; c * r <= maxT; r++) {
+          var s = Math.min(c * R / W, r * R / H, 1), ar = Math.abs(Math.log((c / r) / (W / H)));
+          var sc = s * 10 - ar * 0.5 - c * r * 0.01;
+          if (!best || sc > best.sc + 1e-9) best = { c: c, r: r, s: s, sc: sc };
+        }
+        o.c = best.c; o.r = best.r; o.tiles = best.c * best.r + (thumb && best.c * best.r > 1 ? 1 : 0);
+        o.tokens = o.tiles * perTile; o.scale = Math.min(best.c * R / W, best.r * R / H, 1);
+        o.grid = best.c + "×" + best.r + " 타일" + (o.tiles > best.c * best.r ? " + 썸네일" : "") + " · 타일당 " + perTile;
+      } else {
+        var unit = P * m, Wp = Math.max(unit, Math.round(W / unit) * unit), Hp = Math.max(unit, Math.round(H / unit) * unit);
+        var tk = (Wp / P) * (Hp / P) / (m * m);
+        if (tk > 16384) { var f = Math.sqrt(16384 / tk); Wp = Math.max(unit, Math.floor(W * f / unit) * unit); Hp = Math.max(unit, Math.floor(H * f / unit) * unit); tk = (Wp / P) * (Hp / P) / (m * m); }
+        o.Wp = Wp; o.Hp = Hp; o.tokens = tk; o.tiles = 1; o.scale = Math.min(Wp / W, Hp / H, 1);
+        o.grid = (Wp / P) + "×" + (Hp / P) + (m > 1 ? " → " + (Wp / P / m) + "×" + (Hp / P / m) : "") + " (" + Wp + "×" + Hp + ")";
+      }
+      return o;
+    }
+    var box = { x: 0, y: 0, k: 1 }, dragging = null;
+    var cv = AB.canvas(cvEl, draw, { aspect: 0.72, maxHeight: 420, minHeight: 240 });
+    function draw(ctx, w, h) {
+      if (!st) return;
+      var P = AB.palette(), o = st, pad = 22;
+      var k = dragging ? dragging.k : Math.min((w - 2 * pad) / o.W, (h - 2 * pad - 14) / o.H);
+      var iw = o.W * k, ih = o.H * k, x0 = pad, y0 = pad + 6;
+      box = { x: x0, y: y0, k: k, iw: iw, ih: ih };
+      // 가짜 이미지: 배경 + 글자 줄
+      var gr = ctx.createLinearGradient(x0, y0, x0 + iw, y0 + ih);
+      gr.addColorStop(0, AB.alpha(P.accent, 0.10)); gr.addColorStop(1, AB.alpha(P.accent2, 0.12));
+      ctx.fillStyle = gr; ctx.fillRect(x0, y0, iw, ih);
+      ctx.fillStyle = AB.alpha(P.text, 0.28);
+      var lineH = Math.max(2, 21 * k);
+      for (var yy = y0 + 2.5 * lineH; yy < y0 + ih - lineH; yy += lineH * 1.8) {
+        var len = iw * (0.55 + 0.35 * Math.abs(Math.sin(yy * 0.37)));
+        ctx.fillRect(x0 + 0.08 * iw, yy, Math.min(len, iw * 0.84), Math.max(1, lineH * 0.55));
+      }
+      ctx.lineWidth = 1;
+      function grid(nx, ny, x, y, ww, hh, col, lw) {
+        var dx = ww / nx, dy = hh / ny;
+        ctx.strokeStyle = col; ctx.lineWidth = lw || 1; ctx.beginPath();
+        if (dx >= 3) for (var i = 1; i < nx; i++) { ctx.moveTo(x + i * dx, y); ctx.lineTo(x + i * dx, y + hh); }
+        if (dy >= 3) for (var j = 1; j < ny; j++) { ctx.moveTo(x, y + j * dy); ctx.lineTo(x + ww, y + j * dy); }
+        ctx.stroke();
+        return dx >= 3 && dy >= 3;
+      }
+      var g = o.R / o.P, ok = true;
+      if (o.mode === "resize") {
+        ok = grid(g, g, x0, y0, iw, ih, AB.alpha(P.accent, 0.55));
+        if (o.m > 1) grid(Math.ceil(g / 2), Math.ceil(g / 2), x0, y0, iw, ih, P.accent, 1.6);
+      } else if (o.mode === "tile") {
+        var tw = iw / o.c, th = ih / o.r;
+        for (var c = 0; c < o.c; c++) for (var r = 0; r < o.r; r++) {
+          ok = grid(g, g, x0 + c * tw, y0 + r * th, tw, th, AB.alpha(P.accent, 0.45)) && ok;
+          if (o.m > 1) grid(Math.ceil(g / 2), Math.ceil(g / 2), x0 + c * tw, y0 + r * th, tw, th, AB.alpha(P.accent, 0.8));
+        }
+        grid(o.c, o.r, x0, y0, iw, ih, P.accent2, 2.5);
+      } else {
+        var nx = o.Wp / o.P, ny = o.Hp / o.P;
+        ok = grid(nx, ny, x0, y0, iw, ih, AB.alpha(P.accent, 0.5));
+        if (o.m > 1) grid(nx / 2, ny / 2, x0, y0, iw, ih, P.accent, 1.4);
+      }
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.strokeRect(x0, y0, iw, ih);
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(x0 + iw, y0 + ih, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(o.W + "×" + o.H + (ok ? "" : " · 격자가 너무 촘촘해 일부 선 생략"), x0, y0 - 6);
+    }
+    function update() {
+      st = calc();
+      AB.stat("pt-o-grid", st.grid);
+      AB.stat("pt-o-tok", "<b>" + int(st.tokens) + "</b>");
+      AB.stat("pt-o-scale", st.scale.toFixed(2) + (st.scale < 0.34 ? " ⚠ 작은 글자 손실" : ""));
+      AB.stat("pt-o-kv", AB.bytes(st.tokens * 131072, 3));
+      AB.stat("pt-o-flop", sci(2 * 8e9 * st.tokens, 2) + " FLOP");
+      cv.redraw();
+    }
+    cvEl.addEventListener("pointerdown", function (ev) {
+      var p = relPos(ev, cvEl);
+      if (Math.hypot(p[0] - (box.x + box.iw), p[1] - (box.y + box.ih)) < 22) { dragging = { k: box.k }; cvEl.setPointerCapture(ev.pointerId); ev.preventDefault(); }
+    });
+    cvEl.addEventListener("pointermove", function (ev) {
+      if (!dragging) return;
+      var p = relPos(ev, cvEl);
+      var W = AB.clamp(Math.round((p[0] - box.x) / dragging.k / 2) * 2, 112, 3072), H = AB.clamp(Math.round((p[1] - box.y) / dragging.k / 2) * 2, 112, 3072);
+      getW.set(W); getH.set(H);
+    });
+    function end() { if (dragging) { dragging = null; cv.redraw(); } }
+    cvEl.addEventListener("pointerup", end); cvEl.addEventListener("pointercancel", end);
+    update();
+  });
+
+  /* =================================================================
+     3. WER: 편집 거리 DP + 역추적
+     ================================================================= */
+  safe("wer", function () {
+    var ref = $("wer-ref"), hyp = $("wer-hyp"); if (!ref) return;
+    var unit = AB.seg("wer-unit", function () { update(); });
+    var PRE = [
+      ["기본 예시", "오늘 서울 날씨는 맑음", "오늘 서울에 날씨 맑음 입니다"],
+      ["띄어쓰기", "회의는 오후 세 시에 시작합니다", "회의는 오후 세시에 시작 합니다"],
+      ["숫자 오류", "송금액은 삼백만 원입니다", "송금액은 삼십만 원입니다"],
+      ["삽입 폭주", "네 알겠습니다", "네 네 그 그러니까 음 알겠 습니다"],
+      ["영어", "the cat sat on the mat", "the cat sat on mat today"],
+      ["완전 일치", "음성 인식 테스트", "음성 인식 테스트"]
+    ];
+    var chips = $("wer-chips");
+    PRE.forEach(function (p) { var b = document.createElement("button"); b.type = "button"; b.textContent = p[0]; b.addEventListener("click", function () { ref.value = p[1]; hyp.value = p[2]; update(); }); chips.appendChild(b); });
+    function toks(s) { return unit() === "word" ? s.trim().split(/\s+/).filter(Boolean) : Array.from(s.replace(/\s+/g, "")); }
+    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+    function editDP(r, h) {
+      var n = r.length, m = h.length, d = [];
+      for (var i = 0; i <= n; i++) { d.push(new Array(m + 1).fill(0)); d[i][0] = i; }
+      for (var j = 0; j <= m; j++) d[0][j] = j;
+      for (i = 1; i <= n; i++) for (j = 1; j <= m; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (r[i - 1] === h[j - 1] ? 0 : 1));
+      var al = [], path = {}, S = 0, D = 0, I = 0; i = n; j = m; path[i + "," + j] = 1;
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && d[i][j] === d[i - 1][j - 1] + (r[i - 1] === h[j - 1] ? 0 : 1)) {
+          var same = r[i - 1] === h[j - 1]; al.push({ t: same ? "C" : "S", r: r[i - 1], h: h[j - 1] }); if (!same) S++; i--; j--;
+        } else if (i > 0 && d[i][j] === d[i - 1][j] + 1) { al.push({ t: "D", r: r[i - 1], h: null }); D++; i--; }
+        else { al.push({ t: "I", r: null, h: h[j - 1] }); I++; j--; }
+        path[i + "," + j] = 1;
+      }
+      al.reverse();
+      return { d: d, al: al, path: path, S: S, D: D, I: I, N: n };
+    }
+    function update() {
+      var r = toks(ref.value), h = toks(hyp.value), R = editDP(r, h);
+      var lab = { C: "일치", S: "치환", D: "삭제", I: "삽입" };
+      $("wer-align").innerHTML = R.al.length ? R.al.map(function (a) {
+        return "<span class='mm-al " + a.t + "'><span>" + (a.r === null ? "<span class='gap'>∅</span>" : esc(a.r)) + "</span><span>" + (a.h === null ? "<span class='gap'>∅</span>" : esc(a.h)) + "</span><i>" + lab[a.t] + "</i></span>";
+      }).join("") : "<span class='mm-note'>두 문장이 모두 비어 있다.</span>";
+      var lim = unit() === "word" ? 14 : 20, tb = $("wer-dp");
+      if (r.length <= lim && h.length <= lim) {
+        var mx = Math.max(1, r.length, h.length), html = "<tr><th></th><th>∅</th>" + h.map(function (x) { return "<th>" + esc(x) + "</th>"; }).join("") + "</tr>";
+        for (var i = 0; i <= r.length; i++) {
+          html += "<tr><th>" + (i === 0 ? "∅" : esc(r[i - 1])) + "</th>";
+          for (var j = 0; j <= h.length; j++) html += "<td class='" + (R.path[i + "," + j] ? "path" : "") + "' style='background:" + AB.heat(0.08 + 0.55 * R.d[i][j] / mx) + "'>" + R.d[i][j] + "</td>";
+          html += "</tr>";
+        }
+        tb.innerHTML = html;
+        $("wer-dpnote").innerHTML = "행 = 정답, 열 = 인식 결과. 오른쪽 아래 칸 d(" + r.length + "," + h.length + ") = <b>" + R.d[r.length][h.length] + "</b> = S + D + I. 대각선 이동 = 일치/치환, 아래로 = 삭제, 오른쪽으로 = 삽입.";
+      } else { tb.innerHTML = ""; $("wer-dpnote").textContent = "표가 너무 커서 그리지 않는다 (정답·인식 각각 " + lim + "개 이하일 때 표시). 계산은 그대로 한다."; }
+      AB.stat("wer-o-n", R.N);
+      AB.stat("wer-o-s", R.S); AB.stat("wer-o-d", R.D); AB.stat("wer-o-i", R.I);
+      var name = unit() === "word" ? "WER" : "CER";
+      AB.stat("wer-o-wer", R.N ? "<b>" + name + " " + (100 * (R.S + R.D + R.I) / R.N).toFixed(1) + "%</b> <small>(" + (R.S + R.D + R.I) + "/" + R.N + ")</small>" : name + " 정의 안 됨 (N=0)");
+    }
+    ref.addEventListener("input", update); hyp.addEventListener("input", update);
+    update();
+  });
+
+  /* =================================================================
+     4. 2D 디퓨전: 가우시안 혼합 + 해석적 스코어 (Tweedie) + DDIM/DDPM + CFG
+     ================================================================= */
+  safe("diffusion", function () {
+    var cvEl = $("cv-diff"); if (!cvEl) return;
+    var T = 1000, SIG = 0.18, S2 = SIG * SIG, NPTS = 300, RANGE = 3.2;
+    function schedule(kind) {
+      var ab = new Float64Array(T + 1); ab[0] = 1;
+      if (kind === "lin") { var a = 1; for (var t = 1; t <= T; t++) { var b = 1e-4 + (0.02 - 1e-4) * (t - 1) / (T - 1); a *= 1 - b; ab[t] = a; } }
+      else {
+        var f = function (t) { return Math.pow(Math.cos(((t / T) + 0.008) / 1.008 * Math.PI / 2), 2); }, a2 = 1;
+        for (t = 1; t <= T; t++) { var bb = Math.min(0.999, 1 - f(t) / f(t - 1)); a2 *= 1 - bb; ab[t] = a2; }
+      }
+      return ab;
+    }
+    var SCH = { lin: schedule("lin"), cos: schedule("cos") };
+    function comps(kind) {
+      if (kind === "two") return [{ mu: [-1.3, 0.55], cls: "A" }, { mu: [1.3, -0.55], cls: "B" }];
+      var out = [];
+      for (var k = 0; k < 8; k++) { var a = (k * 45 + 22.5) * Math.PI / 180; out.push({ mu: [1.6 * Math.cos(a), 1.6 * Math.sin(a)], cls: Math.sin(a) > 0 ? "A" : "B" }); }
+      return out;
+    }
+    var data, C, samples = null, traj = null, animIdx = -1, animRaf = 0, probe = null, viewMode = "fwd", lastRun = null;
+    function makeData() {
+      C = comps(dataKind());
+      var r = AB.rng(11); data = [];
+      for (var i = 0; i < NPTS; i++) { var k = Math.floor(r() * C.length); data.push({ x: [C[k].mu[0] + SIG * r.n(), C[k].mu[1] + SIG * r.n()], e: [r.n(), r.n()], k: k }); }
+    }
+    /* Tweedie: E[x0 | xt] for a subset of components (equal weights) */
+    function x0hat(x, ab, list) {
+      var sa = Math.sqrt(ab), v = ab * S2 + 1 - ab, lw = [], mx = -Infinity, i;
+      for (i = 0; i < list.length; i++) { var mu = list[i].mu, dx = x[0] - sa * mu[0], dy = x[1] - sa * mu[1]; lw.push(-(dx * dx + dy * dy) / (2 * v)); if (lw[i] > mx) mx = lw[i]; }
+      var sw = 0, ox = 0, oy = 0;
+      for (i = 0; i < list.length; i++) {
+        var w = Math.exp(lw[i] - mx); sw += w;
+        ox += w * (sa * S2 * x[0] + (1 - ab) * list[i].mu[0]) / v;
+        oy += w * (sa * S2 * x[1] + (1 - ab) * list[i].mu[1]) / v;
+      }
+      return [ox / sw, oy / sw];
+    }
+    function guidedX0(x, ab, cls, s) {
+      var xu = x0hat(x, ab, C);
+      if (cls === "none" || s === 0) return xu;
+      var xc = x0hat(x, ab, C.filter(function (c) { return c.cls === cls; }));
+      return [xu[0] + s * (xc[0] - xu[0]), xu[1] + s * (xc[1] - xu[1])];
+    }
+    var dataKind = AB.seg("df-data", function () { makeData(); samples = null; traj = null; viewMode = "fwd"; refresh(); });
+    var sched = AB.seg("df-sched", function () { refresh(); });
+    var getT = AB.range("df-t", function (v) { return String(v); }, function () { viewMode = "fwd"; refresh(); });
+    var getSteps = AB.range("df-steps", function (v) { return v + "단계"; }, function () { refresh(); });
+    var eta = AB.seg("df-eta", function () { refresh(); });
+    var cls = AB.seg("df-cls", function () { refresh(); });
+    var getS = AB.range("df-s", function (v) { return v.toFixed(2); }, function () { refresh(); });
+    $("df-field").addEventListener("change", function () { cv.redraw(); });
+    makeData();
+
+    function nfe() { var c = cls(), s = getS(); var per = (c === "none" || s === 0 || s === 1) ? 1 : 2; return getSteps() * per; }
+    function run() {
+      var ab = SCH[sched()], n = getSteps(), et = +eta(), c = cls(), s = getS(), r = AB.rng(7);
+      var ts = []; for (var i = 0; i <= n; i++) ts.push(Math.round(T * (1 - i / n)));
+      var xs = []; for (i = 0; i < NPTS; i++) xs.push([r.n(), r.n()]);
+      var tr = [xs.map(function (p) { return p.slice(); })];
+      for (i = 0; i < n; i++) {
+        var t = ts[i], tp = ts[i + 1]; if (t === tp) continue;
+        var a = ab[t], ap = ab[tp], sig = et * Math.sqrt((1 - ap) / (1 - a)) * Math.sqrt(Math.max(0, 1 - a / ap));
+        var cdir = Math.sqrt(Math.max(0, 1 - ap - sig * sig));
+        xs = xs.map(function (x) {
+          var x0 = guidedX0(x, a, c, s);
+          var ex = (x[0] - Math.sqrt(a) * x0[0]) / Math.sqrt(1 - a), ey = (x[1] - Math.sqrt(a) * x0[1]) / Math.sqrt(1 - a);
+          return [Math.sqrt(ap) * x0[0] + cdir * ex + sig * r.n(), Math.sqrt(ap) * x0[1] + cdir * ey + sig * r.n()];
+        });
+        tr.push(xs.map(function (p) { return p.slice(); }));
+      }
+      return { final: xs, traj: tr, cls: c };
+    }
+    function evalSamples(xs, c) {
+      var on = 0, inCls = 0, dsum = 0, cnt = 0, hist = C.map(function () { return 0; });
+      xs.forEach(function (x) {
+        var bd = Infinity, bk = 0;
+        C.forEach(function (cp, k) { var d = Math.hypot(x[0] - cp.mu[0], x[1] - cp.mu[1]); if (d < bd) { bd = d; bk = k; } });
+        if (!isFinite(bd)) return;
+        cnt++; dsum += bd; hist[bk]++; if (bd < 3 * SIG) on++;
+        if (C[bk].cls === (c === "none" ? "A" : c)) inCls++;
+      });
+      var used = hist.filter(function (v) { return v > 0; }).length;
+      return { on: on / Math.max(1, cnt), cls: inCls / Math.max(1, cnt), d: dsum / Math.max(1, cnt) / SIG, H: AB.entropy(hist.map(function (v) { return v / Math.max(1, cnt); })), used: used };
+    }
+    var cv = AB.canvas(cvEl, draw, { aspect: 0.82, maxHeight: 460, minHeight: 280 });
+    var G = { cx: 0, cy: 0, k: 1 };
+    function W2S(p) { return [G.cx + p[0] * G.k, G.cy - p[1] * G.k]; }
+    function draw(ctx, w, h) {
+      var P = AB.palette(); G = { cx: w / 2, cy: h / 2, k: Math.min(w, h) / (2 * RANGE) };
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath();
+      for (var g = -3; g <= 3; g++) { var a = W2S([g, 0]), b = W2S([0, g]); ctx.moveTo(a[0], 0); ctx.lineTo(a[0], h); ctx.moveTo(0, b[1]); ctx.lineTo(w, b[1]); }
+      ctx.stroke();
+      var ab = SCH[sched()], t = getT(), A = ab[t];
+      // 성분 중심
+      C.forEach(function (cp) { var p = W2S(cp.mu); ctx.strokeStyle = cp.cls === "A" ? P.accent : P.accent2; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(p[0], p[1], 3 * SIG * G.k, 0, Math.PI * 2); ctx.stroke(); });
+      // 데이터 x0 (흐리게)
+      ctx.fillStyle = AB.alpha(P.dim, 0.28);
+      data.forEach(function (d) { var p = W2S(d.x); ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, Math.PI * 2); ctx.fill(); });
+      if (viewMode === "fwd") {
+        var sa = Math.sqrt(A), sb = Math.sqrt(1 - A);
+        data.forEach(function (d) {
+          var p = W2S([sa * d.x[0] + sb * d.e[0], sa * d.x[1] + sb * d.e[1]]);
+          ctx.fillStyle = C[d.k].cls === "A" ? P.accent : P.accent2; ctx.beginPath(); ctx.arc(p[0], p[1], 2.6, 0, Math.PI * 2); ctx.fill();
+        });
+      } else if (traj) {
+        var idx = animIdx >= 0 ? animIdx : traj.length - 1, cur = traj[idx];
+        if (idx > 0) {
+          ctx.strokeStyle = AB.alpha(P.warn, 0.18); ctx.lineWidth = 1;
+          for (var i = 0; i < cur.length; i += 3) { ctx.beginPath(); for (var s = 0; s <= idx; s++) { var q = W2S(traj[s][i]); s ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); } ctx.stroke(); }
+        }
+        ctx.fillStyle = P.warn;
+        cur.forEach(function (x) { if (!isFinite(x[0])) return; var p = W2S(x); ctx.beginPath(); ctx.arc(p[0], p[1], 2.8, 0, Math.PI * 2); ctx.fill(); });
+      }
+      if ($("df-field").checked && t > 0) {
+        var c = cls(), sv = getS();
+        ctx.strokeStyle = AB.alpha(P.text, 0.55); ctx.lineWidth = 1.2;
+        for (var gx = -3; gx <= 3.001; gx += 0.5) for (var gy = -3; gy <= 3.001; gy += 0.5) {
+          var x = [gx, gy], x0 = guidedX0(x, A, c, sv), ex = (x[0] - Math.sqrt(A) * x0[0]) / Math.sqrt(1 - A), ey = (x[1] - Math.sqrt(A) * x0[1]) / Math.sqrt(1 - A);
+          var nrm = Math.hypot(ex, ey) || 1, L = Math.min(0.32, 0.12 * nrm), p0 = W2S(x), p1 = W2S([gx - ex / nrm * L, gy - ey / nrm * L]);
+          arrow(ctx, p0, p1);
+        }
+      }
+      if (probe && t > 0) {
+        var c2 = cls(), s2 = getS(), xp = probe, xo = guidedX0(xp, A, c2, s2);
+        var e2 = [(xp[0] - Math.sqrt(A) * xo[0]) / Math.sqrt(1 - A), (xp[1] - Math.sqrt(A) * xo[1]) / Math.sqrt(1 - A)];
+        var pp = W2S(xp), po = W2S(xo), pe = W2S([xp[0] - 0.4 * e2[0], xp[1] - 0.4 * e2[1]]);
+        ctx.strokeStyle = P.ok; ctx.lineWidth = 2.2; arrow(ctx, pp, pe);
+        ctx.setLineDash([4, 4]); ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pp[0], pp[1]); ctx.lineTo(po[0], po[1]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = P.ok; ctx.beginPath(); ctx.arc(pp[0], pp[1], 5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = P.ok; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(po[0], po[1], 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono"); ctx.fillStyle = P.text; ctx.textAlign = "left";
+        ctx.fillText("−ε̂ (" + e2[0].toFixed(2) + ", " + e2[1].toFixed(2) + ")", pp[0] + 8, pp[1] - 8);
+        ctx.fillText("x̂₀", po[0] + 8, po[1] + 4);
+      }
+      ctx.font = "12px " + getComputedStyle(document.body).getPropertyValue("--font"); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      var label = viewMode === "fwd" ? "순방향: t = " + t + ", x_t = √ᾱ·x₀ + √(1−ᾱ)·ε" : (animIdx >= 0 ? "역과정 진행 중 " + animIdx + "/" + (traj.length - 1) : "역과정 결과 (주황) · " + lastRun);
+      ctx.fillText(label, 8, 8);
+      ctx.textBaseline = "alphabetic";
+    }
+    function arrow(ctx, a, b) {
+      var dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy); if (L < 1) return;
+      var ux = dx / L, uy = dy / L, hs = Math.min(5, L * 0.45);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+      ctx.moveTo(b[0], b[1]); ctx.lineTo(b[0] - ux * hs - uy * hs * 0.6, b[1] - uy * hs + ux * hs * 0.6);
+      ctx.moveTo(b[0], b[1]); ctx.lineTo(b[0] - ux * hs + uy * hs * 0.6, b[1] - uy * hs - ux * hs * 0.6);
+      ctx.stroke();
+    }
+    var cs = AB.canvas($("cv-sched"), function (ctx, w, h) {
+      var P = AB.palette(), cur = sched(), other = cur === "lin" ? "cos" : "lin", t = getT();
+      function ser(k) { var a = SCH[k], d1 = [], d2 = []; for (var i = 0; i <= T; i += 5) { d1.push([i, a[i]]); d2.push([i, Math.sqrt(1 - a[i])]); } return [d1, d2]; }
+      var A = ser(cur), B = ser(other);
+      AB.chart(ctx, { x: 46, y: 10, w: w - 46 - 14, h: h - 10 - 48 }, {
+        x: [0, T], y: [0, 1], xLabel: "t (" + (cur === "lin" ? "선형" : "코사인") + " 실선 · 다른 스케줄 ᾱ 회색)",
+        series: [{ data: B[0], color: AB.alpha(P.dim, 0.5), width: 1.2, dash: [3, 3] }, { data: A[0], color: P.accent, width: 2.2 }, { data: A[1], color: P.accent2, width: 1.6, dash: [6, 4] }],
+        vlines: [{ x: t, color: P.warn, label: "ᾱ=" + AB.fmt(SCH[cur][t], 3) }]
+      });
+    }, { height: 170 });
+    function refresh() {
+      var ab = SCH[sched()], t = getT(), A = ab[t];
+      AB.stat("df-o-ab", AB.fmt(A, 3) + " · " + (t === 0 ? "∞" : sci(A / (1 - A), 2)));
+      AB.stat("df-o-nfe", nfe() + (nfe() > getSteps() ? " (CFG ×2)" : ""));
+      cv.redraw(); cs.redraw();
+    }
+    function showEval(res) {
+      var e = evalSamples(res.final, res.cls);
+      AB.stat("df-o-on", Math.round(e.on * 100) + "%");
+      AB.stat("df-o-cls", res.cls === "none" ? "A " + Math.round(e.cls * 100) + "% : B " + (100 - Math.round(e.cls * 100)) + "%" : "<b>" + Math.round(e.cls * 100) + "%</b> (" + res.cls + ")");
+      AB.stat("df-o-dist", e.d.toFixed(2));
+      AB.stat("df-o-ent", e.H.toFixed(2) + " 비트 (" + e.used + "/" + C.length + "개 모드)");
+    }
+    $("df-run").addEventListener("click", function () {
+      if (animRaf) cancelAnimationFrame(animRaf);
+      var res = run(); traj = res.traj; samples = res.final; viewMode = "rev";
+      lastRun = getSteps() + "단계 · " + (eta() === "0" ? "DDIM" : "DDPM") + (res.cls !== "none" ? " · " + res.cls + ", s=" + getS() : "");
+      var start = performance.now(), dur = Math.min(1600, 300 + traj.length * 25);
+      animIdx = 0;
+      (function tick(now) {
+        var f = Math.min(1, (now - start) / dur); animIdx = Math.round(f * (traj.length - 1));
+        cv.redraw();
+        if (f < 1) animRaf = requestAnimationFrame(tick); else { animIdx = -1; animRaf = 0; cv.redraw(); showEval(res); }
+      })(start);
+    });
+    cvEl.addEventListener("pointerdown", function (ev) {
+      var p = relPos(ev, cvEl); probe = [(p[0] - G.cx) / G.k, -(p[1] - G.cy) / G.k];
+      cvEl.setPointerCapture(ev.pointerId); cv.redraw();
+    });
+    cvEl.addEventListener("pointermove", function (ev) { if (!cvEl.hasPointerCapture || !cvEl.hasPointerCapture(ev.pointerId)) return; var p = relPos(ev, cvEl); probe = [(p[0] - G.cx) / G.k, -(p[1] - G.cy) / G.k]; cv.redraw(); });
+    refresh();
+  });
+
+  /* =================================================================
+     5. 영상 토큰 수
+     ================================================================= */
+  safe("video", function () {
+    var cvEl = $("cv-video"); if (!cvEl) return;
+    var mode = AB.seg("vd-mode", function () { update(); });
+    var res = AB.seg("vd-res", function () { update(); });
+    var dur = AB.range("vd-dur", function (v) { return v >= 60 ? (v / 60).toFixed(1) + "분" : v + "초"; }, function () { update(); });
+    var fps = AB.range("vd-fps", function (v) { return v + " fps"; }, function () { update(); });
+    var tpf = AB.range("vd-tpf", function (v) { return v; }, function () { update(); });
+    var RES = { "480": [854, 480], "720": [1280, 720], "1080": [1920, 1080] };
+    var st = {};
+    function calc() {
+      var o = {};
+      if (mode() === "gen") {
+        var F = Math.max(1, Math.round(dur() * fps())), Fl = Math.ceil(F / 4), wh = RES[res()];
+        var per = Math.ceil(wh[0] / 16) * Math.ceil(wh[1] / 16);
+        o.frames = F + " → 잠재 " + int(Fl); o.n = Fl * per; o.per = per;
+      } else {
+        var Fs = Math.max(1, Math.floor(dur() * fps()));
+        o.frames = int(Fs); o.n = Fs * tpf(); o.per = tpf();
+      }
+      return o;
+    }
+    var cv = AB.canvas(cvEl, function (ctx, w, h) {
+      var P = AB.palette(), items = [
+        ["이 영상", st.n, P.warn], ["이미지 1장 (576)", 576, P.accent], ["128K 컨텍스트", 131072, P.accent2], ["1M 컨텍스트", 1048576, P.dim]
+      ];
+      var x0 = Math.min(150, w * 0.36), x1 = w - 16, lo = 2, hi = 9, bh = Math.min(30, (h - 40) / items.length - 10);
+      function X(v) { return x0 + (Math.log10(Math.max(v, 100)) - lo) / (hi - lo) * (x1 - x0); }
+      ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+      ctx.strokeStyle = P.grid; ctx.fillStyle = P.dim; ctx.textAlign = "center";
+      for (var e = lo; e <= hi; e++) { var x = X(Math.pow(10, e)); ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, h - 22); ctx.stroke(); ctx.fillText("10" + sup(e), x, h - 8); }
+      items.forEach(function (it, i) {
+        var y = 14 + i * (bh + 12);
+        ctx.fillStyle = it[2]; ctx.fillRect(x0, y, Math.max(2, X(it[1]) - x0), bh);
+        ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        ctx.font = "12px " + getComputedStyle(document.body).getPropertyValue("--font");
+        ctx.fillText(it[0], x0 - 6, y + bh / 2);
+        ctx.textAlign = "left"; ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+        var tx = Math.min(X(it[1]) + 4, x1 - 60);
+        ctx.fillStyle = X(it[1]) + 4 > x1 - 60 ? P.bg : P.dim;
+        ctx.fillText(sci(it[1], 2), tx, y + bh / 2);
+        ctx.textBaseline = "alphabetic";
+      });
+    }, { aspect: 0.5, minHeight: 190, maxHeight: 240 });
+    function update() {
+      st = calc();
+      AB.stat("vd-o-f", st.frames);
+      AB.stat("vd-o-n", "<b>" + int(st.n) + "</b>");
+      AB.stat("vd-o-n2", sci(st.n * st.n, 2));
+      AB.stat("vd-o-mem", AB.bytes(st.n * st.n * 2, 3, false));
+      cv.redraw();
+    }
+    update();
+  });
+
+  /* =================================================================
+     6. 온디바이스 토큰/초 상한
+     ================================================================= */
+  safe("ondevice", function () {
+    var cvEl = $("cv-od"); if (!cvEl) return;
+    var DEV = [
+      { name: "스마트폰 (LPDDR5X 약 68 GB/s, 12 GB)", bw: 68e9, ram: 12e9, frac: 0.5, tops: 45 },
+      { name: "노트북 (약 120 GB/s, 16 GB)", bw: 120e9, ram: 16e9, frac: 0.5, tops: 40 },
+      { name: "고급 워크스테이션 (통합 메모리 약 546 GB/s, 128 GB)", bw: 546e9, ram: 128e9, frac: 0.5, tops: 35 },
+      { name: "데스크톱 GPU (약 1 TB/s, 24 GB)", bw: 1008e9, ram: 24e9, frac: 0.9, tops: 300 },
+      { name: "데이터센터 H100 SXM (약 3.35 TB/s, 80 GB)", bw: 3.35e12, ram: 80e9, frac: 0.9, tops: 989 }
+    ];
+    var NS = [0.5, 1, 1.5, 2, 3, 4, 7, 8, 13, 14, 24, 32, 70];
+    var sel = $("od-dev");
+    DEV.forEach(function (d, i) { var o = document.createElement("option"); o.value = i; o.textContent = d.name; sel.appendChild(o); });
+    sel.addEventListener("change", update);
+        var getN = AB.range("od-n", function (v) { return NS[v] + "B"; }, function () { update(); });
+    var bits = AB.seg("od-b", function () { update(); });
+    var eff = AB.range("od-eff", function (v) { return Math.round(v * 100) + "%"; }, function () { update(); });
+    var pl = AB.range("od-p", function (v) { return int(v) + " 토큰"; }, function () { update(); });
+    function m(N, d, b, e) {
+      var size = N * 1e9 * b / 8, usable = d.ram * d.frac;
+      return { size: size, fit: size <= usable, usable: usable, tps: d.bw * e / size };
+    }
+    var cv = AB.canvas(cvEl, function (ctx, w, h) {
+      var P = AB.palette(), d = DEV[+sel.value], b = +bits(), e = eff(), N = NS[getN()];
+      var data = []; for (var x = 0.5; x <= 70.01; x *= 1.08) data.push([x, m(x, d, b, e).tps]);
+      var nmax = d.ram * d.frac * 8 / b / 1e9, ys = data.map(function (p) { return p[1]; });
+      var ymin = Math.pow(10, Math.floor(Math.log10(Math.min.apply(null, ys)))), ymax = Math.pow(10, Math.ceil(Math.log10(Math.max.apply(null, ys))));
+      if (ymax / ymin < 100) ymin = ymax / 100;
+      var cur = m(N, d, b, e);
+      AB.chart(ctx, null, {
+        x: [0.5, 70], y: [ymin, ymax], logX: true, logY: true, xLabel: "파라미터 수 (B, 로그)", yLabel: "디코드 상한 tok/s",
+        xTicks: [0.5, 1, 2, 4, 8, 16, 32, 70], xFmt: function (v) { return v + "B"; },
+        bands: nmax < 70 ? [{ x0: Math.max(0.5, nmax), x1: 70, color: AB.alpha(P.dim, 0.18) }] : [],
+        series: [{ data: data, color: P.accent, width: 2.2 }],
+        hlines: (10 >= ymin && 10 <= ymax) ? [{ y: 10, color: P.warn, label: "10 tok/s (읽기 속도 수준, 가정)" }] : [],
+        points: [{ x: N, y: cur.tps, color: cur.fit ? P.accent2 : P.bad, r: 6, label: N + "B · " + AB.fmt(cur.tps, 3) + " tok/s" }]
+      });
+    }, { aspect: 0.62, minHeight: 240, maxHeight: 380 });
+    function update() {
+      var d = DEV[+sel.value], b = +bits(), e = eff(), N = NS[getN()], r = m(N, d, b, e);
+      var pre = 2 * N * 1e9 * pl() / (d.tops * 1e12 * 0.3);
+      AB.stat("od-o-size", AB.bytes(r.size, 3, false));
+      AB.stat("od-o-fit", r.fit ? "가능 (사용 가능 " + AB.bytes(r.usable, 3, false) + ")" : "<span style='color:var(--bad)'>불가 (사용 가능 " + AB.bytes(r.usable, 3, false) + ")</span>");
+      AB.stat("od-o-tps", "<b>" + AB.fmt(r.tps, 3) + "</b>");
+      AB.stat("od-o-pre", AB.fmt(pre, 3) + " s");
+      AB.stat("od-o-tot", r.fit ? AB.fmt(pre + 200 / r.tps, 3) + " s" : "—");
+      cv.redraw();
+    }
+    update();
+  });
+})();
+</script>
+</body>
+</html>

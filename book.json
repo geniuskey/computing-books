@@ -1,0 +1,16 @@
+{
+  "id": "computingbooks",
+  "title": "ComputingBooks",
+  "description": "스위치 하나에서 CPU와 운영체제, 패킷과 TCP, 신경망과 LLM, 제조업의 AI 전환까지. 직접 돌려 보며 배우는 한국어 컴퓨터·AI 교과서 4권을 한 저장소와 한 주소에서 만납니다.",
+  "url": "https://computing.euiyun.com/",
+  "repo": "https://github.com/geniuskey/computing-books",
+  "field": "computing",
+  "status": "published",
+  "domain": "computing.euiyun.com",
+  "books": [
+    "computer/book.json",
+    "network/book.json",
+    "ai/book.json",
+    "ax/book.json"
+  ]
+}
