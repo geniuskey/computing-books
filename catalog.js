@@ -291,3 +291,18 @@ window.COMPUTING_MAP = {
     ]
   ]
 };
+window.SHELF = Object.assign({
+  "id": "computingbooks",
+  "title": "ComputingBooks",
+  "url": "https://computing.euiyun.com/",
+  "coverTitles": {
+    "computerbook": "컴퓨터",
+    "networkbook": "네트워크",
+    "aibook": "AI",
+    "axbook": "AI 전환",
+    "gpubook": "GPU",
+    "osbook": "운영체제",
+    "databasebook": "데이터베이스",
+    "statbook": "통계"
+  }
+}, { books: window.COMPUTING_BOOKS, map: window.COMPUTING_MAP });
